@@ -1,0 +1,7 @@
+node_modules/
+dist/
+projects/
+*.log
+.DS_Store
+test-*.mjs
+test-*.png
