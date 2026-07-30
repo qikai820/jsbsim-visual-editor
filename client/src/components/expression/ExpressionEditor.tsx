@@ -232,7 +232,42 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
         <ExpressionPalette onAddBlock={handleAddBlock} />
 
         {/* Center: Canvas */}
-        <div className="expr-canvas-wrapper" ref={rfWrapper}>
+        <div
+          className="expr-canvas-wrapper"
+          ref={rfWrapper}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const kind = e.dataTransfer.getData('application/expression-block');
+            if (kind) {
+              // Calculate drop position relative to the ReactFlow canvas
+              if (rfInstance.current && rfWrapper.current) {
+                const bounds = rfWrapper.current.getBoundingClientRect();
+                const position = rfInstance.current.screenToFlowPosition({
+                  x: e.clientX - bounds.left,
+                  y: e.clientY - bounds.top,
+                });
+                // Create block at drop position
+                const newExpr = createBlock(kind);
+                const def = BLOCK_DEFS[kind];
+                if (!def) return;
+                const id = `blk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                const inputCount = def.inputCount === 'variable' ? 2 : def.inputCount;
+                const newNode: Node = {
+                  id,
+                  type: 'functionBlock',
+                  position,
+                  data: { exprNode: newExpr, blockDef: def, inputCount, blockId: id },
+                };
+                setNodes(ns => [...ns, newNode]);
+                setSelectedNodeId(id);
+                setTimeout(syncToTree, 0);
+              } else {
+                handleAddBlock(kind);
+              }
+            }
+          }}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}

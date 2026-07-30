@@ -13,9 +13,17 @@ interface ExpressionPaletteProps {
 }
 
 export default function ExpressionPalette({ onAddBlock }: ExpressionPaletteProps) {
+  const handleDragStart = (e: React.DragEvent, kind: string) => {
+    e.dataTransfer.setData('application/expression-block', kind);
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+
   return (
     <div className="expr-palette">
       <div className="expr-palette-title">模块 Blocks</div>
+      <div style={{ padding: '2px 6px', fontSize: 9, color: 'var(--text-muted)' }}>
+        点击或拖拽添加到画布
+      </div>
       {CATEGORIES.map(cat => {
         const blocks = Object.values(BLOCK_DEFS).filter(b => b.category === cat.key);
         if (blocks.length === 0) return null;
@@ -29,7 +37,9 @@ export default function ExpressionPalette({ onAddBlock }: ExpressionPaletteProps
                   className="expr-palette-item"
                   style={{ '--item-color': b.color } as React.CSSProperties}
                   onClick={() => onAddBlock(b.kind)}
-                  title={b.label}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, b.kind)}
+                  title={`${b.label} (点击或拖拽)`}
                 >
                   <span className="expr-palette-icon">{b.icon}</span>
                   <span className="expr-palette-name">{b.label}</span>

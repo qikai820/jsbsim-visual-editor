@@ -59,12 +59,34 @@ function extractValueWithUnit(obj) {
 
 function extractLocation(obj) {
   if (!obj) return undefined;
+  // Attribute format: <location x="1" y="2" z="3" unit="IN"/>
   const x = obj['@_x'] !== undefined ? Number(obj['@_x']) : undefined;
   const y = obj['@_y'] !== undefined ? Number(obj['@_y']) : undefined;
   const z = obj['@_z'] !== undefined ? Number(obj['@_z']) : undefined;
   const unit = obj['@_unit'] || 'IN';
-  if (x !== undefined || y !== undefined || z !== undefined) {
-    return { x, y, z, unit };
+  // Child element format: <location unit="IN"><x>1</x><y>2</y><z>3</z></location>
+  const cx = obj['x'] !== undefined ? Number(extractText(obj['x'])) : undefined;
+  const cy = obj['y'] !== undefined ? Number(extractText(obj['y'])) : undefined;
+  const cz = obj['z'] !== undefined ? Number(extractText(obj['z'])) : undefined;
+  const fx = x !== undefined ? x : cx;
+  const fy = y !== undefined ? y : cy;
+  const fz = z !== undefined ? z : cz;
+  if (fx !== undefined || fy !== undefined || fz !== undefined) {
+    return { x: fx, y: fy, z: fz, unit };
+  }
+  return undefined;
+}
+
+function extractOrient(obj) {
+  if (!obj) return undefined;
+  const r = obj['@_roll'] !== undefined ? Number(obj['@_roll']) :
+            obj['roll'] !== undefined ? Number(extractText(obj['roll'])) : undefined;
+  const p = obj['@_pitch'] !== undefined ? Number(obj['@_pitch']) :
+            obj['pitch'] !== undefined ? Number(extractText(obj['pitch'])) : undefined;
+  const y = obj['@_yaw'] !== undefined ? Number(obj['@_yaw']) :
+            obj['yaw'] !== undefined ? Number(extractText(obj['yaw'])) : undefined;
+  if (r !== undefined || p !== undefined || y !== undefined) {
+    return { roll: r, pitch: p, yaw: y };
   }
   return undefined;
 }
@@ -78,6 +100,41 @@ function extractText(obj) {
     return '';
   }
   return String(obj);
+}
+
+// ── Table data extraction (shared by all parsers) ──────────────────────────
+
+function parseTableData(text) {
+  if (!text || typeof text !== 'string') return [];
+  const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  return lines.map(line => {
+    const vals = line.split(/[\s,]+/).map(Number).filter(v => !isNaN(v));
+    return vals;
+  });
+}
+
+// Extract tables from an XML element and add to params._tables
+function extractTables(el, params) {
+  if (!el || typeof el !== 'object') return params;
+  for (const [key, val] of Object.entries(el)) {
+    if (key === 'table') {
+      const tables = ensureArray(val);
+      for (const tbl of tables) {
+        if (!tbl) continue;
+        const tblName = tbl['@_name'] || '';
+        const tblType = tbl['@_type'] || 'internal';
+        const tableData = tbl['tableData'] ? parseTableData(String(tbl['tableData'])) : [];
+        if (tblName && tableData.length > 0) {
+          if (!params._tables) params._tables = [];
+          params._tables.push({ name: tblName, type: tblType, data: tableData });
+        }
+      }
+    } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+      // Recurse into child elements to find nested tables
+      extractTables(val, params);
+    }
+  }
+  return params;
 }
 
 // ── Section parsers ─────────────────────────────────────────────────────────
@@ -108,6 +165,9 @@ function parseMetrics(fdmConfig, nodes, edges) {
   if (metrics['vtailarea']) params.vtailarea = extractValueWithUnit(metrics['vtailarea']);
   if (metrics['vtailarm']) params.vtailarm = extractValueWithUnit(metrics['vtailarm']);
   if (metrics['location']) params.location = extractLocation(metrics['location']);
+
+  // Extract any table data from metrics section
+  extractTables(metrics, params);
 
   // Only create a wing node if there's meaningful data
   if (Object.keys(params).length > 0) {
@@ -245,7 +305,7 @@ function parseGroundReactions(fdmConfig, nodes, edges) {
   }
 }
 
-function parsePropulsion(fdmConfig, nodes, edges) {
+function parsePropulsion(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
   const prop = fdmConfig['propulsion'];
   if (!prop) return;
 
@@ -253,47 +313,193 @@ function parsePropulsion(fdmConfig, nodes, edges) {
   const propellerIds = [];
   const tankIds = [];
 
+  // Helper to extract numeric params from any XML element
+  function extractElementParams(el, merged) {
+    if (!el || typeof el !== 'object') return merged;
+    if (el['@_name']) merged.name = el['@_name'];
+    for (const [key, val] of Object.entries(el)) {
+      if (key.startsWith('@_') || key === '#text' || key === 'table') continue;
+      if (typeof val === 'number') {
+        merged[key] = val;
+      } else if (typeof val === 'string' && val.trim() && !isNaN(Number(val.trim()))) {
+        merged[key] = Number(val.trim());
+      } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+        const text = val['#text'];
+        if (text !== undefined && !isNaN(Number(text))) {
+          merged[key] = Number(text);
+        }
+        if (val['@_unit']) merged[key + '_unit'] = val['@_unit'];
+      }
+    }
+    // Extract tables using shared function
+    extractTables(el, merged);
+    return merged;
+  }
+
+  // Helper to resolve a referenced file and merge its params (generic - handles any root element)
+  function resolveFileParams(fileName, fallbackParams = {}) {
+    if (!fileName || !fileMap[fileName]) return fallbackParams;
+    try {
+      const refXml = fileMap[fileName];
+      const refParsed = parser ? parser.parse(refXml) : null;
+      if (!refParsed) return fallbackParams;
+
+      // Find the root element (skip xml declaration)
+      let rootEl = null;
+      let rootTag = null;
+      for (const [key, val] of Object.entries(refParsed)) {
+        if (key === '?xml' || key.startsWith('?')) continue;
+        rootEl = val;
+        rootTag = key;
+        break;
+      }
+      if (!rootEl) return fallbackParams;
+
+      const merged = { ...fallbackParams };
+      merged._root_tag = rootTag;
+      extractElementParams(rootEl, merged);
+
+      // Recursively resolve nested file references (e.g. <thruster file="xxx"> inside engine)
+      for (const [key, val] of Object.entries(rootEl)) {
+        if (key.startsWith('@_') || key === '#text') continue;
+        if (typeof val === 'object' && val !== null && !Array.isArray(val) && val['@_file']) {
+          const nestedFile = val['@_file'];
+          if (fileMap[nestedFile]) {
+            const nestedParams = resolveFileParams(nestedFile, {});
+            Object.assign(merged, nestedParams);
+            merged[key + '_file'] = nestedFile;
+          }
+          // Also extract inline params from the nested element
+          extractElementParams(val, merged);
+        }
+      }
+
+      return merged;
+    } catch (e) {
+      console.warn('[parsePropulsion] Failed to resolve file:', fileName, e.message);
+      return fallbackParams;
+    }
+  }
+
   // Engines
   const engines = ensureArray(prop['engine']);
   for (const eng of engines) {
-    const params = {};
-    const name = eng['@_name'] || '';
-    if (name) params.name = name;
-    if (eng['feed']) params.file = extractText(eng['feed']);
-    if (eng['thruster']) {
-      const thruster = eng['thruster'];
-      if (typeof thruster === 'object' && thruster['#text']) {
-        params.thruster_file = extractText(thruster);
-      } else if (typeof thruster === 'string') {
-        params.thruster_file = thruster;
-      }
-    }
-    if (eng['location']) params.location = extractLocation(eng['location']);
-    if (eng['orient']) {
-      const orient = eng['orient'];
-      params.orient = {
-        roll: orient['@_roll'] !== undefined ? Number(orient['@_roll']) : undefined,
-        pitch: orient['@_pitch'] !== undefined ? Number(orient['@_pitch']) : undefined,
-        yaw: orient['@_yaw'] !== undefined ? Number(orient['@_yaw']) : undefined,
-      };
+    // ── Engine node ──
+    let engParams = {};
+    const inlineName = eng['@_name'] || '';
+    if (inlineName) engParams.name = inlineName;
+    const engineFile = eng['@_file'] || '';
+
+    // Resolve engine file (only engine-level params)
+    if (engineFile) {
+      engParams = resolveFileParams(engineFile, engParams);
+      engParams._source_file = engineFile;
+      engParams.file = engineFile;
     }
 
-    const id = nextId();
-    engineIds.push(id);
+    // Map _root_tag to engine_type
+    const rootTagToType = {
+      piston_engine: 'piston',
+      turbine_engine: 'turbine',
+      turboprop_engine: 'turboprop',
+      rocket_engine: 'rocket',
+      electric_engine: 'electric',
+      brushless_dc_motor: 'brushless_dc',
+      FG_ROCKET: 'rocket',
+    };
+    if (engParams._root_tag && rootTagToType[engParams._root_tag]) {
+      engParams.engine_type = rootTagToType[engParams._root_tag];
+    }
+
+    if (eng['feed']) engParams.feed = extractText(eng['feed']);
+    if (eng['location']) engParams.location = extractLocation(eng['location']);
+    if (eng['orient']) {
+      engParams.orient = extractOrient(eng['orient']);
+    }
+    // Restore inline name
+    if (inlineName) engParams.name = inlineName;
+
+    const engId = nextId();
+    engineIds.push(engId);
     nodes.push({
-      id,
+      id: engId,
       type: 'aircraftComponent',
-      data: { label: params.name || 'Engine', componentType: 'engine', params },
+      data: {
+        label: (() => {
+          const typeIcons = {
+            piston: '🔧', turbine: '🔥', turboprop: '🔥', rocket: '🚀',
+            electric: '⚡', brushless_dc: '⚡',
+          };
+          const typeLabels = {
+            piston: '活塞', turbine: '涡轮', turboprop: '涡桨', rocket: '火箭',
+            electric: '电动', brushless_dc: '无刷直流',
+          };
+          const icon = engParams.engine_type ? (typeIcons[engParams.engine_type] || '⚙️') : '⚙️';
+          const typeLabel = engParams.engine_type ? (typeLabels[engParams.engine_type] || '') : '';
+          const name = engParams.name || engineFile || 'Engine';
+          return typeLabel ? `${icon} ${name} [${typeLabel}]` : `${icon} ${name}`;
+        })(),
+        componentType: 'engine',
+        params: engParams,
+      },
       position: nextPosition(),
     });
+
+    // ── Thruster/Propeller node (from nested <thruster> inside <engine>) ──
+    if (eng['thruster']) {
+      const thruster = eng['thruster'];
+      const thrusterFile = thruster['@_file'] || '';
+      let thrParams = {};
+
+      if (thrusterFile) {
+        thrParams = resolveFileParams(thrusterFile, thrParams);
+        thrParams._source_file = thrusterFile;
+        thrParams.file = thrusterFile;
+      }
+
+      // Extract inline thruster params (location, orient, sense, p_factor)
+      if (thruster['location']) thrParams.location = extractLocation(thruster['location']);
+      if (thruster['orient']) {
+        thrParams.orient = extractOrient(thruster['orient']);
+      }
+      if (thruster['sense'] !== undefined) thrParams.sense = Number(extractText(thruster['sense']));
+      if (thruster['p_factor'] !== undefined) thrParams.p_factor = Number(extractText(thruster['p_factor']));
+
+      // Name: use inline name or file name
+      const thrName = thruster['@_name'] || thrusterFile || (inlineName ? inlineName + ' 螺旋桨' : 'Propeller');
+
+      const thrId = nextId();
+      propellerIds.push(thrId);
+      nodes.push({
+        id: thrId,
+        type: 'aircraftComponent',
+        data: { label: thrParams.name || thrName, componentType: 'propeller', params: thrParams },
+        position: nextPosition(),
+      });
+
+      // Edge: propeller → engine
+      edges.push({
+        id: `e${edges.length + 1}`,
+        source: thrId,
+        target: engId,
+        sourceHandle: 'thrust',
+        targetHandle: 'propulsion',
+      });
+    }
   }
 
   // Propellers / Thrusters
   const thrusters = ensureArray(prop['thruster']);
   for (const thr of thrusters) {
-    const params = {};
+    let params = {};
     const file = thr['@_file'] || '';
-    if (file) params.file = file;
+
+    // Resolve thruster file
+    if (file) {
+      params = resolveFileParams(file, params);
+      params._source_file = file;
+    }
+
     if (thr['location']) params.location = extractLocation(thr['location']);
     if (thr['sense'] !== undefined) params.sense = Number(extractText(thr['sense']));
     if (thr['p_factor'] !== undefined) params.p_factor = Number(extractText(thr['p_factor']));
@@ -303,7 +509,7 @@ function parsePropulsion(fdmConfig, nodes, edges) {
     nodes.push({
       id,
       type: 'aircraftComponent',
-      data: { label: file || 'Propeller', componentType: 'propeller', params },
+      data: { label: params.name || file || 'Propeller', componentType: 'propeller', params },
       position: nextPosition(),
     });
   }
@@ -328,46 +534,156 @@ function parsePropulsion(fdmConfig, nodes, edges) {
     });
   }
 
-  // Create edges: engine → propeller (if counts match, pair them up)
-  for (let i = 0; i < Math.min(engineIds.length, propellerIds.length); i++) {
-    edges.push({
-      id: `e${edges.length + 1}`,
-      source: propellerIds[i],
-      target: engineIds[i],
-      sourceHandle: 'propulsion',
-      targetHandle: 'propulsion',
-    });
-  }
+  // Edges between engines and propellers are now created inline during parsing
 }
 
-function parseSystemReferences(fdmConfig, nodes, edges) {
+function parseSystemReferences(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
   // Parse <system file="xxx"> elements from fdm_config
   const systemElements = ensureArray(fdmConfig['system']);
   for (const sys of systemElements) {
+    if (!sys || typeof sys !== 'object') continue;
     const file = sys['@_file'] || '';
     const params = {};
     if (file) params.file = file;
 
+    // Use sys itself as the system definition (works for both inline and resolved content)
+    const sysDef = sys;
+
+    // Extract system name
+    if (sysDef['@_name']) params.name = sysDef['@_name'];
+
+    // Extract channels and their components
+    const channels = ensureArray(sysDef['channel']);
+    const channelData = [];
+    for (const ch of channels) {
+      if (!ch) continue;
+      const chName = ch['@_name'] || '';
+      const chItems = [];
+
+      // Extract functions from channel (with expression trees)
+      const funcs = ensureArray(ch['function']);
+      for (const f of funcs) {
+        if (!f) continue;
+        const fName = f['@_name'] || '';
+        const item = { type: 'function', name: fName };
+        // Parse function body into expression tree
+        try {
+          const { xmlToExpr } = require('./expressionXml');
+          item.expression = xmlToExpr(f);
+        } catch (e) {
+          item.expression = { kind: 'value', value: 0 };
+        }
+        chItems.push(item);
+      }
+
+      // Extract other channel elements (sensor, kinematic, switch, pid, actuator, etc.)
+      for (const [key, val] of Object.entries(ch)) {
+        if (key.startsWith('@_') || key === '#text' || key === 'function') continue;
+        const items = ensureArray(val);
+        for (const item of items) {
+          if (!item) continue;
+          const itemName = item['@_name'] || '';
+          const chItem = { type: key, name: itemName };
+
+          // Extract component-specific properties as an expression tree
+          const props = {};
+          const knownFields = ['input', 'lag', 'noise', 'drift_rate', 'gain', 'bias',
+            'delay', 'output', 'property', 'trigger', 'width', 'center', 'deadband',
+            'constant', 'clipto', 'min', 'max', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6',
+            'clipto_min', 'clipto_max'];
+
+          for (const field of knownFields) {
+            if (item[field] !== undefined) {
+              if (typeof item[field] === 'object' && item[field] !== null) {
+                // Handle elements with attributes (like noise with distribution)
+                const text = item[field]['#text'] !== undefined ? item[field]['#text'] : null;
+                const attrs = {};
+                for (const [ak, av] of Object.entries(item[field])) {
+                  if (ak.startsWith('@_')) attrs[ak.slice(2)] = av;
+                }
+                props[field] = { value: text !== null ? String(text) : '', attrs };
+              } else {
+                props[field] = { value: String(item[field]), attrs: {} };
+              }
+            }
+          }
+
+          // Also extract any <property> children
+          const propChildren = ensureArray(item['property']);
+          if (propChildren.length > 0) {
+            props.properties = propChildren.map(p => {
+              if (typeof p === 'string') return p;
+              return p['@_name'] || extractText(p);
+            }).filter(Boolean);
+          }
+
+          if (Object.keys(props).length > 0) {
+            chItem.componentProps = props;
+          }
+
+          // Also try to extract expression from function-like elements
+          try {
+            const { xmlToExpr } = require('./expressionXml');
+            chItem.expression = xmlToExpr(item);
+          } catch (e) { /* ignore */ }
+
+          chItems.push(chItem);
+        }
+      }
+
+      if (chName || chItems.length > 0) {
+        channelData.push({ name: chName, items: chItems });
+      }
+    }
+
+    if (channelData.length > 0) {
+      params.channels = JSON.stringify(channelData);
+    }
+
+    // Extract top-level functions
+    const topFuncs = ensureArray(sysDef['function']);
+    if (topFuncs.length > 0 && channelData.length === 0) {
+      const items = topFuncs.map(f => {
+        const item = { type: 'function', name: f['@_name'] || '' };
+        try {
+          const { xmlToExpr } = require('./expressionXml');
+          item.expression = xmlToExpr(f);
+        } catch (e) {
+          item.expression = { kind: 'value', value: 0 };
+        }
+        return item;
+      }).filter(i => i.name);
+      if (items.length > 0) {
+        params.channels = JSON.stringify([{ name: '', items }]);
+      }
+    }
+
     // Extract properties
-    const properties = ensureArray(sys['property']);
-    if (properties.length > 0) {
-      const propNames = properties.map(p => extractText(p)).filter(Boolean);
+    const sysProps = ensureArray(sysDef['property']);
+    if (sysProps.length > 0) {
+      const propNames = sysProps.map(p => {
+        if (typeof p === 'string') return p;
+        return p['@_name'] || extractText(p);
+      }).filter(Boolean);
       if (propNames.length > 0) {
         params.properties = propNames.join(',');
       }
     }
 
+    // Extract tables
+    extractTables(sysDef, params);
+
     const id = nextId();
     nodes.push({
       id,
       type: 'aircraftComponent',
-      data: { label: file || 'System', componentType: 'system', params },
+      data: { label: params.name || file || 'System', componentType: 'system', params },
       position: nextPosition(),
     });
   }
 }
 
-function parseAerodynamics(fdmConfig, nodes, edges) {
+function parseAerodynamics(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
   const aero = fdmConfig['aerodynamics'];
   if (!aero) return;
 
@@ -511,9 +827,206 @@ function createLogicalEdges(nodes, edges) {
   }
 }
 
+// ── Section file resolver ──────────────────────────────────────────────────
+
+// Resolve a section-level file reference like <metrics file="Metrics.xml"/>
+// Returns the parsed section content, or the original element if no file ref
+function resolveSectionFile(element, sectionName, fileMap, parser) {
+  if (!element || !parser) return element;
+  const file = element['@_file'];
+  if (!file || !fileMap[file]) return element;
+
+  try {
+    const refXml = fileMap[file];
+    const refParsed = parser.parse(refXml);
+    // The sub-file should have the section as root element
+    const sectionContent = refParsed[sectionName];
+    if (sectionContent) {
+      // Merge: inline attributes from the reference + content from the file
+      const merged = { ...sectionContent };
+      // Copy any attributes from the original reference element
+      for (const [key, val] of Object.entries(element)) {
+        if (key.startsWith('@_') && key !== '@_file') {
+          merged[key] = val;
+        }
+      }
+      return merged;
+    }
+    return element;
+  } catch (e) {
+    console.warn(`[resolveSectionFile] Failed to resolve ${sectionName} file="${file}":`, e.message);
+    return element;
+  }
+}
+
+// ── Location-based layout ──────────────────────────────────────────────────
+
+function applyLocationLayout(nodes) {
+  // Collect nodes with location data
+  const located = [];
+  const unlocated = [];
+
+  for (const node of nodes) {
+    const p = node.data?.params;
+    if (p?.location && typeof p.location === 'object') {
+      const x = typeof p.location.x === 'number' ? p.location.x : null;
+      const y = typeof p.location.y === 'number' ? p.location.y : null;
+      const z = typeof p.location.z === 'number' ? p.location.z : null;
+      const unit = p.location.unit || 'IN';
+      if (x !== null && y !== null) {
+        located.push({ node, x, y, z, unit });
+        continue;
+      }
+    }
+    unlocated.push(node);
+  }
+
+  if (located.length === 0) {
+    // No location data at all — arrange all nodes in categorized columns
+    const NODE_H = 80;
+    const GAP_Y = 20;
+    const startX = 100;
+
+    const byType = {};
+    for (const node of nodes) {
+      const t = node.data?.componentType || 'other';
+      if (!byType[t]) byType[t] = [];
+      byType[t].push(node);
+    }
+
+    const typeOrder = ['wing', 'fuselage', 'inertia', 'landing_gear', 'engine', 'propeller',
+      'fuel_tank', 'point_mass', 'system', 'output', 'aero_coefficients'];
+
+    let curY = 100;
+    for (const type of typeOrder) {
+      const nodesOfType = byType[type];
+      if (!nodesOfType) continue;
+      for (const node of nodesOfType) {
+        node.position = { x: startX, y: curY };
+        curY += NODE_H + GAP_Y;
+      }
+      if (nodesOfType) curY += GAP_Y;
+    }
+    return;
+  }
+
+  // Convert units to a common scale
+  const MARGIN = 120;
+  const NODE_W = 250;
+  const NODE_H = 100;
+  const GAP_Y = 20;
+
+  // Normalize all locations to inches
+  function toInches(val, unit) {
+    if (unit === 'M' || unit === 'MTR') return val * 39.3701;
+    if (unit === 'CM') return val * 0.393701;
+    if (unit === 'FT') return val * 12;
+    return val; // default IN
+  }
+
+  const locatedNorm = located.map(({ node, x, y, z, unit }) => ({
+    node,
+    x: toInches(x, unit),
+    y: toInches(y, unit),
+  }));
+
+  // Find bounding box
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const { x, y } of locatedNorm) {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const SCALE = Math.max(400 / rangeX, 300 / rangeY, 1.5);
+
+  // Position located nodes: map JSBSim coords to screen coords, rotated 90° clockwise
+  // JSBSim: X=forward, Y=right
+  // After 90° CW rotation: forward→right, right→down
+  // screenX ∝ Y(lateral), screenY ∝ -X(forward)
+  const W = Math.max(rangeY * SCALE, 400);
+  const H = Math.max(rangeX * SCALE, 300);
+  for (const { node, x, y } of locatedNorm) {
+    const normY = (y - minY) / rangeY;       // 0=top(lateral left), 1=bottom(lateral right)
+    const normX = (x - minX) / rangeX;       // 0=aft, 1=forward
+    const screenX = MARGIN + normY * W;
+    const screenY = MARGIN + (1 - normX) * H;
+    node.position = { x: Math.round(screenX), y: Math.round(screenY) };
+  }
+
+  // Position unlocated nodes on the right side, categorized by type, top to bottom
+  // NODE_W, NODE_H already declared above
+
+  // Group unlocated nodes by componentType
+  const byType = {};
+  for (const node of unlocated) {
+    const t = node.data?.componentType || 'other';
+    if (!byType[t]) byType[t] = [];
+    byType[t].push(node);
+  }
+
+  // Calculate right-side starting X (after all located nodes)
+  const maxLocatedX = Math.max(...located.map(l => l.node.position.x), 0);
+  let startX = Math.max(maxLocatedX + NODE_W + 120, 600);
+
+  // Category labels and order
+  const typeOrder = ['wing', 'fuselage', 'inertia', 'landing_gear', 'engine', 'propeller',
+    'fuel_tank', 'point_mass', 'system', 'output', 'aero_coefficients'];
+  const typeLabels = {
+    wing: '🪽 机翼', fuselage: '🛩️ 机身', inertia: '🔬 惯量', landing_gear: '🛞 起落架',
+    engine: '⚙️ 发动机', propeller: '🔄 螺旋桨', fuel_tank: '⛽ 油箱',
+    point_mass: '⚖️ 集中质量', system: '🔗 系统', output: '📡 输出',
+    aero_coefficients: '🌊 气动系数',
+  };
+
+  // Two-column layout for unlocated nodes
+  const COL_GAP = 40;
+  const col2X = startX + NODE_W + COL_GAP;
+
+  // Flatten all unlocated nodes in category order
+  const orderedNodes = [];
+  const categoryBreaks = []; // track where each category starts
+  for (const type of typeOrder) {
+    const nodesOfType = byType[type];
+    if (!nodesOfType || nodesOfType.length === 0) continue;
+    categoryBreaks.push({ type, startIdx: orderedNodes.length, count: nodesOfType.length });
+    orderedNodes.push(...nodesOfType);
+  }
+  // Handle remaining types
+  for (const [type, nodesOfType] of Object.entries(byType)) {
+    if (typeOrder.includes(type)) continue;
+    categoryBreaks.push({ type, startIdx: orderedNodes.length, count: nodesOfType.length });
+    orderedNodes.push(...nodesOfType);
+  }
+
+  // Assign positions in two columns
+  let curY1 = 100; // column 1 (left) current Y
+  let curY2 = 100; // column 2 (right) current Y
+  let useCol2 = false;
+
+  for (let i = 0; i < orderedNodes.length; i++) {
+    // Decide which column: alternate between col1 and col2, or fill col1 first then col2
+    // Strategy: fill col1 until it reaches a threshold, then start col2
+    const totalHeight = Math.max(curY1, curY2);
+    if (curY1 <= curY2) {
+      orderedNodes[i].position = { x: startX, y: curY1 };
+      curY1 += NODE_H + GAP_Y;
+    } else {
+      orderedNodes[i].position = { x: col2X, y: curY2 };
+      curY2 += NODE_H + GAP_Y;
+    }
+  }
+
+  // Add extra gap between categories (adjust last node of each category)
+  // Already handled by sequential placement above
+}
+
 // ── Main parser ─────────────────────────────────────────────────────────────
 
-function parseXml(xmlString) {
+function parseXml(xmlString, fileMap = {}) {
   if (!xmlString || typeof xmlString !== 'string') {
     throw new Error('Invalid XML input');
   }
@@ -547,18 +1060,37 @@ function parseXml(xmlString) {
   const nodes = [];
   const edges = [];
 
-  // Parse each section
+  // Resolve section-level file references (e.g. <metrics file="Metrics.xml"/>)
+  const sectionNames = ['metrics', 'mass_balance', 'ground_reactions', 'propulsion',
+    'aerodynamics', 'flight_control', 'system', 'output'];
+  for (const section of sectionNames) {
+    const el = fdmConfig[section];
+    if (!el) continue;
+    // Handle both single element and array
+    if (Array.isArray(el)) {
+      for (let i = 0; i < el.length; i++) {
+        el[i] = resolveSectionFile(el[i], section, fileMap, parser);
+      }
+    } else if (typeof el === 'object') {
+      fdmConfig[section] = resolveSectionFile(el, section, fileMap, parser);
+    }
+  }
+
+  // Parse each section (pass fileMap for resolving references)
   parseFileHeader(fdmConfig, aircraft);
   parseMetrics(fdmConfig, nodes, edges);
   parseMassBalance(fdmConfig, nodes, edges);
   parseGroundReactions(fdmConfig, nodes, edges);
-  parsePropulsion(fdmConfig, nodes, edges);
-  parseSystemReferences(fdmConfig, nodes, edges);
-  parseAerodynamics(fdmConfig, nodes, edges);
+  parsePropulsion(fdmConfig, nodes, edges, fileMap, parser);
+  parseSystemReferences(fdmConfig, nodes, edges, fileMap, parser);
+  parseAerodynamics(fdmConfig, nodes, edges, fileMap, parser);
   parseOutput(fdmConfig, nodes, edges);
 
   // Create logical edges between related nodes
   createLogicalEdges(nodes, edges);
+
+  // Apply location-based layout
+  applyLocationLayout(nodes);
 
   return { aircraft, nodes, edges };
 }

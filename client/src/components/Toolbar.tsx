@@ -1,11 +1,19 @@
 import { useState, useRef } from 'react';
 import { useFlowStore } from '../store/flowStore';
+import AircraftWizard from './AircraftWizard';
+import AircraftLibrary from './AircraftLibrary';
 
-export default function Toolbar() {
+interface ToolbarProps {
+  onShow3D?: () => void;
+}
+
+export default function Toolbar({ onShow3D }: ToolbarProps) {
   const { aircraft, setAircraft, nodes, edges, loadProject, clearAll } = useFlowStore();
   const [showXml, setShowXml] = useState(false);
   const [xmlContent, setXmlContent] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExportXml = async () => {
@@ -28,15 +36,26 @@ export default function Toolbar() {
   };
 
   const handleImportXml = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
     setLoading(true);
     try {
-      const xml = await file.text();
+      // Read all files
+      const allFiles: { name: string; xml: string }[] = [];
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        const text = await f.text();
+        allFiles.push({ name: f.name, xml: text });
+      }
+
+      // First file is the main XML, rest are referenced files
+      const mainXml = allFiles[0].xml;
+      const refFiles = allFiles.slice(1);
+
       const res = await fetch('/api/parse-xml', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ xml }),
+        body: JSON.stringify({ xml: mainXml, files: refFiles }),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -45,6 +64,18 @@ export default function Toolbar() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       loadProject(data);
+
+      // Persist to localStorage so data survives refresh
+      try {
+        localStorage.setItem('jsbsim-project', JSON.stringify(data));
+        localStorage.setItem('jsbsim-raw-xml', mainXml);
+      } catch (e) {
+        console.warn('[Import] Failed to save to localStorage:', e);
+      }
+
+      if (refFiles.length > 0) {
+        console.log(`[Import] Merged ${refFiles.length} referenced file(s): ${refFiles.map(f => f.name).join(', ')}`);
+      }
     } catch (err: any) {
       alert('导入失败: ' + err.message);
     }
@@ -112,15 +143,20 @@ export default function Toolbar() {
           />
         </div>
         <div className="toolbar-center">
-          <button onClick={() => { clearAll(); }} disabled={loading}>📄 新建</button>
+          <button onClick={() => { clearAll(); localStorage.removeItem('jsbsim-project'); localStorage.removeItem('jsbsim-raw-xml'); }} disabled={loading}>📄 新建</button>
+          <button onClick={() => setShowWizard(true)} disabled={loading}>🪄 创建向导</button>
+          <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 模型库</button>
           <button onClick={handleSave} disabled={loading}>💾 保存</button>
           <button onClick={handleLoad} disabled={loading}>📂 加载</button>
         </div>
         <div className="toolbar-right">
-          <button className="btn-import" onClick={() => fileInputRef.current?.click()} disabled={loading}>
+          <button className="btn-3d" onClick={onShow3D} title="3D 预览">
+            🛩️ 3D
+          </button>
+          <button className="btn-import" onClick={() => fileInputRef.current?.click()} disabled={loading} title="导入XML文件（自动从JSBSim目录解析引用文件）">
             📥 导入XML
           </button>
-          <input ref={fileInputRef} type="file" accept=".xml" onChange={handleImportXml} style={{ display: 'none' }} />
+          <input ref={fileInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} />
           <button className="btn-export" onClick={handleExportXml} disabled={loading}>
             {loading ? '⏳ 处理中...' : '📤 导出XML'}
           </button>
@@ -141,6 +177,42 @@ export default function Toolbar() {
             <textarea className="xml-content" readOnly value={xmlContent} />
           </div>
         </div>
+      )}
+
+      {showWizard && (
+        <AircraftWizard
+          onClose={() => setShowWizard(false)}
+          onGenerate={async (xml) => {
+            try {
+              const res = await fetch('/api/parse-xml', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ xml }),
+              });
+              if (!res.ok) throw new Error(`服务器错误 (${res.status})`);
+              const data = await res.json();
+              if (data.error) throw new Error(data.error);
+              loadProject(data);
+              setShowWizard(false);
+            } catch (err: any) {
+              alert('导入失败: ' + err.message);
+            }
+          }}
+        />
+      )}
+
+      {showLibrary && (
+        <AircraftLibrary
+          onClose={() => setShowLibrary(false)}
+          onLoad={(data) => {
+            loadProject(data);
+            // Persist to localStorage
+            try {
+              localStorage.setItem('jsbsim-project', JSON.stringify(data));
+              localStorage.setItem('jsbsim-cache-version', '2');
+            } catch (e) { /* ignore */ }
+          }}
+        />
       )}
     </>
   );

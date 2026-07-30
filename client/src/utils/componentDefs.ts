@@ -75,6 +75,10 @@ export const componentDefs: ComponentDef[] = [
     description: '发动机',
     params: {
       name: { label: '名称', type: 'string', default: 'Main Engine' },
+      engine_type: {
+        label: '发动机类型', type: 'select', default: 'piston',
+        options: ['piston', 'turbine', 'turboprop', 'rocket', 'electric', 'brushless_dc'],
+      },
       file: { label: '发动机文件', type: 'string', default: '' },
       feed: { label: '供油箱编号', type: 'string', default: '0,1' },
       thruster_file: { label: '推力器文件', type: 'string', default: '' },
