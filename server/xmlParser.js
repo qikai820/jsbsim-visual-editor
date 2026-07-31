@@ -164,7 +164,15 @@ function parseMetrics(fdmConfig, nodes, edges) {
   if (metrics['htailarm']) params.htailarm = extractValueWithUnit(metrics['htailarm']);
   if (metrics['vtailarea']) params.vtailarea = extractValueWithUnit(metrics['vtailarea']);
   if (metrics['vtailarm']) params.vtailarm = extractValueWithUnit(metrics['vtailarm']);
-  if (metrics['location']) params.location = extractLocation(metrics['location']);
+  // metrics can contain several named <location> (AERORP/EYEPOINT/VRP).
+  // The wing reference point is AERORP; fall back to EYEPOINT/VRP/any.
+  const metricLocs = ensureArray(metrics['location']);
+  const wingLoc =
+    metricLocs.find(l => (l['@_name'] || '').toUpperCase() === 'AERORP') ||
+    metricLocs.find(l => (l['@_name'] || '').toUpperCase() === 'EYEPOINT') ||
+    metricLocs.find(l => (l['@_name'] || '').toUpperCase() === 'VRP') ||
+    metricLocs[0];
+  if (wingLoc) params.location = extractLocation(wingLoc);
 
   // Extract any table data from metrics section
   extractTables(metrics, params);
@@ -212,6 +220,14 @@ function parseMassBalance(fdmConfig, nodes, edges) {
         cgFound = true;
         break;
       }
+    }
+
+    // Also accept a direct <location name="CG"> child of mass_balance
+    if (!cgFound) {
+      const mbLocs = ensureArray(mb['location']);
+      const cgLoc =
+        mbLocs.find(l => (l['@_name'] || '').toUpperCase() === 'CG') || mbLocs[0];
+      if (cgLoc) fuselageParams.cg = extractLocation(cgLoc);
     }
 
     if (Object.keys(fuselageParams).length > 0) {
@@ -465,6 +481,9 @@ function parsePropulsion(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
       if (thruster['sense'] !== undefined) thrParams.sense = Number(extractText(thruster['sense']));
       if (thruster['p_factor'] !== undefined) thrParams.p_factor = Number(extractText(thruster['p_factor']));
 
+      // Engine without its own <location> inherits it from the linked thruster
+      if (!engParams.location && thrParams.location) engParams.location = thrParams.location;
+
       // Name: use inline name or file name
       const thrName = thruster['@_name'] || thrusterFile || (inlineName ? inlineName + ' 螺旋桨' : 'Propeller');
 
@@ -537,17 +556,20 @@ function parsePropulsion(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
   // Edges between engines and propellers are now created inline during parsing
 }
 
-function parseSystemReferences(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
-  // Parse <system file="xxx"> elements from fdm_config
-  const systemElements = ensureArray(fdmConfig['system']);
-  for (const sys of systemElements) {
-    if (!sys || typeof sys !== 'object') continue;
-    const file = sys['@_file'] || '';
+function parseComponentSection(fdmConfig, nodes, edges, sectionKey, componentType, fileMap = {}, parser = null) {
+  // Parse <system>/<flight_control> sections. They are structurally identical:
+  // a set of <channel> elements containing components such as summer/pure_gain/
+  // pid/actuator/function. flight_control was previously never parsed, so its
+  // module never appeared in the visual editor.
+  const elements = ensureArray(fdmConfig[sectionKey]);
+  for (const el of elements) {
+    if (!el || typeof el !== 'object') continue;
+    const file = el['@_file'] || '';
     const params = {};
     if (file) params.file = file;
 
-    // Use sys itself as the system definition (works for both inline and resolved content)
-    const sysDef = sys;
+    // Use el itself as the section definition (works for both inline and resolved content)
+    const sysDef = el;
 
     // Extract system name
     if (sysDef['@_name']) params.name = sysDef['@_name'];
@@ -677,10 +699,18 @@ function parseSystemReferences(fdmConfig, nodes, edges, fileMap = {}, parser = n
     nodes.push({
       id,
       type: 'aircraftComponent',
-      data: { label: params.name || file || 'System', componentType: 'system', params },
+      data: { label: params.name || file || (componentType === 'flight_control' ? 'Flight Control' : 'System'), componentType, params },
       position: nextPosition(),
     });
   }
+}
+
+function parseSystemReferences(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
+  parseComponentSection(fdmConfig, nodes, edges, 'system', 'system', fileMap, parser);
+}
+
+function parseFlightControl(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
+  parseComponentSection(fdmConfig, nodes, edges, 'flight_control', 'flight_control', fileMap, parser);
 }
 
 function parseAerodynamics(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
@@ -1083,6 +1113,7 @@ function parseXml(xmlString, fileMap = {}) {
   parseGroundReactions(fdmConfig, nodes, edges);
   parsePropulsion(fdmConfig, nodes, edges, fileMap, parser);
   parseSystemReferences(fdmConfig, nodes, edges, fileMap, parser);
+  parseFlightControl(fdmConfig, nodes, edges, fileMap, parser);
   parseAerodynamics(fdmConfig, nodes, edges, fileMap, parser);
   parseOutput(fdmConfig, nodes, edges);
 

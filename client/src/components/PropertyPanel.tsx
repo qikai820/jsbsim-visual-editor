@@ -30,7 +30,7 @@ export default function PropertyPanel() {
   const node = nodes.find(n => n.id === selectedNodeId);
 
   // System expression editor overlay
-  if (sysEditingExpr && node?.data.componentType === 'system') {
+  if (sysEditingExpr && (node?.data.componentType === 'system' || node?.data.componentType === 'flight_control')) {
     try {
       const channels = JSON.parse(node.data.params.channels || '[]');
       const ch = channels[sysEditingExpr.chIdx];
@@ -63,7 +63,7 @@ export default function PropertyPanel() {
   }
 
   // Component prop expression editor overlay (sensor input, lag, noise, gain, etc.)
-  if (editingCompProp && node?.data.componentType === 'system') {
+  if (editingCompProp && (node?.data.componentType === 'system' || node?.data.componentType === 'flight_control')) {
     try {
       const channels = JSON.parse(node.data.params.channels || '[]');
       const ch = channels[editingCompProp.chIdx];
@@ -359,8 +359,8 @@ export default function PropertyPanel() {
         })
         .map(([key, paramDef]) => renderField(key, paramDef))}
 
-      {/* Show editable content for system nodes */}
-      {node.data.componentType === 'system' && node.data.params.channels && (() => {
+      {/* Show editable content for system / flight_control nodes */}
+      {(node.data.componentType === 'system' || node.data.componentType === 'flight_control') && node.data.params.channels && (() => {
         try {
           const channels = JSON.parse(node.data.params.channels);
           if (!Array.isArray(channels) || channels.length === 0) return null;
@@ -405,7 +405,7 @@ export default function PropertyPanel() {
             <>
               <div className="prop-divider" />
               <div className="prop-merged-section">
-                <div className="prop-merged-title">🔗 系统通道 ({channels.length})</div>
+                <div className="prop-merged-title">🔗 控制通道 ({channels.length})</div>
                 {channels.map((ch: any, i: number) => (
                   <SystemChannelEditor
                     key={i}

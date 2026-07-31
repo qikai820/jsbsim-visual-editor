@@ -204,6 +204,20 @@ export const componentDefs: ComponentDef[] = [
     outputs: [{ id: 'system', label: '系统' }],
   },
   {
+    type: 'flight_control',
+    label: '飞控 Flight Control',
+    category: '系统',
+    color: '#6C5CE7',
+    icon: '🎛️',
+    description: '飞行控制（混控器、速率回路、舵机映射等）',
+    params: {
+      file: { label: '飞控文件', type: 'string', default: '' },
+      properties: { label: '属性列表', type: 'string', default: '' },
+    },
+    inputs: [],
+    outputs: [{ id: 'fcs', label: '飞控' }],
+  },
+  {
     type: 'output',
     label: '输出 Output',
     category: '系统',
