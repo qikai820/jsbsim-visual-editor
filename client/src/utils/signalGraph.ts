@@ -89,9 +89,18 @@ export const COMPONENT_META: Record<string, { label: string; icon: string; color
 export function functionTopSymbol(expr: ExprNode | undefined | null): string {
   if (!expr || !expr.kind) return 'ƒ';
   switch (expr.kind) {
-    case 'value': return 'c';
-    case 'property': return 'x';
-    case 'function_ref': return 'ƒ';
+    case 'value': {
+      const v = (expr as any).value;
+      return typeof v === 'number' && isFinite(v) ? String(v) : 'c';
+    }
+    case 'property': {
+      const n = ((expr as any).name as string) || '';
+      return n.split('/').pop() || 'x';
+    }
+    case 'function_ref': {
+      const n = ((expr as any).name as string) || '';
+      return (n.split('/').pop() || 'ƒ') + '()';
+    }
     case 'table': return '▦';
     default: return BLOCK_DEFS[expr.kind]?.icon || 'ƒ';
   }
@@ -127,7 +136,7 @@ export function extractOutputSignal(item: ChannelItem): string {
 
 // Walk an expression tree collecting property / function_ref node references
 // (in document order). Used both to read input signal names and to rewrite them.
-function collectPropertyNodes(expr: any, acc: any[] = []): any[] {
+export function collectPropertyNodes(expr: any, acc: any[] = []): any[] {
   if (!expr || typeof expr !== 'object') return acc;
   if (expr.kind === 'property' || expr.kind === 'function_ref') {
     acc.push(expr);
@@ -195,7 +204,7 @@ const ROW = 140;
 export function buildSignalGraph(
   channels: ChannelItem[],
   _topLevelProps: string[] = [],
-  opts: { maxExtent?: { w: number; h: number } } = {},
+  opts: { canvas?: { w: number; h: number } } = {},
 ): SignalGraph {
   const items: { item: ChannelItem; ch: number; chName: string; id: string }[] = [];
   channels.forEach((ch, ci) => {
@@ -341,31 +350,41 @@ export function buildSignalGraph(
     }
   }
 
-  // ── Channel-swimlane layout (classification + no overlap + few crossings) ──
-  // Each channel becomes a horizontal lane stacked top→bottom, so modules are
-  // grouped by channel (local clusters, never overlapping). Inside a lane, x
-  // follows the global data-flow rank (left→right) and y follows the
-  // crossing-minimal in-lane order produced by the barycenter sweep above.
+  // ── Channel-swimlane layout (classification + NO overlap + fill canvas) ──
+  // Group modules by channel into horizontal lanes; x follows the global
+  // data-flow rank, y the crossing-minimal in-lane order. The layout uses a
+  // no-overlap FLOOR spacing, then scales UP to fill the canvas (capped at
+  // 150%) and never below 1 — so modules absolutely cannot overlap.
   const channelOf = new Map<string, number>();
   for (const e of items) channelOf.set(e.id, e.ch);
-  const { positions: lanePos } = assignChannelLanePositions(
-    byRank, rank, channelOf,
-    { rankX: (r: number) => 80 + r * COL, rowH: 120, laneGap: 70, startY: 80 },
-  );
+
+  const laneOpts: any = {
+    startX: 80, startY: 80, blockW: 190, blockH: 120, minXGap: 44, minYGap: 40,
+  };
+  if (opts.canvas) {
+    laneOpts.targetExtent = { w: opts.canvas.w, h: opts.canvas.h };
+    laneOpts.capExtent = { w: opts.canvas.w * 1.5, h: opts.canvas.h * 1.5 };
+  }
+  const lanePos = assignChannelLanePositions(byRank, rank, channelOf, laneOpts).positions;
   for (const n of nodes) {
     const p = lanePos.get(n.id);
     if (p) n.position = p;
   }
+
+  // Component bounds drive endpoint placement (kept attached to their lane).
+  const compNodes = nodes.filter(n => n.data.kind === 'component');
+  const compXs = compNodes.map(n => n.position.x);
+  const compMinX = compXs.length ? Math.min(...compXs) : 80;
+  const compMaxX = compXs.length ? Math.max(...compXs) : 80;
   const maxRank = Math.max(0, ...[...byRank.keys()]);
-  // Endpoints aligned to the lane/row of their connected component, so the long
-  // source/sink leads stay attached to their channel instead of fanning out.
+  // Endpoints aligned to the lane/row of their connected component.
   let si = 0;
   for (const [s, nid] of sourceIds) {
     const n = nodes.find(x => x.id === nid)!;
     const ys = (consumersOf.get(s) || [])
       .map((c) => lanePos.get(c)?.y)
       .filter((v): v is number => v !== undefined);
-    n.position = { x: 80 - COL * 0.7, y: ys.length ? Math.min(...ys) : 80 + si * ROW };
+    n.position = { x: compMinX - 90, y: ys.length ? Math.min(...ys) : 80 + si * ROW };
     si++;
   }
   let ki = 0;
@@ -373,15 +392,21 @@ export function buildSignalGraph(
     const n = nodes.find(x => x.id === nid)!;
     const prod = producerOf.get(sig);
     const p = prod ? lanePos.get(prod) : undefined;
-    n.position = { x: 80 + (maxRank + 1) * COL + COL * 0.2, y: p ? p.y : 80 + ki * ROW };
+    n.position = { x: compMaxX + 90, y: p ? p.y : 80 + ki * ROW };
     ki++;
   }
 
   // Edges (wired by signal name)
   for (const e of items) {
     const inputs = consumerInputs.get(e.id)!;
+    // Merge duplicate wires: a signal entering the same component at several
+    // ports is drawn once (into the first such port). The full inputs list is
+    // preserved for serialization (unconnected duplicate ports fall back to
+    // their original signal).
+    const seen = new Set<string>();
     inputs.forEach((s, i) => {
-      if (!s) return;
+      if (!s || seen.has(s)) return;
+      seen.add(s);
       const prod = producerOf.get(s);
       const source = (prod && prod !== e.id) ? prod : sourceIds.get(s)!;
       edges.push({
@@ -403,24 +428,6 @@ export function buildSignalGraph(
       source: prod, sourceHandle: 'out', target: nid, targetHandle: 'in',
       label: sig, data: { signal: sig }, type: 'signal',
     });
-  }
-
-  // ── Cap layout extent to <=150% of the canvas (flow units == px at zoom 1) ──
-  // If the graph is larger, shrink uniformly around its centre so it still fits
-  // (fitView will then show it at zoom >= ~0.67). Respects "布局不超过画布150%".
-  if (opts.maxExtent) {
-    const xs = nodes.map(n => n.position.x);
-    const ys = nodes.map(n => n.position.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
-    const scale = Math.min(opts.maxExtent.w / bw, opts.maxExtent.h / bh, 1);
-    if (scale < 1) {
-      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-      for (const n of nodes) {
-        n.position = { x: cx + (n.position.x - cx) * scale, y: cy + (n.position.y - cy) * scale };
-      }
-    }
   }
 
   // ── Separate overlapping signal lines ──

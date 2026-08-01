@@ -1,14 +1,18 @@
 import { useCallback, useRef } from 'react';
 import {
-  ReactFlow, Background, Controls, MiniMap,
+  ReactFlow, Background, Controls, MiniMap, SelectionMode,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useFlowStore } from '../store/flowStore';
 import AircraftNode from './nodes/AircraftNode';
+import BendableEdge from './edges/BendableEdge';
 import type { ComponentType } from '../types';
 
 const nodeTypes = { aircraftComponent: AircraftNode };
+// Map the built-in 'smoothstep' edge type (used by onConnect) to the bendable
+// edge so existing edges gain waypoints with no data migration.
+const edgeTypes = { smoothstep: BendableEdge, bendable: BendableEdge };
 
 interface CanvasProps {
   onDragStart: (type: ComponentType) => void;
@@ -74,6 +78,7 @@ export default function Canvas({ dragType }: CanvasProps) {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onInit={(instance) => { rfInstance.current = instance; }}
         onDragOver={onDragOver}
         onDrop={onDrop}
@@ -84,6 +89,11 @@ export default function Canvas({ dragType }: CanvasProps) {
         deleteKeyCode="Delete"
         snapToGrid
         snapGrid={[15, 15]}
+        selectionOnDrag
+        panOnDrag={[1, 2]}
+        multiSelectionKeyCode="Shift"
+        selectionMode={SelectionMode.Partial}
+        onPaneContextMenu={(e) => e.preventDefault()}
       >
         <Background />
         <Controls />

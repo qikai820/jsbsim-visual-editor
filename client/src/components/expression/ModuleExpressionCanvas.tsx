@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect, Component, type ReactNode } from 'react';
 import {
-  ReactFlow, Background, Controls, MiniMap,
+  ReactFlow, Background, Controls, MiniMap, SelectionMode,
   ReactFlowProvider, ConnectionMode,
   addEdge, type Node, type Edge, type Connection, type ReactFlowInstance,
   applyNodeChanges, applyEdgeChanges,
@@ -12,9 +12,11 @@ import {
 } from '../../utils/expressionConverter';
 import {
   buildSignalGraph, graphToChannels, SINGLE_INPUT_TYPES, COMPONENT_META,
-  assignSignalEdgeOffsets,
+  assignSignalEdgeOffsets, collectPropertyNodes,
 } from '../../utils/signalGraph';
 import SignalEdge from './SignalEdge';
+import { SignalEdgeActionsContext } from './signalEdgeActions';
+import type { Bendpoint } from '../edges/bendpoints';
 import FunctionBlockNode from './FunctionBlockNode';
 import SignalBlockNode from './SignalBlockNode';
 import SignalEndNode from './SignalEndNode';
@@ -124,8 +126,34 @@ function buildMergedGraph(expressions: ModuleExpression[]) {
 // ── Reconcile signal-flow endpoints + edges from node data (signal mode) ─────
 // Single source of truth = component node data (name / inputs / compProps /
 // expression). Edges and source/sink endpoint nodes are always derived.
-function recomputeGraph(nodes: any[]): { nodes: any[]; edges: any[] } {
+// prevEdges lets in-canvas expression subgraphs (expanded functions) survive the
+// rebuild: their internal edges are carried over and their block nodes are kept.
+function recomputeGraph(nodes: any[], prevEdges: any[] = []): { nodes: any[]; edges: any[] } {
   const comps = nodes.filter(n => n.data?.kind === 'component');
+  const exprNodes = nodes.filter(n => n.data?.kind === 'exprBlock');
+  // Expanded function: ownerId -> subgraph root node; ownerId -> leaf (signal inlet) nodes.
+  const expandedOf = new Map<string, any>();
+  const leavesOf = new Map<string, any[]>();
+  for (const n of exprNodes) {
+    const owner = n.data.ownerId;
+    const k = n.data.exprNode?.kind;
+    if (k === 'property' || k === 'function_ref') {
+      if (!leavesOf.has(owner)) leavesOf.set(owner, []);
+      leavesOf.get(owner)!.push(n);
+    }
+  }
+  for (const c of comps) {
+    if (c.data.expanded && c.data.expRootId) {
+      const root = exprNodes.find(n => n.id === c.data.expRootId);
+      if (root) expandedOf.set(c.id, root);
+    }
+  }
+  // A component's output wire comes from its subgraph root when expanded.
+  const srcOf = (carrierId: string) =>
+    expandedOf.has(carrierId)
+      ? { node: expandedOf.get(carrierId).id, handle: 'out-0' }
+      : { node: carrierId, handle: 'out' };
+
   const producers = new Map<string, string>();
   for (const c of comps) {
     const sig = c.data.outputSignal || c.data.name;
@@ -177,19 +205,49 @@ function recomputeGraph(nodes: any[]): { nodes: any[]; edges: any[] } {
     endpoints.push({ id: nid, type: 'signalEnd', position: { x: maxX + 280, y }, data: { kind: 'signal', signalRole: 'sink', signalName: s } });
   }
 
-  const finalNodes = [...comps, ...endpoints];
+  const finalNodes = [...comps, ...exprNodes, ...endpoints];
   const edges: any[] = [];
   for (const c of comps) {
+    if (expandedOf.has(c.id)) {
+      // Expanded: one inlet wire per leaf, keyed by the leaf's property name.
+      for (const leaf of (leavesOf.get(c.id) || [])) {
+        const s = leaf.data.exprNode?.name; if (!s) continue;
+        const prod = producers.get(s);
+        const src = prod && prod !== c.id ? srcOf(prod) : { node: `src-${s}`, handle: 'out' };
+        edges.push({ id: `e-${src.node}-${leaf.id}`, source: src.node, sourceHandle: src.handle, target: leaf.id, targetHandle: 'in-signal', label: s, data: { signal: s }, type: 'signal' });
+      }
+      continue;
+    }
+    // Merge duplicate wires: same signal into the same component drawn once.
+    const seen = new Set<string>();
     (c.data.inputs || []).forEach((s: string, i: number) => {
-      if (!s) return;
+      if (!s || seen.has(s)) return;
+      seen.add(s);
       const prod = producers.get(s);
-      const source = prod ? prod : `src-${s}`;
-      edges.push({ id: `e-${source}-${c.id}-${i}`, source, sourceHandle: 'out', target: c.id, targetHandle: `in-${i}`, label: s, data: { signal: s }, type: 'signal' });
+      const src = prod && prod !== c.id ? srcOf(prod) : { node: `src-${s}`, handle: 'out' };
+      edges.push({ id: `e-${src.node}-${c.id}-${i}`, source: src.node, sourceHandle: src.handle, target: c.id, targetHandle: `in-${i}`, label: s, data: { signal: s }, type: 'signal' });
     });
   }
   for (const s of neededSinks) {
-    const prod = producers.get(s)!;
-    edges.push({ id: `e-${prod}-sink-${s}`, source: prod, sourceHandle: 'out', target: `sink-${s}`, targetHandle: 'in', label: s, data: { signal: s }, type: 'signal' });
+    const src = srcOf(producers.get(s)!);
+    edges.push({ id: `e-${src.node}-sink-${s}`, source: src.node, sourceHandle: src.handle, target: `sink-${s}`, targetHandle: 'in', label: s, data: { signal: s }, type: 'signal' });
+  }
+  // Carry over in-canvas subgraph internal edges whose endpoints survived.
+  const alive = new Set(finalNodes.map(n => n.id));
+  for (const e of prevEdges) {
+    if (e.data?.kind === 'expr-internal' && alive.has(e.source) && alive.has(e.target)) edges.push(e);
+  }
+  // Preserve signal-edge waypoints (bendpoints) across the rebuild, keyed by edge id.
+  const prevBp = new Map<string, Bendpoint[]>();
+  for (const e of prevEdges) {
+    const b = e.data?.bendpoints;
+    if (Array.isArray(b) && b.length) prevBp.set(e.id, b);
+  }
+  if (prevBp.size) {
+    for (const e of edges) {
+      const b = prevBp.get(e.id);
+      if (b) e.data = { ...(e.data || {}), bendpoints: b };
+    }
   }
   // Fan out wires sharing a handle so they don't overlap (visual only).
   assignSignalEdgeOffsets(edges);
@@ -223,6 +281,14 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         const p = initialLayout[n.id];
         if (p) n.position = { x: p.x, y: p.y };
       }
+      // Restore edge waypoints saved alongside the layout.
+      const savedBps = (initialLayout as any).__bendpoints as Record<string, Bendpoint[]> | undefined;
+      if (savedBps) {
+        for (const e of g.edges) {
+          const b = savedBps[e.id];
+          if (b) e.data = { ...(e.data || {}), bendpoints: b };
+        }
+      }
     }
     return g;
   }, []); // build once on mount
@@ -231,6 +297,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const [edges, setEdges] = useState<Edge[]>(initial.edges);
   const rootIdsRef = useRef<Record<string, string>>({});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // In-canvas function expansion (MVP: at most one function expanded at a time).
+  const [expandedFnId, setExpandedFnId] = useState<string | null>(null);
   const rfWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
 
@@ -253,18 +321,159 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     return layout;
   }
   const persistLayout = useCallback(() => {
-    if (onLayoutChangeRef.current) onLayoutChangeRef.current(layoutFromNodes(nodesRef.current));
+    if (!onLayoutChangeRef.current) return;
+    const layout = layoutFromNodes(nodesRef.current);
+    // Bundle signal-edge waypoints into the layout JSON (opaque to App.tsx).
+    const bps: Record<string, Bendpoint[]> = {};
+    for (const e of edgesRef.current) {
+      const bp = e.data?.bendpoints as Bendpoint[] | undefined;
+      if (bp && bp.length) bps[e.id] = bp;
+    }
+    if (Object.keys(bps).length) (layout as any).__bendpoints = bps;
+    onLayoutChangeRef.current(layout);
   }, []);
 
   // ── Signal-mode commit (recompute edges + report channel changes) ──
   const commitSignal = useCallback((nextNodes: any[]) => {
-    const { nodes: rn, edges: re } = recomputeGraph(nextNodes);
+    const { nodes: rn, edges: re } = recomputeGraph(nextNodes, edgesRef.current);
     setNodes(rn);
     setEdges(re);
     const ch = graphToChannels(rn, re);
     onChannelsChange?.(ch);
     persistLayout();
   }, [onChannelsChange, persistLayout]);
+
+  // ── Signal-edge bendpoints (waypoints) ──
+  // Write waypoints to edges state only (no recompute), so a drag isn't blown
+  // away by recomputeGraph. persistLayout bundles them into the layout JSON.
+  const updateEdgeBendpoints = useCallback((edgeId: string, bps: Bendpoint[]) => {
+    setEdges(prev => prev.map(e => (e.id === edgeId ? { ...e, data: { ...(e.data || {}), bendpoints: bps } } : e)));
+  }, []);
+  const persistBendpoints = useCallback(() => {
+    persistLayout();
+  }, [persistLayout]);
+
+  // ── In-canvas function expansion (Simulink-style operator subgraph) ──
+  // Collapse: rebuild the expression from the subgraph (source of truth) and
+  // restore the single carrier block.
+  const collapseFunction = useCallback((fnId: string) => {
+    const carrier: any = nodesRef.current.find(n => n.id === fnId);
+    if (!carrier?.data?.expanded) return;
+    const subNodes = nodesRef.current.filter(n => n.data?.kind === 'exprBlock' && n.data?.ownerId === fnId);
+    const subEdges = edgesRef.current.filter(e => e.data?.kind === 'expr-internal' && e.data?.ownerId === fnId);
+    let expr = carrier.data.expression;
+    let inputs = carrier.data.inputs;
+    try {
+      const t = graphToTree(subNodes, subEdges, carrier.data.expRootId);
+      if (t && t.kind) {
+        expr = t;
+        inputs = collectPropertyNodes(t).map((n: any) => n.name).filter(Boolean);
+      }
+    } catch (e) { console.warn('[collapseFunction] graphToTree failed, keep cached expression', e); }
+    const rootPos = subNodes.find(n => n.id === carrier.data.expRootId)?.position;
+    const next = nodesRef.current
+      .filter(n => !(n.data?.kind === 'exprBlock' && n.data?.ownerId === fnId))
+      .map(n => n.id === fnId
+        ? { ...n, hidden: false,
+            position: rootPos ? { x: Math.round(rootPos.x), y: Math.round(rootPos.y) } : n.position,
+            data: { ...n.data, expression: expr, inputs, expanded: false, expRootId: undefined } }
+        : n);
+    setExpandedFnId(null);
+    commitSignal(next);
+  }, [commitSignal]);
+
+  // Expand: hide the carrier block and inline its expression as a functionBlock
+  // subgraph rooted at the carrier's position.
+  const toggleExpand = useCallback((fnId: string) => {
+    const carrier: any = nodesRef.current.find(n => n.id === fnId);
+    if (!carrier || carrier.data?.kind !== 'component') return;
+    if (carrier.data.expanded) { collapseFunction(fnId); return; }
+    const expr = carrier.data.expression;
+    if (!expr || !expr.kind) return;
+    if (expandedFnId && expandedFnId !== fnId) collapseFunction(expandedFnId);
+
+    const sub = treeToGraph(expr);
+    const pref = (id: string) => `${fnId}/exp/${id}`;
+    const subNodes = sub.nodes.map(n => ({
+      ...n,
+      id: pref(n.id),
+      data: { ...n.data, kind: 'exprBlock', ownerId: fnId, inSignalFlow: true },
+    }));
+    const subEdges = sub.edges.map(e => ({
+      ...e, id: pref(e.id), source: pref(e.source), target: pref(e.target),
+      data: { kind: 'expr-internal', ownerId: fnId },
+    }));
+    // Align the subgraph root to the carrier's position (root is the rightmost column).
+    const rootOld = sub.nodes.find(n => n.id === sub.rootId)!.position;
+    const dx = carrier.position.x - rootOld.x, dy = carrier.position.y - rootOld.y;
+    for (const n of subNodes) n.position = { x: n.position.x + dx, y: n.position.y + dy };
+
+    const next = nodesRef.current
+      .map(n => n.id === fnId
+        ? { ...n, hidden: true, data: { ...n.data, expanded: true, expRootId: pref(sub.rootId) } }
+        : n)
+      .concat(subNodes);
+    edgesRef.current = [...edgesRef.current, ...subEdges];
+    setExpandedFnId(fnId);
+    commitSignal(next);
+  }, [expandedFnId, commitSignal, collapseFunction]);
+
+  // Re-sync an expanded subgraph back into its carrier's expression + inputs cache.
+  const expSync = useCallback((ownerId: string) => {
+    setTimeout(() => {
+      const carrier: any = nodesRef.current.find(n => n.id === ownerId);
+      if (!carrier?.data?.expanded) return;
+      const subNodes = nodesRef.current.filter(n => n.data?.kind === 'exprBlock' && n.data?.ownerId === ownerId);
+      const subEdges = edgesRef.current.filter(e => e.data?.kind === 'expr-internal' && e.data?.ownerId === ownerId);
+      let expr: ExprNode | null = null;
+      try { expr = graphToTree(subNodes, subEdges, carrier.data.expRootId); }
+      catch (e) { console.warn('[expSync]', e); }
+      if (!expr || !expr.kind) return;
+      const inputs = collectPropertyNodes(expr).map((n: any) => n.name).filter(Boolean);
+      const next = nodesRef.current.map(n => n.id === ownerId
+        ? { ...n, data: { ...n.data, expression: expr, inputs } } : n);
+      commitSignal(next);
+    }, 0);
+  }, [commitSignal]);
+
+  // Update one operator block's expression inside an expanded subgraph.
+  const handleExprBlockUpdate = useCallback((nodeId: string, updatedExpr: ExprNode) => {
+    const node: any = nodesRef.current.find(n => n.id === nodeId);
+    if (!node || node.data?.kind !== 'exprBlock') return;
+    const ownerId = node.data.ownerId;
+    const def = BLOCK_DEFS[updatedExpr.kind];
+    const inputCount = def
+      ? (def.inputCount === 'variable' ? ((updatedExpr as any).children?.length || 2) : def.inputCount)
+      : node.data.inputCount;
+    const next = nodesRef.current.map(n => n.id === nodeId
+      ? { ...n, data: { ...n.data, exprNode: updatedExpr, blockDef: def || n.data.blockDef, inputCount } } : n);
+    nodesRef.current = next; setNodes(next);
+    expSync(ownerId);
+  }, [expSync]);
+
+  // Add a new operator block into the currently-expanded subgraph.
+  const handleAddExprBlock = useCallback((kind: string) => {
+    if (!expandedFnId) return;
+    const newExpr = createBlock(kind);
+    const def = BLOCK_DEFS[kind];
+    if (!def) return;
+    const id = `${expandedFnId}/exp/blk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const inputCount = def.inputCount === 'variable' ? 2 : def.inputCount;
+    let position = { x: 300, y: 200 };
+    if (rfInstance.current && rfWrapper.current) {
+      const b = rfWrapper.current.getBoundingClientRect();
+      position = rfInstance.current.screenToFlowPosition({ x: b.width / 2, y: b.height / 2 });
+      position.x += (Math.random() - 0.5) * 80;
+      position.y += (Math.random() - 0.5) * 80;
+    }
+    const newNode: any = {
+      id, type: 'functionBlock', position,
+      data: { kind: 'exprBlock', ownerId: expandedFnId, inSignalFlow: true, exprNode: newExpr, blockDef: def, inputCount, blockId: id },
+    };
+    const next = [...nodesRef.current, newNode];
+    nodesRef.current = next; setNodes(next);
+    expSync(expandedFnId);
+  }, [expandedFnId, expSync]);
 
   const syncToTree = useCallback(() => {
     const currentNodes = nodesRef.current;
@@ -297,29 +506,83 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   // Bound the layout to <=150% of the canvas so it stays readable (fitView
   // then shows it at zoom >= ~0.67). Flow units == px at zoom 1.
   const handleAutoLayout = useCallback(() => {
-    let maxExtent: { w: number; h: number } | undefined;
+    let canvas: { w: number; h: number } | undefined;
     if (isSignal && rfWrapper.current) {
-      maxExtent = {
-        w: rfWrapper.current.clientWidth * 1.5,
-        h: rfWrapper.current.clientHeight * 1.5,
+      canvas = {
+        w: rfWrapper.current.clientWidth,
+        h: rfWrapper.current.clientHeight,
       };
     }
+    // Pass the real canvas size; buildSignalGraph derives the 150% cap itself.
     const g = isSignal
-      ? buildSignalGraph(channels, topLevelProps, { maxExtent })
+      ? buildSignalGraph(channels, topLevelProps, { canvas })
       : buildMergedGraph(expressions);
     setNodes(g.nodes);
     setEdges(g.edges);
     if (onLayoutChangeRef.current) onLayoutChangeRef.current(layoutFromNodes(g.nodes));
     setTimeout(() => rfInstance.current?.fitView({ padding: 0.2, duration: 300 }), 0);
   }, [isSignal, channels, topLevelProps, expressions]);
+
+  // On mount, fill the canvas with the adaptive layout — but only when no
+  // saved layout exists (otherwise respect the user's persisted positions).
+  useEffect(() => {
+    if (isSignal && !initialLayout && rfWrapper.current) {
+      handleAutoLayout();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const onEdgesChange = useCallback((changes: any) => {
     setEdges(es => applyEdgeChanges(changes, es));
   }, []);
   const onConnect = useCallback((connection: Connection) => {
     if (isSignal) {
-      const src = nodesRef.current.find(n => n.id === connection.source);
-      const tgt = nodesRef.current.find(n => n.id === connection.target);
-      if (!src || !tgt || tgt.data?.kind !== 'component') return;
+      const src: any = nodesRef.current.find(n => n.id === connection.source);
+      const tgt: any = nodesRef.current.find(n => n.id === connection.target);
+      if (!src || !tgt) return;
+      const srcExp = src.data?.kind === 'exprBlock';
+      const tgtExp = tgt.data?.kind === 'exprBlock';
+
+      // (a) external signal -> subgraph leaf inlet: retarget the leaf's input.
+      if (!srcExp && tgtExp && connection.targetHandle === 'in-signal') {
+        const outSig = src.data?.kind === 'component'
+          ? (src.data.outputSignal || src.data.name) : src.data?.signalName;
+        if (!outSig) return;
+        const ownerId = tgt.data.ownerId;
+        const next = nodesRef.current.map(n => n.id === tgt.id
+          ? { ...n, data: { ...n.data, exprNode: { ...(n.data.exprNode as any), name: outSig } } } : n);
+        nodesRef.current = next; setNodes(next);
+        expSync(ownerId);
+        return;
+      }
+      // (b) internal subgraph wire: same owner, in-<n> port only.
+      if (srcExp && tgtExp) {
+        if (src.data.ownerId !== tgt.data.ownerId || !/^in-\d+$/.test(String(connection.targetHandle))) return;
+        const ownerId = src.data.ownerId;
+        const e = { ...connection, id: `${ownerId}/exp/e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'smoothstep', data: { kind: 'expr-internal', ownerId } };
+        edgesRef.current = [...edgesRef.current, e]; setEdges(edgesRef.current);
+        expSync(ownerId);
+        return;
+      }
+      // (c) subgraph root -> external component: retarget that component's input
+      // to this function's output signal.
+      if (srcExp && !tgtExp) {
+        const carrier: any = nodesRef.current.find(n => n.id === src.data.ownerId);
+        if (!carrier || src.id !== carrier.data.expRootId || tgt.data?.kind !== 'component') return;
+        const outSig = carrier.data.outputSignal || carrier.data.name;
+        const idx = parseInt(String(connection.targetHandle).replace('in-', ''), 10);
+        if (isNaN(idx) || !outSig) return;
+        const next = nodesRef.current.map(n => {
+          if (n.id !== tgt.id) return n;
+          const inputs = [...((n.data.inputs as any) || [])];
+          const oldSig = inputs[idx]; inputs[idx] = outSig; for (let j = 0; j < inputs.length; j++) { if (j !== idx && inputs[j] === oldSig) inputs[j] = outSig; }
+          return { ...n, data: { ...n.data, inputs } };
+        });
+        commitSignal(next);
+        return;
+      }
+      // (d) component -> component (existing behaviour).
+      if (tgt.data?.kind !== 'component') return;
       const outSig = src.data?.kind === 'component'
         ? (src.data.outputSignal || src.data.name)
         : src.data?.signalName;
@@ -327,8 +590,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       if (isNaN(idx) || !outSig) return;
       const next = nodesRef.current.map(n => {
         if (n.id !== tgt.id) return n;
-        const inputs = [...(n.data.inputs || [])];
-        inputs[idx] = outSig;
+        const inputs = [...((n.data.inputs as any) || [])];
+        const oldSig = inputs[idx]; inputs[idx] = outSig; for (let j = 0; j < inputs.length; j++) { if (j !== idx && inputs[j] === oldSig) inputs[j] = outSig; }
         return { ...n, data: { ...n.data, inputs } };
       });
       commitSignal(next);
@@ -336,11 +599,18 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     }
     setEdges(es => addEdge({ ...connection, type: 'smoothstep', animated: false }, es));
     setTimeout(syncToTree, 0);
-  }, [isSignal, commitSignal, syncToTree]);
+  }, [isSignal, commitSignal, syncToTree, expSync]);
 
-  const onNodeClick = useCallback((_: any, node: Node) => {
+  const onNodeClick = useCallback((e: any, node: Node) => {
+    // Expand/collapse a function block via its ⤢ button (event delegation).
+    const el = (e.target as HTMLElement)?.closest?.('[data-expand-toggle]');
+    if (el && node.data?.kind === 'component' &&
+        (node.data.itemType === 'function' || node.data.itemType === 'fcs_function')) {
+      toggleExpand(node.id);
+      return;
+    }
     setSelectedNodeId(node.id);
-  }, []);
+  }, [toggleExpand]);
 
   // Double-click a function/fcs_function block to open its expression editor.
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
@@ -399,10 +669,36 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   const handleDelete = useCallback(() => {
     if (!selectedNodeId) return;
+    const sel: any = nodesRef.current.find(n => n.id === selectedNodeId);
+    if (!sel) return;
+    // Deleting an expanded function carrier: cascade to its subgraph.
+    if (sel.data?.kind === 'component') {
+      const ownerId = sel.id;
+      const next = nodesRef.current.filter(n => n.id !== ownerId && !(n.data?.kind === 'exprBlock' && n.data?.ownerId === ownerId));
+      edgesRef.current = edgesRef.current.filter(e => !(e.data?.kind === 'expr-internal' && e.data?.ownerId === ownerId));
+      if (expandedFnId === ownerId) setExpandedFnId(null);
+      commitSignal(next);
+      setSelectedNodeId(null);
+      return;
+    }
+    // Deleting a node inside an expanded subgraph (root is protected).
+    if (sel.data?.kind === 'exprBlock') {
+      const ownerId = sel.data.ownerId;
+      const carrier: any = nodesRef.current.find(n => n.id === ownerId);
+      if (carrier && sel.id === carrier.data.expRootId) return;
+      const next = nodesRef.current.filter(n => n.id !== selectedNodeId);
+      nodesRef.current = next; setNodes(next);
+      edgesRef.current = edgesRef.current.filter(e => !(e.data?.kind === 'expr-internal' && e.data?.ownerId === ownerId && (e.source === selectedNodeId || e.target === selectedNodeId)));
+      setEdges(edgesRef.current);
+      setSelectedNodeId(null);
+      expSync(ownerId);
+      return;
+    }
+    // Fallback: signal endpoint or other node — existing behaviour.
     const next = nodesRef.current.filter(n => n.id !== selectedNodeId);
     commitSignal(next);
     setSelectedNodeId(null);
-  }, [selectedNodeId, commitSignal]);
+  }, [selectedNodeId, commitSignal, expandedFnId, expSync]);
 
   // ── Expr-mode add/edit (kept for aero / propulsion tables) ──
   const handleAddBlock = useCallback((kind: string) => {
@@ -467,6 +763,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         </div>
       </div>
 
+      {isSignal && expandedFnId && (
+        <div className="expr-subgraph-bar">
+          🧩 正在就地编辑&nbsp;<b>{(nodes.find(n => n.id === expandedFnId)?.data as any)?.name || expandedFnId}</b>&nbsp;的运算子图
+          <button className="expr-subgraph-collapse-btn" onClick={() => collapseFunction(expandedFnId)}>⊟ 折叠</button>
+        </div>
+      )}
+
       {!isSignal && !hasExprs ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#888' }}>
           该模块没有可编辑的公式
@@ -474,7 +777,11 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       ) : (
       <div className="expr-editor-main">
         {isSignal ? (
-          <SignalPalette onAdd={handleAddComponent} />
+          expandedFnId ? (
+            <ExpressionPalette onAddBlock={handleAddExprBlock} />
+          ) : (
+            <SignalPalette onAdd={handleAddComponent} />
+          )
         ) : (
           <ExpressionPalette onAddBlock={handleAddBlock} />
         )}
@@ -484,6 +791,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           ref={rfWrapper}
           onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
         >
+          <SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, persistBendpoints }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -505,11 +813,17 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             elementsSelectable
             connectionMode={ConnectionMode.Loose}
             edgeTypes={edgeTypes}
+            selectionOnDrag
+            panOnDrag={[1, 2]}
+            multiSelectionKeyCode="Shift"
+            selectionMode={SelectionMode.Partial}
+            onPaneContextMenu={(e) => e.preventDefault()}
           >
             <Background gap={20} size={1} />
             <Controls />
             <MiniMap />
           </ReactFlow>
+          </SignalEdgeActionsContext.Provider>
         </div>
 
         <div className="expr-props">
@@ -518,6 +832,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
               expression={editingNode.data.expression}
               onChange={handleExprSave}
               onBack={() => setEditingExprId(null)}
+            />
+          ) : selectedNode && selectedNode.data?.kind === 'exprBlock' ? (
+            <BlockPropertyPanel
+              expr={selectedNode.data.exprNode as ExprNode}
+              onChange={(updatedExpr: ExprNode) => handleExprBlockUpdate(selectedNode.id, updatedExpr)}
+              onDelete={handleDelete}
+              isRoot={selectedNode.id === ((nodes.find(n => n.id === (selectedNode.data as any).ownerId)?.data as any)?.expRootId)}
             />
           ) : selectedNode && selectedNode.data?.kind === 'component' ? (
             <ComponentPropertyPanel

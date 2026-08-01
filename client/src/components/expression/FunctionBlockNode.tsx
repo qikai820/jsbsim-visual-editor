@@ -34,6 +34,10 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
   const { exprNode, blockDef, inputCount } = data as unknown as FunctionBlockData;
   const summary = getSummary(exprNode);
   const isLeaf = inputCount === 0;
+  // In signal-flow expand mode, property/function_ref leaves act as signal inlets
+  // (they receive the owning function's input signal from an external wire).
+  const inSignalFlow = !!(data as any).inSignalFlow;
+  const isSignalLeaf = inSignalFlow && (exprNode.kind === 'property' || exprNode.kind === 'function_ref');
   const exprName = (data as any).exprName as string | undefined;
   const isRoot = (data as any).isExprRoot as boolean | undefined;
 
@@ -50,7 +54,8 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
       {/* Input handles */}
       {Array.from({ length: inputCount }, (_, i) => {
         const labels = INPUT_LABELS[exprNode.kind];
-        const label = labels ? labels[i] : (blockDef.inputCount === 'variable' ? String(i + 1) : undefined);
+        // Simulink Sum: mark each input port with a '+' sign.
+        const label = exprNode.kind === 'sum' ? '+' : (labels ? labels[i] : (blockDef.inputCount === 'variable' ? String(i + 1) : undefined));
         const topPct = inputCount === 1 ? 50 : (i + 1) * (100 / (inputCount + 1));
         return (
           <Handle
@@ -66,25 +71,31 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
         );
       })}
 
-      {/* Block body */}
-      <div className="fn-block-header" style={{ background: blockDef.color }}>
-        <span className="fn-block-icon">{blockDef.icon}</span>
-        {blockDef.category === 'input' || blockDef.category === 'table' ? (
-          <span className="fn-block-label">{blockDef.label}</span>
-        ) : null}
+      {/* Simulink-style operator body: big symbol (or leaf value) */}
+      <div className={`fn-op-body ${isLeaf ? 'fn-op-leaf' : ''}`}>
+        {isLeaf ? (
+          <span className="fn-op-leafval" title={summary}>{summary}</span>
+        ) : (
+          <span className="fn-op-symbol" style={{ color: blockDef.color }}>{blockDef.icon}</span>
+        )}
       </div>
-
-      {summary && (
-        <div className="fn-block-summary" title={summary}>
-          {summary}
-        </div>
-      )}
 
       {/* Variable arity: add port button */}
       {blockDef.inputCount === 'variable' && (
         <div className="fn-block-add-port" data-action="add-input">
           +
         </div>
+      )}
+
+      {/* Signal inlet for expanded-in-canvas leaves (property / function_ref) */}
+      {isSignalLeaf && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="in-signal"
+          className="fn-inlet-handle"
+          style={{ top: '50%', background: '#10b981' }}
+        />
       )}
 
       {/* Output handle */}

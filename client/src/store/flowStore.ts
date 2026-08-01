@@ -18,6 +18,7 @@ interface FlowState {
   onNodesChange: OnNodesChange;
   onEdgesChange: OnEdgesChange;
   onConnect: (connection: Connection) => void;
+  updateEdgeData: (id: string, patch: Record<string, any>) => void;
   addNode: (type: ComponentType, position: { x: number; y: number }) => void;
   removeNode: (id: string) => void;
   updateNodeParams: (id: string, params: Record<string, any>) => void;
@@ -55,6 +56,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   onConnect: (connection) => {
     set({ edges: addEdge({ ...connection, type: 'smoothstep', animated: true }, get().edges) });
+  },
+
+  updateEdgeData: (id, patch) => {
+    set({ edges: get().edges.map(e => (e.id === id ? { ...e, data: { ...e.data, ...patch } } : e)) });
   },
 
   addNode: (type, position) => {
