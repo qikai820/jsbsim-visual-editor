@@ -4,6 +4,7 @@ import { OrbitControls, Text, Grid, Line, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
+import ParametricAircraft from './ParametricAircraft';
 import type { AircraftNodeData } from '../types';
 
 // Error boundary
@@ -49,6 +50,20 @@ function getLoc(params: Record<string, any>): { x: number; y: number; z: number 
   };
 }
 
+// Resolve a 3D placement for a node.
+// - If the component has a real JSBSim location (x/y/z), use it (geometry-accurate).
+// - Otherwise fall back to its 2D layout position so modules never pile up at the origin.
+function getDisplayPos(node: { position?: { x: number; y: number }; data: AircraftNodeData }): [number, number, number] {
+  const p = node.data.params || {};
+  const loc = p.location || p.cg;
+  if (loc && typeof loc.x === 'number') {
+    return jsbToThree(loc.x, loc.y, loc.z);
+  }
+  const lp = node.position || { x: 0, y: 0 };
+  // 2D layout x -> lateral (3D x), 2D layout y -> forward (3D -z)
+  return [lp.x * SCALE, 0, -lp.y * SCALE];
+}
+
 interface Airplane3DViewerProps {
   onClose: () => void;
 }
@@ -82,8 +97,7 @@ export default function Airplane3DViewer({ onClose }: Airplane3DViewerProps) {
     if (spatialNodes.length === 0) return [0, 0, 0] as [number, number, number];
     let cx = 0, cy = 0, cz = 0;
     for (const n of spatialNodes) {
-      const loc = getLoc(n.data.params);
-      const [tx, ty, tz] = jsbToThree(loc.x, loc.y, loc.z);
+      const [tx, ty, tz] = getDisplayPos(n);
       cx += tx; cy += ty; cz += tz;
     }
     const count = spatialNodes.length || 1;
@@ -157,28 +171,12 @@ export default function Airplane3DViewer({ onClose }: Airplane3DViewerProps) {
           <AxisHelper />
 
           {/* Fuselage reference outline */}
-          <FuselageOutline />
-
-          {/* Component shapes */}
-          {spatialNodes.map(node => (
-            <ComponentShape
-              key={node.id}
-              node={node}
-              isSelected={node.id === selectedNodeId}
-              isHovered={node.id === hoveredId}
-              onSelect={() => setSelectedNode(node.id)}
-              onHover={(h) => setHoveredId(h ? node.id : null)}
-            />
-          ))}
-
-          {/* Labels */}
-          {spatialNodes.map(node => (
-            <ComponentLabel
-              key={`label-${node.id}`}
-              node={node}
-              isSelected={node.id === selectedNodeId}
-            />
-          ))}
+          <ParametricAircraft
+            showMarkers
+            selectedNodeId={selectedNodeId}
+            onSelect={setSelectedNode}
+            onHover={(h) => setHoveredId(h)}
+          />
         </Canvas>
       </div>
 
@@ -246,7 +244,7 @@ function FuselageOutline() {
 // ── Component 3D Shape ──────────────────────────────────────────────────────
 
 interface ShapeProps {
-  node: { id: string; data: AircraftNodeData };
+  node: { id: string; position?: { x: number; y: number }; data: AircraftNodeData };
   isSelected: boolean;
   isHovered: boolean;
   onSelect: () => void;
@@ -257,8 +255,7 @@ function ComponentShape({ node, isSelected, isHovered, onSelect, onHover }: Shap
   const meshRef = useRef<THREE.Mesh>(null);
   const def = getComponentDef(node.data.componentType);
   const color = def?.color || '#888';
-  const loc = getLoc(node.data.params);
-  const pos = jsbToThree(loc.x, loc.y, loc.z);
+  const pos = getDisplayPos(node);
 
   const handleClick = (e: any) => {
     e.stopPropagation();
@@ -432,9 +429,8 @@ function ComponentShape({ node, isSelected, isHovered, onSelect, onHover }: Shap
 
 // ── Component Label ─────────────────────────────────────────────────────────
 
-function ComponentLabel({ node, isSelected }: { node: { id: string; data: AircraftNodeData }; isSelected: boolean }) {
-  const loc = getLoc(node.data.params);
-  const pos = jsbToThree(loc.x, loc.y, loc.z);
+function ComponentLabel({ node, isSelected }: { node: { id: string; position?: { x: number; y: number }; data: AircraftNodeData }; isSelected: boolean }) {
+  const pos = getDisplayPos(node);
   const def = getComponentDef(node.data.componentType);
   const label = def?.icon || '';
 

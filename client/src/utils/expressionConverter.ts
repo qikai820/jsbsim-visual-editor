@@ -1,4 +1,5 @@
 import type { Node, Edge } from '@xyflow/react';
+import { orderRanksByBarycenter } from './layoutUtils';
 import type {
   ExprNode, ExprValue, ExprProperty, ExprFunctionRef, ExprTable,
   ExprProduct, ExprSum, ExprDifference, ExprQuotient, ExprPow,
@@ -46,6 +47,22 @@ export const BLOCK_DEFS: Record<string, BlockDef> = {
   nq:            { kind: 'nq',            label: '!=',         category: 'logic', color: '#0ea5e9', icon: '≠',  inputCount: 2, outputCount: 1 },
   ifthen:        { kind: 'ifthen',        label: 'IF-THEN',    category: 'logic', color: '#0284c7', icon: 'if', inputCount: 3, outputCount: 1 },
   switch:        { kind: 'switch',        label: 'SWITCH',     category: 'logic', color: '#0369a1', icon: 'sw', inputCount: 'variable', outputCount: 1 },
+  // ── Additional functions from JSBSimCommon.xsd <func_group> ──
+  min:           { kind: 'min', label: '最小 min', category: 'math', color: '#f97316', icon: 'min', inputCount: 'variable', outputCount: 1 },
+  max:           { kind: 'max', label: '最大 max', category: 'math', color: '#f97316', icon: 'max', inputCount: 'variable', outputCount: 1 },
+  avg:           { kind: 'avg', label: '平均 avg', category: 'math', color: '#fb923c', icon: 'avg', inputCount: 'variable', outputCount: 1 },
+  mod:           { kind: 'mod', label: '取模 mod', category: 'math', color: '#be123c', icon: 'mod', inputCount: 2, outputCount: 1 },
+  and:           { kind: 'and', label: '与 and', category: 'logic', color: '#0ea5e9', icon: '∧', inputCount: 'variable', outputCount: 1 },
+  or:            { kind: 'or', label: '或 or', category: 'logic', color: '#0ea5e9', icon: '∨', inputCount: 'variable', outputCount: 1 },
+  not:           { kind: 'not', label: '非 not', category: 'logic', color: '#0284c7', icon: '¬', inputCount: 1, outputCount: 1 },
+  fraction:      { kind: 'fraction', label: '小数 frac', category: 'func', color: '#7c3aed', icon: 'frac', inputCount: 1, outputCount: 1 },
+  integer:       { kind: 'integer', label: '取整 int', category: 'func', color: '#7c3aed', icon: 'int', inputCount: 1, outputCount: 1 },
+  toradians:     { kind: 'toradians', label: '→弧度', category: 'func', color: '#7c3aed', icon: '→rad', inputCount: 1, outputCount: 1 },
+  todegrees:     { kind: 'todegrees', label: '→角度', category: 'func', color: '#7c3aed', icon: '→deg', inputCount: 1, outputCount: 1 },
+  random:        { kind: 'random', label: '随机', category: 'func', color: '#7c3aed', icon: 'rand', inputCount: 0, outputCount: 1 },
+  urandom:       { kind: 'urandom', label: '均匀随机', category: 'func', color: '#7c3aed', icon: 'urand', inputCount: 0, outputCount: 1 },
+  pi:            { kind: 'pi', label: 'π', category: 'func', color: '#7c3aed', icon: 'π', inputCount: 0, outputCount: 1 },
+  roundmultiple: { kind: 'roundmultiple', label: '取整倍 rnd', category: 'math', color: '#f97316', icon: 'rnd', inputCount: 'variable', outputCount: 1 },
 };
 
 // ── Layout constants ────────────────────────────────────────────────────────
@@ -117,9 +134,38 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
     byDepth.get(info.depth)!.push(exprRef as ExprNode);
   }
 
+  // Order each depth by the median position of neighbours (parent / children)
+  // to keep subtrees vertically aligned and reduce edge crossings.
+  const byDepthIds = new Map<number, string[]>();
+  const idToExpr = new Map<string, ExprNode>();
+  const parentOf = new Map<string, string>();
+  for (const [, info] of infoMap) {
+    if (!byDepthIds.has(info.depth)) byDepthIds.set(info.depth, []);
+    byDepthIds.get(info.depth)!.push(info.id);
+    idToExpr.set(info.id, info.expr as ExprNode);
+  }
+  for (const [exprRef, info] of infoMap) {
+    for (const c of getChildren(info.expr)) {
+      const ci = infoMap.get(c);
+      if (ci) parentOf.set(ci.id, info.id);
+    }
+  }
+  const prevAdj = new Map<string, string[]>();
+  const nextAdj = new Map<string, string[]>();
+  for (const [, info] of infoMap) {
+    const id = info.id;
+    const childIds = getChildren(info.expr)
+      .map((c) => infoMap.get(c)?.id)
+      .filter((x): x is string => !!x);
+    prevAdj.set(id, childIds);
+    if (parentOf.has(id)) nextAdj.set(id, [parentOf.get(id)!]);
+  }
+  orderRanksByBarycenter(byDepthIds, { prev: prevAdj, next: nextAdj });
+
   // Create nodes with positions
-  for (const [depth, exprs] of byDepth) {
-    exprs.forEach((e, rowIdx) => {
+  for (const [depth, ids] of byDepthIds) {
+    ids.forEach((id, rowIdx) => {
+      const e = idToExpr.get(id)!;
       const info = infoMap.get(e)!;
       const def = BLOCK_DEFS[e.kind];
       const inputCount = getInputCount(e);
@@ -233,6 +279,8 @@ function rebuildExprNode(original: ExprNode, children: ExprNode[]): ExprNode {
       return { kind: 'product', children };
     case 'sum':
       return { kind: 'sum', children };
+    case 'min': case 'max': case 'avg': case 'and': case 'or': case 'roundmultiple':
+      return { kind: original.kind, children };
 
     case 'difference':
       return { kind: 'difference', left: children[0] || valueNode(0), right: children[1] || valueNode(0) };
@@ -275,15 +323,19 @@ function rebuildExprNode(original: ExprNode, children: ExprNode[]): ExprNode {
 function getChildren(e: ExprNode): ExprNode[] {
   switch (e.kind) {
     case 'value': case 'property': case 'function_ref': case 'table':
+    case 'random': case 'urandom': case 'pi':
       return [];
     case 'product': case 'sum':
+    case 'min': case 'max': case 'avg': case 'and': case 'or': case 'roundmultiple':
       return e.children;
     case 'difference': return [e.left, e.right];
     case 'quotient': return [e.left, e.right];
     case 'pow': return [e.base, e.exponent];
     case 'atan2': return [e.y, e.x];
+    case 'mod': return [e.left, e.right];
     case 'abs': case 'sin': case 'cos': case 'tan':
     case 'asin': case 'acos': case 'atan': case 'sqrt': case 'exp':
+    case 'fraction': case 'integer': case 'toradians': case 'todegrees': case 'not':
       return [e.child];
     case 'ifthen': return [e.cond, e.then, e.else];
     case 'switch': return [e.index, ...e.cases, e.default];

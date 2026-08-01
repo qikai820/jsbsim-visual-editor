@@ -53,6 +53,139 @@ function escapeXml(str) {
     .replace(/'/g, '&apos;');
 }
 
+// ── Channel / component serialization (shared by flight_control & system) ──
+
+const { exprToXml } = require('./expressionXml');
+
+// Serialize a single channel component item (function / pure_gain / summer /
+// pid / actuator / switch / sensor / ...) back into JSBSim XML.
+function serializeChannelItem(it, level) {
+  if (!it || !it.type) return null;
+  const name = it.name || '';
+  const attrs = name ? { name } : {};
+
+  // Functions carry a full expression tree -> serialize via ExprNode.
+  // JSBSim math may be a bare <function> or a <fcs_function> wrapper (which
+  // holds the <function> body plus an optional sibling <clipto>). Emit both.
+  if ((it.type === 'function' || it.type === 'fcs_function') && it.expression) {
+    const body = exprToXml(it.expression, level + 1);
+    const clipMin = it.cliptoMin;
+    const clipMax = it.cliptoMax;
+    const hasClip = clipMin !== undefined || clipMax !== undefined;
+
+    if (it.type === 'fcs_function') {
+      const inner = [];
+      if (hasClip) {
+        const ci = [];
+        if (clipMin !== undefined) ci.push(xmlElement('min', {}, String(clipMin), level + 2));
+        if (clipMax !== undefined) ci.push(xmlElement('max', {}, String(clipMax), level + 2));
+        inner.push(xmlElement('clipto', {}, ci.join('\n'), level + 1));
+      }
+      inner.push(xmlElement('function', {}, body, level + 1));
+      return xmlElement('fcs_function', attrs, inner.join('\n'), level);
+    }
+
+    // Bare <function>: clipto (if any) is a sibling of the operation inside it.
+    let funcContent = body;
+    if (hasClip) {
+      const ci = [];
+      if (clipMin !== undefined) ci.push(xmlElement('min', {}, String(clipMin), level + 2));
+      if (clipMax !== undefined) ci.push(xmlElement('max', {}, String(clipMax), level + 2));
+      funcContent = `${body}\n${xmlElement('clipto', {}, ci.join('\n'), level + 1)}`;
+    }
+    return xmlElement('function', attrs, funcContent, level);
+  }
+
+  // Other components: emit their captured componentProps as child elements
+  const comp = it.componentProps || {};
+  const lines = [];
+
+  // Top-level <property> references
+  if (comp.properties) {
+    const arr = Array.isArray(comp.properties)
+      ? comp.properties
+      : (comp.properties.value ? [comp.properties.value] : []);
+    for (const p of arr) {
+      if (p) lines.push(xmlElement('property', {}, String(p), level + 1));
+    }
+  }
+
+  // Clipping (clipto_min / clipto_max captured as separate props)
+  const clipMin = comp.clipto_min?.value;
+  const clipMax = comp.clipto_max?.value;
+  if (clipMin !== undefined || clipMax !== undefined) {
+    const inner = [];
+    if (clipMin !== undefined) inner.push(xmlElement('min', {}, String(clipMin), level + 2));
+    if (clipMax !== undefined) inner.push(xmlElement('max', {}, String(clipMax), level + 2));
+    lines.push(xmlElement('clipto', {}, inner.join('\n'), level + 1));
+  }
+
+  // Inputs. Multi-input components (e.g. <summer>) carry an ordered `inputs`
+  // array with an interleaved parallel `gains` array (gains[i] scales
+  // inputs[i]; gains[0] is unset). Single-input components use `input`/`gain`.
+  if (Array.isArray(comp.inputs)) {
+    for (let i = 0; i < comp.inputs.length; i++) {
+      const sig = comp.inputs[i];
+      if (sig != null && String(sig).trim() !== '') {
+        lines.push(xmlElement('input', {}, String(sig), level + 1));
+      }
+      const g = (comp.gains && Array.isArray(comp.gains)) ? comp.gains[i] : undefined;
+      if (g != null && String(g).trim() !== '') {
+        lines.push(xmlElement('gain', {}, String(g), level + 1));
+      }
+    }
+  } else if (comp.input && comp.input.value != null && String(comp.input.value) !== '') {
+    const inputAttrs = comp.input.attrs && typeof comp.input.attrs === 'object' ? comp.input.attrs : {};
+    lines.push(xmlElement('input', inputAttrs, String(comp.input.value), level + 1));
+    if (comp.gain && comp.gain.value != null && String(comp.gain.value) !== '') {
+      const gainAttrs = comp.gain.attrs && typeof comp.gain.attrs === 'object' ? comp.gain.attrs : {};
+      lines.push(xmlElement('gain', gainAttrs, String(comp.gain.value), level + 1));
+    }
+  }
+
+  // Remaining scalar props (kp/ki/kd, lag, bias, trigger, ...). Explicitly
+  // skip the input/output/gain fields handled above and the clipping helpers.
+  for (const [field, fieldData] of Object.entries(comp)) {
+    if (['properties', 'clipto_min', 'clipto_max', 'input', 'gain', 'inputs', 'gains', 'output'].includes(field)) continue;
+    const val = fieldData?.value ?? '';
+    const attrEntries = Object.entries(fieldData?.attrs || {});
+    if (val === '' && attrEntries.length === 0) continue;
+    const attrObj = {};
+    for (const [k, v] of attrEntries) attrObj[k] = v;
+    lines.push(xmlElement(field, attrObj, String(val), level + 1));
+  }
+
+  // Output is emitted last. Only present when the original component had an
+  // explicit <output> (a component without one writes to its `name` attribute,
+  // which JSBSim binds automatically — see FGFCSComponent::bind).
+  const out = comp.output?.value;
+  if (out != null && String(out).trim() !== '') {
+    lines.push(xmlElement('output', {}, String(out), level + 1));
+  }
+
+  if (lines.length === 0) return null;
+  return xmlElement(it.type, attrs, lines.join('\n'), level);
+}
+
+// Serialize all channels of a flight_control / system node into a combined
+// XML string (at channel/level 2 indentation).
+function serializeChannelsXML(params) {
+  let channels = [];
+  try { channels = JSON.parse(params.channels || '[]'); } catch { channels = []; }
+  if (!Array.isArray(channels)) return '';
+  const lines = [];
+  for (const ch of channels) {
+    const chName = ch.name || '';
+    const items = (ch.items || [])
+      .map(it => serializeChannelItem(it, 3))
+      .filter(Boolean);
+    if (chName || items.length > 0) {
+      lines.push(xmlElement('channel', chName ? { name: chName } : {}, items.join('\n'), 2));
+    }
+  }
+  return lines.join('\n');
+}
+
 // ── Node grouping ───────────────────────────────────────────────────────────
 
 function groupNodesByType(nodes) {
@@ -251,7 +384,7 @@ function buildPropulsion(groups, input) {
     }
 
     // Thruster
-    if (p.thruster_file) {
+    {
       const thrLines = [];
       // Find connected propeller node via edges
       const propNode = propellerNodes.find(pr => {
@@ -260,8 +393,8 @@ function buildPropulsion(groups, input) {
           (e.source === pr.id && e.target === eng.id)
         );
       });
+      const pp = propNode ? getParams(propNode) : {};
       if (propNode) {
-        const pp = getParams(propNode);
         if (pp.location) {
           thrLines.push(xmlLocation(pp.location.x, pp.location.y, pp.location.z, pp.location.unit, 'location', 3));
         }
@@ -271,8 +404,24 @@ function buildPropulsion(groups, input) {
         if (pp.p_factor !== undefined) {
           thrLines.push(xmlElement('p_factor', {}, String(pp.p_factor), 3));
         }
+        // Carry over numeric thruster params that originally came from the sub-file
+        if (pp.diameter !== undefined) thrLines.push(xmlSimple('diameter', getVal(pp.diameter), getUnit(pp.diameter), 3));
+        if (pp.numblades !== undefined) thrLines.push(xmlElement('numblades', {}, String(pp.numblades), 3));
+        if (pp.gearratio !== undefined) thrLines.push(xmlElement('gearratio', {}, String(pp.gearratio), 3));
       }
-      engLines.push(xmlElement('thruster', { file: p.thruster_file }, thrLines.join('\n'), 2));
+      const tbls = Array.isArray(pp.tables) ? pp.tables : [];
+      if (tbls.length > 0) {
+        // Emit thruster inline with its coefficient tables (no sub-file reference
+        // needed) so edits round-trip within the main aircraft XML.
+        for (const t of tbls) {
+          if (t && t.expression) thrLines.push(exprToXml(t.expression, 3));
+        }
+        engLines.push(xmlElement('thruster', {}, thrLines.join('\n'), 2));
+      } else if (p.thruster_file) {
+        engLines.push(xmlElement('thruster', { file: p.thruster_file }, thrLines.join('\n'), 2));
+      } else {
+        engLines.push(xmlElement('thruster', {}, thrLines.join('\n'), 2));
+      }
     }
 
     const attrs = {};
@@ -282,6 +431,14 @@ function buildPropulsion(groups, input) {
 
   // Propellers (as thrusters)
   for (const prop of propellerNodes) {
+    // A propeller that is the nested thruster of an engine is already emitted
+    // inside that <engine>; skip it here to avoid a duplicate definition.
+    const linkedToEngine = input.edges && input.edges.some(e =>
+      (e.source === prop.id && engineNodes.some(en => en.id === e.target)) ||
+      (e.target === prop.id && engineNodes.some(en => en.id === e.source))
+    );
+    if (linkedToEngine) continue;
+
     const p = getParams(prop);
     const propLines = [];
 
@@ -294,10 +451,21 @@ function buildPropulsion(groups, input) {
     if (p.p_factor !== undefined && p.p_factor !== '') {
       propLines.push(xmlElement('p_factor', {}, String(p.p_factor), 2));
     }
+    if (p.diameter !== undefined) propLines.push(xmlSimple('diameter', getVal(p.diameter), getUnit(p.diameter), 2));
+    if (p.numblades !== undefined) propLines.push(xmlElement('numblades', {}, String(p.numblades), 2));
+    if (p.gearratio !== undefined) propLines.push(xmlElement('gearratio', {}, String(p.gearratio), 2));
 
-    const attrs = {};
-    if (p.file) attrs['file'] = p.file;
-    lines.push(xmlElement('thruster', attrs, propLines.join('\n'), 1));
+    const tbls = Array.isArray(p.tables) ? p.tables : [];
+    if (tbls.length > 0) {
+      for (const t of tbls) {
+        if (t && t.expression) propLines.push(exprToXml(t.expression, 2));
+      }
+      lines.push(xmlElement('thruster', {}, propLines.join('\n'), 1));
+    } else {
+      const attrs = {};
+      if (p.file) attrs['file'] = p.file;
+      lines.push(xmlElement('thruster', attrs, propLines.join('\n'), 1));
+    }
   }
 
   // Fuel tanks
@@ -334,30 +502,64 @@ function buildSystemReferences(groups) {
     const file = p.file || sys.data?.label || 'unknown';
     const properties = p.properties || '';
 
+    let body = '';
     if (properties) {
       const propList = typeof properties === 'string'
         ? properties.split(',').map(s => s.trim()).filter(Boolean)
         : Array.isArray(properties) ? properties : [];
-      const propLines = propList.map(prop => xmlElement('property', {}, prop, 2));
-      lines.push(xmlElement('system', { file }, propLines.join('\n'), 1));
-    } else {
+      body += propList.map(prop => xmlElement('property', {}, prop, 2)).join('\n');
+    }
+
+    const chXml = serializeChannelsXML(p);
+    if (chXml) body += (body ? '\n' : '') + chXml;
+
+    if (!body.trim()) {
       lines.push(xmlElement('system', { file }, undefined, 1));
+    } else {
+      lines.push(xmlElement('system', { file }, body, 1));
     }
   }
 
   return lines.join('\n');
 }
 
-function buildFlightControl() {
-  // Placeholder section
-  return xmlElement('flight_control', {}, '', 0);
+function buildFlightControl(groups) {
+  const fcNodes = groups['flight_control'] || [];
+  if (fcNodes.length === 0) return '';
+
+  const lines = [];
+  for (const node of fcNodes) {
+    const p = getParams(node);
+    const file = p.file || '';
+    const name = p.name || node.data?.label || '';
+
+    let body = '';
+    const properties = p.properties || '';
+    if (properties) {
+      const propList = typeof properties === 'string'
+        ? properties.split(',').map(s => s.trim()).filter(Boolean)
+        : Array.isArray(properties) ? properties : [];
+      body += propList.map(prop => xmlElement('property', {}, prop, 2)).join('\n');
+    }
+
+    const chXml = serializeChannelsXML(p);
+    if (chXml) body += (body && !body.endsWith('\n') ? '\n' : '') + chXml;
+
+    if (!body.trim()) continue;
+
+    const attrs = {};
+    if (file) attrs.file = file;
+    else if (name) attrs.name = name;
+    lines.push(xmlElement('flight_control', attrs, body, 1));
+  }
+
+  return lines.join('\n\n');
 }
 
 function buildAerodynamics(groups) {
   const aeroNodes = groups['aero_coefficients'] || [];
   if (aeroNodes.length === 0) return xmlElement('aerodynamics', {}, '', 0);
 
-  const { exprToXml } = require('./expressionXml');
   const lines = [];
 
   for (const aero of aeroNodes) {
@@ -501,7 +703,8 @@ function generateXml(input) {
   sectionContent.push(buildPropulsion(groups, input));
   const systemRefs = buildSystemReferences(groups);
   if (systemRefs) sectionContent.push(systemRefs);
-  sectionContent.push(buildFlightControl());
+  const fcXml = buildFlightControl(groups);
+  if (fcXml) sectionContent.push(fcXml);
   sectionContent.push(buildAerodynamics(groups));
   const outputXml = buildOutput(groups);
   if (outputXml) sectionContent.push(outputXml);
@@ -585,4 +788,4 @@ function generateSubFileXml(subFile) {
   return lines.join('\n') + '\n';
 }
 
-module.exports = { generateXml, generateSubFileXml };
+module.exports = { generateXml, generateSubFileXml, serializeChannelsXML, serializeChannelItem };

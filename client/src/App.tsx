@@ -5,9 +5,29 @@ import Palette from './components/Palette';
 import Canvas from './components/Canvas';
 import PropertyPanel from './components/PropertyPanel';
 import FileManager from './components/FileManager';
+import ModuleExpressionCanvas from './components/expression/ModuleExpressionCanvas';
 import { useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
+
+// Lazy load live view (reuses three.js)
+const LiveView = lazy(() =>
+  import('./components/LiveView').catch(err => {
+    console.error('[Live] Failed to load:', err);
+    return {
+      default: ({ onClose }: { onClose: () => void }) => (
+        <div className="viewer3d-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ textAlign: 'center', color: '#fff', padding: 40 }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+            <h2 style={{ marginBottom: 8 }}>实时视图加载失败</h2>
+            <p style={{ color: '#aaa', marginBottom: 20, fontSize: 13 }}>{err?.message || '加载出错'}</p>
+            <button onClick={onClose} style={{ padding: '10px 24px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>← 返回编辑器</button>
+          </div>
+        </div>
+      ),
+    };
+  })
+);
 
 // Lazy load 3D viewer with error-safe wrapper
 const Airplane3DViewer = lazy(() =>
@@ -131,6 +151,7 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
 function AppContent() {
   const [dragType, setDragType] = useState<ComponentType | null>(null);
   const [show3D, setShow3D] = useState(false);
+  const [showLive, setShowLive] = useState(false);
   const [webglFail, setWebglFail] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -186,16 +207,62 @@ function AppContent() {
     setShow3D(true);
   }, []);
 
+  // Module (flight_control / system) drill-down: when a module node is focused,
+  // the main workspace area is replaced by its internal signal-flow canvas.
+  const focusedNode = useFlowStore((s) => s.nodes.find((n) => n.id === s.focusedNodeId) || null);
+  const setFocusedNodeId = useFlowStore((s) => s.setFocusedNodeId);
+  const updateNodeParams = useFlowStore((s) => s.updateNodeParams);
+  const focusedModule =
+    focusedNode &&
+    (focusedNode.data.componentType === 'system' || focusedNode.data.componentType === 'flight_control') &&
+    focusedNode.data.params?.channels
+      ? focusedNode
+      : null;
+  let focusedChannels: any[] = [];
+  let focusedLayout: Record<string, { x: number; y: number }> | undefined;
+  if (focusedModule) {
+    try {
+      const parsed = JSON.parse(focusedModule.data.params.channels);
+      if (Array.isArray(parsed)) focusedChannels = parsed;
+    } catch { /* ignore malformed */ }
+    try {
+      if (focusedModule.data.params.layout) {
+        const lp = JSON.parse(focusedModule.data.params.layout);
+        if (lp && typeof lp === 'object') focusedLayout = lp;
+      }
+    } catch { /* ignore malformed */ }
+  }
+
   return (
     <div className="app">
-      <Toolbar onShow3D={handleShow3D} />
+      <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)} />
       <div className="main-content">
-        <Palette onDragStart={handleDragStart} />
-        <Canvas dragType={dragType} onDragStart={handleDragStart} />
-        <div className="right-sidebar">
-          <PropertyPanel />
-          <FileManager />
-        </div>
+        {focusedModule ? (
+          <ModuleExpressionCanvas
+            embedded
+            mode="signal"
+            title={`${focusedModule.data.componentType === 'flight_control' ? '飞控' : '系统'} 信号流`}
+            channels={focusedChannels}
+            topLevelProps={(focusedModule.data.params.properties || '')
+              .split(',')
+              .map((s: string) => s.trim())
+              .filter(Boolean)}
+            modelId={focusedModule.id}
+            initialLayout={focusedLayout}
+            onChannelsChange={(chs) => updateNodeParams(focusedModule.id, { channels: JSON.stringify(chs) })}
+            onLayoutChange={(layout) => updateNodeParams(focusedModule.id, { layout: JSON.stringify(layout) })}
+            onBack={() => setFocusedNodeId(null)}
+          />
+        ) : (
+          <>
+            <Palette onDragStart={handleDragStart} />
+            <Canvas dragType={dragType} onDragStart={handleDragStart} />
+            <div className="right-sidebar">
+              <PropertyPanel />
+              <FileManager />
+            </div>
+          </>
+        )}
       </div>
 
       {/* WebGL not available dialog */}
@@ -225,6 +292,19 @@ function AppContent() {
         }>
           <Viewer3DSafety onClose={() => setShow3D(false)}>
             <Airplane3DViewer onClose={() => setShow3D(false)} />
+          </Viewer3DSafety>
+        </Suspense>
+      )}
+
+      {/* 实时融合显示 overlay */}
+      {showLive && (
+        <Suspense fallback={
+          <div className="viewer3d-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ color: '#fff', fontSize: 16 }}>🔴 连接仿真机...</div>
+          </div>
+        }>
+          <Viewer3DSafety onClose={() => setShowLive(false)}>
+            <LiveView onClose={() => setShowLive(false)} />
           </Viewer3DSafety>
         </Suspense>
       )}

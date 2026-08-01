@@ -9,10 +9,11 @@ import { getComponentDef } from '../utils/componentDefs';
 interface FlowState {
   nodes: Node<AircraftNodeData>[];
   edges: Edge[];
-  aircraft: { name: string; version: string; release: string };
+  aircraft: { name: string; version: string; release: string; type?: 'fixed_wing' | 'helicopter' | 'multirotor' };
   selectedNodeId: string | null;
   subFiles: SubFile[];
   editingSubFileId: string | null;
+  focusedNodeId: string | null;
 
   onNodesChange: OnNodesChange;
   onEdgesChange: OnEdgesChange;
@@ -21,6 +22,7 @@ interface FlowState {
   removeNode: (id: string) => void;
   updateNodeParams: (id: string, params: Record<string, any>) => void;
   setSelectedNode: (id: string | null) => void;
+  setFocusedNodeId: (id: string | null) => void;
   setAircraft: (aircraft: { name: string; version: string; release: string }) => void;
   loadProject: (data: { nodes: Node<AircraftNodeData>[]; edges: Edge[]; aircraft: any; subFiles?: SubFile[] }) => void;
   clearAll: () => void;
@@ -41,6 +43,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   selectedNodeId: null,
   subFiles: [],
   editingSubFileId: null,
+  focusedNodeId: null,
 
   onNodesChange: (changes) => {
     set({ nodes: applyNodeChanges(changes, get().nodes) });
@@ -80,6 +83,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       nodes: get().nodes.filter(n => n.id !== id),
       edges: get().edges.filter(e => e.source !== id && e.target !== id),
       selectedNodeId: get().selectedNodeId === id ? null : get().selectedNodeId,
+      focusedNodeId: get().focusedNodeId === id ? null : get().focusedNodeId,
     });
   },
 
@@ -93,6 +97,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   setSelectedNode: (id) => set({ selectedNodeId: id }),
 
+  setFocusedNodeId: (id) => set({ focusedNodeId: id }),
+
   setAircraft: (aircraft) => set({ aircraft }),
 
   loadProject: (data) => {
@@ -103,12 +109,13 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       subFiles: data.subFiles || [],
       selectedNodeId: null,
       editingSubFileId: null,
+      focusedNodeId: null,
     });
     const maxId = Math.max(0, ...data.nodes.map(n => parseInt(n.id.replace('node-', '')) || 0));
     nodeCounter = maxId;
   },
 
-  clearAll: () => set({ nodes: [], edges: [], selectedNodeId: null, subFiles: [], editingSubFileId: null }),
+  clearAll: () => set({ nodes: [], edges: [], selectedNodeId: null, subFiles: [], editingSubFileId: null, focusedNodeId: null }),
 
   addSubFile: (fileType, fileName) => {
     const id = `sf-${++subFileCounter}`;

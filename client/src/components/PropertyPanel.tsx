@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
 import { getUnitOptions, convertUnit, formatValue } from '../utils/unitConverter';
-import type { ParamDef } from '../types';
+import type { ParamDef, ExprNode } from '../types';
 import SubFileEditor from './SubFileEditor';
 import AeroEditor from './AeroEditor';
 import TableChart from './expression/TableChart';
 import ExpressionEditor from './expression/ExpressionEditor';
+import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
 
 // Normalize param value: could be a plain number or { value, unit }
 function getNumVal(p: any): number {
@@ -21,11 +22,42 @@ function getUnitStr(p: any, fallback: string): string {
 }
 
 export default function PropertyPanel() {
-  const { nodes, selectedNodeId, updateNodeParams, removeNode, setSelectedNode, editingSubFileId } = useFlowStore();
+  const { nodes, selectedNodeId, updateNodeParams, removeNode, setSelectedNode, setFocusedNodeId, editingSubFileId } = useFlowStore();
   const [sysEditingExpr, setSysEditingExpr] = useState<{ chIdx: number; itemIdx: number } | null>(null);
   const [editingCompProp, setEditingCompProp] = useState<{ chIdx: number; itemIdx: number; field: string } | null>(null);
+  const [canvasView, setCanvasView] = useState<
+    | { title: string; mode?: 'expr'; expressions: ModuleExpression[]; onChange: (id: string, expr: ExprNode) => void }
+    | { title: string; mode: 'signal'; channels: any[]; topLevelProps: string[]; onChannelsChange: (channels: any[]) => void }
+    | null
+  >(null);
 
   if (editingSubFileId) return <SubFileEditor />;
+
+  // Module-level Simulink-style block canvas (full screen overlay)
+  if (canvasView) {
+    return (
+      <div className="property-panel">
+        <h3>属性 Properties</h3>
+        {'expressions' in canvasView ? (
+          <ModuleExpressionCanvas
+            expressions={canvasView.expressions}
+            onChange={canvasView.onChange}
+            onBack={() => setCanvasView(null)}
+            title={canvasView.title}
+          />
+        ) : (
+          <ModuleExpressionCanvas
+            mode="signal"
+            channels={canvasView.channels}
+            topLevelProps={canvasView.topLevelProps}
+            onChannelsChange={canvasView.onChannelsChange}
+            onBack={() => setCanvasView(null)}
+            title={canvasView.title}
+          />
+        )}
+      </div>
+    );
+  }
 
   const node = nodes.find(n => n.id === selectedNodeId);
 
@@ -405,7 +437,15 @@ export default function PropertyPanel() {
             <>
               <div className="prop-divider" />
               <div className="prop-merged-section">
-                <div className="prop-merged-title">🔗 控制通道 ({channels.length})</div>
+                <div className="prop-merged-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>🔗 控制通道 ({channels.length})</span>
+                <button
+                  className="ae-open-expr-btn"
+                  style={{ margin: 0, padding: '2px 10px', fontSize: 11 }}
+                  onClick={() => setFocusedNodeId(node!.id)}
+                  title="在主界面画布中查看/编辑该模块内部的信号流图"
+                >🔍 进入模块画布</button>
+              </div>
                 {channels.map((ch: any, i: number) => (
                   <SystemChannelEditor
                     key={i}
@@ -441,7 +481,30 @@ export default function PropertyPanel() {
           <>
             <div className="prop-divider" />
             <div className="prop-merged-section">
-              <div className="prop-merged-title">{icon} 引用文件属性 ({p._source_file})</div>
+              <div className="prop-merged-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>{icon} 引用文件属性 ({p._source_file})</span>
+              {(() => {
+                const tblExprs: ModuleExpression[] = Array.isArray(p.tables)
+                  ? p.tables.map((t: any, ti: number) => ({ id: `t${ti}`, name: t.name, expression: t.expression }))
+                  : [];
+                if (tblExprs.length === 0) return null;
+                return (
+                  <button
+                    className="ae-open-expr-btn"
+                    style={{ margin: 0, padding: '2px 10px', fontSize: 11 }}
+                    onClick={() => setCanvasView({
+                      title: '推进系数据表',
+                      expressions: tblExprs,
+                      onChange: (id, expr) => {
+                        const idx = Number(id.slice(1));
+                        const cur = Array.isArray(p.tables) ? p.tables.map((t: any) => ({ ...t })) : [];
+                        if (cur[idx]) { cur[idx] = { ...cur[idx], expression: expr }; updateNodeParams(node!.id, { tables: cur }); }
+                      },
+                    })}
+                  >📐 模块画布</button>
+                );
+              })()}
+            </div>
               {merged.map(([k, v]) => (
                 <div key={k} className="field-row">
                   <label>{k}</label>

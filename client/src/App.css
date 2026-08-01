@@ -265,6 +265,14 @@ html, body, #root {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59,130,246,0.12), var(--shadow-lg);
 }
+/* Module nodes (system / flight_control) are drillable: cursor + badge */
+.aircraft-node-module { cursor: pointer; }
+.aircraft-node-module:hover { box-shadow: 0 0 0 3px rgba(142,68,173,0.18), var(--shadow-lg); }
+.node-drill-badge {
+  margin-left: auto; font-size: 13px; line-height: 1;
+  background: rgba(255,255,255,0.25); border-radius: 4px; padding: 1px 3px;
+}
+.node-drill-badge-empty { opacity: 0.55; }
 
 .node-header {
   display: flex; align-items: center; gap: 7px;
@@ -658,11 +666,13 @@ html, body, #root {
   padding: 8px 16px; background: var(--bg-secondary);
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
-.expr-back-btn, .expr-apply-btn, .expr-fit-btn {
+.expr-back-btn, .expr-apply-btn, .expr-fit-btn, .expr-layout-btn {
   padding: 6px 14px; border-radius: var(--radius-sm);
   font-size: 12px; font-weight: 500; cursor: pointer;
   border: 1px solid var(--border); transition: all 0.15s;
 }
+.expr-layout-btn { background: #1e3a5f; color: #bfdbfe; border-color: #2b4f7a; }
+.expr-layout-btn:hover { background: #254b78; color: #fff; }
 .expr-back-btn { background: var(--bg-tertiary); color: var(--text-primary); }
 .expr-back-btn:hover { background: var(--bg-hover); }
 .expr-fit-btn { background: var(--bg-secondary); color: var(--text-secondary); }
@@ -709,6 +719,15 @@ html, body, #root {
 .expr-props-empty { text-align: center; margin-top: 40px; color: var(--text-muted); font-size: 12px; }
 .expr-props-hint { font-size: 11px; margin-top: 8px; line-height: 1.5; }
 
+/* Module canvas embedded into the main workspace (drill-down navigation).
+   Rendered as the sole child of .main-content, so it must fill the area. */
+.module-canvas-root {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-primary);
+}
+.module-canvas-root .expr-editor-main { min-height: 0; }
+
 /* Function Block Node */
 .fn-block {
   background: var(--bg-secondary); border: 1.5px solid var(--border);
@@ -718,6 +737,14 @@ html, body, #root {
 }
 .fn-block:hover { box-shadow: var(--shadow-md); }
 .fn-block.selected { border-color: var(--block-color, var(--accent)); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.fn-block-root { border-width: 2px; border-style: solid; }
+.fn-expr-name {
+  position: absolute; top: -20px; left: 0;
+  font-size: 10px; font-weight: 600; color: #fff;
+  background: var(--block-color, var(--accent)); padding: 1px 6px;
+  border-radius: 4px 4px 0 0; white-space: nowrap; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
 .fn-block-header {
   display: flex; align-items: center; gap: 5px;
   padding: 5px 8px; border-radius: 10px 10px 0 0;
@@ -1167,3 +1194,176 @@ html, body, #root {
 }
 .library-load-btn:hover { opacity: 0.9; }
 .library-load-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ========== 实时融合显示 (Live HMI) ========== */
+.btn-live {
+  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+  color: #fff !important; border: none !important;
+  font-weight: 600; letter-spacing: 0.5px;
+  transition: all 0.2s;
+}
+.btn-live:hover { transform: translateY(-1px); box-shadow: 0 3px 12px rgba(239,68,68,0.4); }
+
+.live-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  display: flex; flex-direction: column;
+  background: #0f1923;
+  animation: viewerFadeIn 0.3s ease;
+}
+.live-topbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 20px;
+  background: rgba(15, 25, 35, 0.95);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  z-index: 10;
+}
+.live-title { color: #fff; font-size: 14px; font-weight: 600; }
+.live-sub { color: rgba(255,255,255,0.45); font-size: 12px; }
+.live-close {
+  margin-left: auto; padding: 6px 14px; border-radius: 6px;
+  background: rgba(255,255,255,0.1); color: #fff;
+  border: 1px solid rgba(255,255,255,0.2);
+  font-size: 12px; cursor: pointer;
+}
+.live-close:hover { background: rgba(255,255,255,0.2); }
+.live-body { flex: 1; display: flex; min-height: 0; }
+.live-canvas { flex: 1; min-width: 0; position: relative; }
+.live-side { width: 320px; flex-shrink: 0; background: #0c151f; border-left: 1px solid rgba(255,255,255,0.08); overflow-y: auto; }
+
+.live-panel { padding: 14px; color: #e2e8f0; }
+.live-status {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; margin-bottom: 12px;
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot-on { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+.dot-off { background: #ef4444; }
+
+/* 人工地平仪 */
+.adi {
+  position: relative; width: 140px; height: 140px; margin: 0 auto 14px;
+  border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.2);
+  background: #000;
+}
+.adi-ball { position: absolute; inset: -40px; display: flex; flex-direction: column; align-items: center; }
+.adi-sky { width: 100%; height: 50%; background: linear-gradient(#3b82f6, #1e40af); }
+.adi-ground { width: 100%; height: 50%; background: linear-gradient(#92400e, #78350f); }
+.adi-line { position: absolute; top: 50%; left: 10%; right: 10%; height: 2px; background: #fbbf24; }
+.adi-roll { position: absolute; bottom: 6px; left: 0; right: 0; text-align: center; font-size: 11px; color: #fbbf24; }
+
+.live-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-bottom: 14px; }
+.live-row { display: flex; justify-content: space-between; font-size: 12px; border-bottom: 1px dashed rgba(255,255,255,0.08); padding: 2px 0; }
+.live-k { color: rgba(255,255,255,0.55); }
+.live-v { color: #7dd3fc; font-family: 'SFMono-Regular', Consolas, monospace; }
+
+.live-control { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; }
+.override-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.live-hint { font-size: 11px; color: rgba(255,255,255,0.4); margin: 4px 0 10px; }
+.live-slider { margin-bottom: 10px; }
+.live-slider-head { display: flex; justify-content: space-between; font-size: 11px; color: rgba(255,255,255,0.6); margin-bottom: 2px; }
+.live-slider input[type=range] { width: 100%; accent-color: #ef4444; }
+.live-slider input[type=range]:disabled { opacity: 0.4; }
+
+/* ── Signal-flow block canvas (Simulink style) ──────────────────────────── */
+/* Compact blocks: smaller min-width, tighter padding, smaller type so the
+   whole signal-flow diagram reads as a denser, tidier graph. */
+.sig-block {
+  min-width: 96px;
+  max-width: 180px;
+  background: var(--bg-primary, #1e293b);
+  border: 2px solid var(--block-color, #64748b);
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  font-size: 10px;
+  color: var(--text-primary, #e2e8f0);
+  overflow: hidden;
+}
+.sig-block.selected { box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,0.5); }
+.sig-block-header {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; color: #fff; font-weight: 600;
+}
+.sig-block-icon { font-size: 11px; }
+.sig-block-type { font-size: 10px; }
+.sig-block-tag { margin-left: auto; font-size: 8px; background: rgba(255,255,255,0.25); padding: 0 3px; border-radius: 3px; }
+/* Arithmetic-symbol / handwritten-formula preview for function blocks */
+.sig-block-fn { background: #18243a; }
+.sig-block-expr {
+  display: flex; align-items: flex-start; gap: 4px;
+  padding: 3px 6px; border-top: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.05);
+}
+.sig-expr-op {
+  font-size: 13px; font-weight: 700; line-height: 1.1;
+  min-width: 15px; text-align: center; flex: 0 0 auto;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+.sig-expr-preview {
+  /* "handwritten" feel: cursive stack + math symbols (× ÷ − √ …) */
+  font-family: 'Segoe Print', 'Comic Sans MS', 'Bradley Hand', 'SFMono-Regular', cursive, monospace;
+  font-size: 10px; line-height: 1.3; color: #e2e8f0;
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  max-height: 60px; overflow-y: auto; flex: 1 1 auto;
+}
+.sig-expr-empty { color: rgba(226,232,240,0.4); font-style: italic; }
+/* Function blocks: keep ports but hide signal-name labels */
+.sig-block-inputs-bare { padding: 1px 0; }
+.sig-block-inputs-bare .sig-input-row { min-height: 12px; padding-left: 10px; }
+.sig-block-inputs-bare .sig-input-handle { top: 50% !important; }
+.sig-block-name {
+  padding: 3px 6px; font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 10px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;
+}
+.sig-block-full { display: block; font-size: 8px; color: rgba(255,255,255,0.5); font-weight: 400; }
+/* Compact key-parameter summary (e.g. PID Kp/Ki/Kd, gain G, bias b) shown on
+   the block so values are visible without opening the property panel. */
+.sig-block-params {
+  padding: 2px 6px 3px; font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px; line-height: 1.2; color: var(--block-color, #94a3b8);
+  font-weight: 600; border-top: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sig-block-inputs { padding: 3px 0; }
+.sig-input-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 1px 8px 1px 10px; position: relative; min-height: 16px;
+}
+.sig-input-label {
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 10px;
+  background: rgba(16,185,129,0.15); color: #6ee7b7;
+  padding: 1px 5px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
+}
+.sig-input-handle { width: 8px; height: 8px; left: -4px; }
+.sig-output-handle { width: 8px; height: 8px; right: -4px; }
+
+/* Signal endpoint nodes (source / sink) */
+.sig-end {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 4px 8px; border-radius: 6px; border: 2px solid var(--block-color);
+  background: var(--bg-primary, #1e293b); color: var(--text-primary, #e2e8f0);
+  font-size: 10px; min-width: 78px; text-align: center;
+}
+.sig-end.selected { box-shadow: 0 0 0 2px #fff; }
+.sig-end-source { border-color: #10b981; }
+.sig-end-sink { border-color: #f59e0b; }
+.sig-end-icon { font-size: 11px; color: var(--block-color); }
+.sig-end-label { font-family: 'SFMono-Regular', Consolas, monospace; font-weight: 600; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.sig-end-role { font-size: 8px; color: rgba(255,255,255,0.5); }
+
+/* Component property panel (signal canvas) */
+.comp-prop-panel { padding: 4px 2px; }
+.comp-prop-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.comp-prop-badge { color: #fff; font-weight: 600; font-size: 12px; padding: 3px 10px; border-radius: 6px; }
+.comp-prop-subtitle { font-size: 12px; font-weight: 600; margin: 6px 0 4px; color: var(--text-primary, #e2e8f0); display: flex; flex-direction: column; }
+.comp-prop-subtitle .expr-props-hint { font-weight: 400; color: rgba(255,255,255,0.5); font-size: 10px; margin-top: 2px; }
+
+/* Signal-mode component palette */
+.expr-palette-title { font-size: 11px; font-weight: 600; color: var(--text-muted, #94a3b8); margin-bottom: 6px; padding-left: 4px; }
+.expr-palette-items { display: flex; flex-direction: column; gap: 4px; }
+.expr-palette-item {
+  text-align: left; font-size: 12px; padding: 5px 8px; border-radius: 5px;
+  border: 1px solid var(--border, #334155); border-left-width: 3px;
+  background: var(--bg-secondary, #0f172a); color: var(--text-primary, #e2e8f0); cursor: pointer;
+}
+.expr-palette-item:hover { background: var(--bg-hover, #1e293b); }

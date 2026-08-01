@@ -4,6 +4,7 @@ import type { ExprNode, AeroCoefficient } from '../types';
 import { migrateOldCoefficient } from '../utils/expressionConverter';
 import { exprToSegments } from '../utils/exprToFormula';
 import ExpressionEditor from './expression/ExpressionEditor';
+import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
 import TableChart from './expression/TableChart';
 
 // Error boundary
@@ -98,6 +99,7 @@ export default function AeroEditor() {
   const [coeffs, setCoeffs] = useState<AeroCoefficient[]>(() => parseCoefficients(rawCoeffs));
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [showExprEditor, setShowExprEditor] = useState(false);
+  const [showCanvas, setShowCanvas] = useState(false);
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
@@ -176,12 +178,27 @@ export default function AeroEditor() {
     );
   }
 
+  // Show module-level block canvas (all coefficients on one Simulink-style graph)
+  if (showCanvas) {
+    return (
+      <ModuleExpressionCanvas
+        expressions={coeffs.map((c, i) => ({ id: String(i), name: c.name, expression: c.expression }))}
+        onChange={(id, expr) => updateExpression(parseInt(id, 10), expr)}
+        onBack={() => setShowCanvas(false)}
+        title="气动系数"
+      />
+    );
+  }
+
   return (
     <AeroErrorBoundary>
     <div className="aero-editor">
       <div className="ae-header">
         <span className="ae-title">🌊 气动系数</span>
         <span className="ae-count">{coeffs.length} 项</span>
+        <button className="ae-open-expr-btn" style={{ marginLeft: 'auto' }} onClick={() => setShowCanvas(true)}>
+          📐 模块画布
+        </button>
       </div>
 
       {/* Grouped coefficient list */}

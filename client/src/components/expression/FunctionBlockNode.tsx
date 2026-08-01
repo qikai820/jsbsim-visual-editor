@@ -34,12 +34,19 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
   const { exprNode, blockDef, inputCount } = data as unknown as FunctionBlockData;
   const summary = getSummary(exprNode);
   const isLeaf = inputCount === 0;
+  const exprName = (data as any).exprName as string | undefined;
+  const isRoot = (data as any).isExprRoot as boolean | undefined;
 
   return (
     <div
-      className={`fn-block fn-block-${blockDef.category} ${selected ? 'selected' : ''}`}
+      className={`fn-block fn-block-${blockDef.category} ${selected ? 'selected' : ''} ${isRoot ? 'fn-block-root' : ''}`}
       style={{ '--block-color': blockDef.color } as React.CSSProperties}
     >
+      {/* Expression name label for module-canvas root nodes */}
+      {exprName && (
+        <div className="fn-expr-name" title={exprName}>{exprName}</div>
+      )}
+
       {/* Input handles */}
       {Array.from({ length: inputCount }, (_, i) => {
         const labels = INPUT_LABELS[exprNode.kind];
@@ -62,7 +69,9 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
       {/* Block body */}
       <div className="fn-block-header" style={{ background: blockDef.color }}>
         <span className="fn-block-icon">{blockDef.icon}</span>
-        <span className="fn-block-label">{blockDef.label}</span>
+        {blockDef.category === 'input' || blockDef.category === 'table' ? (
+          <span className="fn-block-label">{blockDef.label}</span>
+        ) : null}
       </div>
 
       {summary && (

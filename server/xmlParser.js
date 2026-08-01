@@ -4,6 +4,7 @@
  */
 
 const { XMLParser } = require('fast-xml-parser');
+const { parseTable } = require('./expressionXml');
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
@@ -102,6 +103,21 @@ function extractText(obj) {
   return String(obj);
 }
 
+// Extract a signal/property name from an <input>/<property>/etc. child which
+// may be a bare string ("fcs/foo") or an element object ({ "#text": "fcs/foo" }
+// / { "@_value": "fcs/foo" } when attributes are present).
+function extractSignalName(obj) {
+  if (obj === undefined || obj === null) return '';
+  if (typeof obj === 'string') return obj.trim();
+  if (typeof obj === 'number') return String(obj);
+  if (typeof obj === 'object') {
+    if (obj['#text'] !== undefined) return String(obj['#text']).trim();
+    if (obj['@_value'] !== undefined) return String(obj['@_value']).trim();
+    return '';
+  }
+  return '';
+}
+
 // ── Table data extraction (shared by all parsers) ──────────────────────────
 
 function parseTableData(text) {
@@ -113,7 +129,12 @@ function parseTableData(text) {
   });
 }
 
-// Extract tables from an XML element and add to params._tables
+// Extract tables from an XML element.
+// Populates both:
+//   params.tables  -> array of { name, expression } where expression is an ExprNode
+//                      (kind: 'table', with var1/var2/var3, breakpoints, data) for the
+//                      Simulink-style block canvas.
+//   params._tables -> legacy raw { name, type, data } for the simple table-data editor.
 function extractTables(el, params) {
   if (!el || typeof el !== 'object') return params;
   for (const [key, val] of Object.entries(el)) {
@@ -122,6 +143,16 @@ function extractTables(el, params) {
       for (const tbl of tables) {
         if (!tbl) continue;
         const tblName = tbl['@_name'] || '';
+        // ExprNode form (for the block canvas)
+        try {
+          const expr = parseTable(tbl);
+          if (tblName) expr.name = tblName;
+          if (!params.tables) params.tables = [];
+          params.tables.push({ name: tblName, expression: expr });
+        } catch (e) {
+          // fall through to raw capture on parse failure
+        }
+        // Legacy raw form (for the simple table-data editor)
         const tblType = tbl['@_type'] || 'internal';
         const tableData = tbl['tableData'] ? parseTableData(String(tbl['tableData'])) : [];
         if (tblName && tableData.length > 0) {
@@ -473,6 +504,9 @@ function parsePropulsion(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
         thrParams.file = thrusterFile;
       }
 
+      // Capture any inline coefficient tables on the <thruster> element
+      extractTables(thruster, thrParams);
+
       // Extract inline thruster params (location, orient, sense, p_factor)
       if (thruster['location']) thrParams.location = extractLocation(thruster['location']);
       if (thruster['orient']) {
@@ -518,6 +552,9 @@ function parsePropulsion(fdmConfig, nodes, edges, fileMap = {}, parser = null) {
       params = resolveFileParams(file, params);
       params._source_file = file;
     }
+
+    // Capture any inline coefficient tables on the <thruster> element
+    extractTables(thr, params);
 
     if (thr['location']) params.location = extractLocation(thr['location']);
     if (thr['sense'] !== undefined) params.sense = Number(extractText(thr['sense']));
@@ -582,25 +619,43 @@ function parseComponentSection(fdmConfig, nodes, edges, sectionKey, componentTyp
       const chName = ch['@_name'] || '';
       const chItems = [];
 
-      // Extract functions from channel (with expression trees)
-      const funcs = ensureArray(ch['function']);
-      for (const f of funcs) {
-        if (!f) continue;
-        const fName = f['@_name'] || '';
-        const item = { type: 'function', name: fName };
-        // Parse function body into expression tree
-        try {
-          const { xmlToExpr } = require('./expressionXml');
-          item.expression = xmlToExpr(f);
-        } catch (e) {
-          item.expression = { kind: 'value', value: 0 };
+      // Extract functions from channel (with expression trees).
+      // JSBSim math may be written either as a bare <function> component or, as
+      // in MorphQuad/GimbalVectoring.xml, wrapped in <fcs_function> (which holds
+      // the <function> body plus an optional sibling <clipto>). Handle both so
+      // the inner operations (sum/sin/sqrt/atan2/...) and the output clip are
+      // recognized and round-tripped.
+      const funcKeys = ['function', 'fcs_function'];
+      for (const fk of funcKeys) {
+        const funcs = ensureArray(ch[fk]);
+        for (const f of funcs) {
+          if (!f) continue;
+          const fName = f['@_name'] || '';
+          const item = { type: fk, name: fName };
+          // The body is the inner <function> child for fcs_function wrappers,
+          // or the element itself for a bare <function>.
+          const body = fk === 'fcs_function' ? f['function'] : f;
+          try {
+            const { xmlToExpr } = require('./expressionXml');
+            item.expression = xmlToExpr(body);
+          } catch (e) {
+            item.expression = { kind: 'value', value: 0 };
+          }
+          // Sibling <clipto> clips the component output. It appears as a direct
+          // child of <fcs_function>, and may also be a sibling of the operation
+          // inside a bare <function>. Capture min/max so it round-trips.
+          const clip = f['clipto'];
+          if (clip !== undefined && clip !== null && typeof clip === 'object') {
+            if (clip['min'] !== undefined) item.cliptoMin = String(extractText(clip['min']));
+            if (clip['max'] !== undefined) item.cliptoMax = String(extractText(clip['max']));
+          }
+          chItems.push(item);
         }
-        chItems.push(item);
       }
 
       // Extract other channel elements (sensor, kinematic, switch, pid, actuator, etc.)
       for (const [key, val] of Object.entries(ch)) {
-        if (key.startsWith('@_') || key === '#text' || key === 'function') continue;
+        if (key.startsWith('@_') || key === '#text' || key === 'function' || key === 'fcs_function') continue;
         const items = ensureArray(val);
         for (const item of items) {
           if (!item) continue;
@@ -612,9 +667,26 @@ function parseComponentSection(fdmConfig, nodes, edges, sectionKey, componentTyp
           const knownFields = ['input', 'lag', 'noise', 'drift_rate', 'gain', 'bias',
             'delay', 'output', 'property', 'trigger', 'width', 'center', 'deadband',
             'constant', 'clipto', 'min', 'max', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6',
+            // PID controller gains (JSBSim <pid> children, lowercase)
+            'kp', 'ki', 'kd',
             'clipto_min', 'clipto_max'];
 
+          // clipto in JSBSim is always <clipto><min>..</min><max>..</max></clipto>.
+          // Flatten its min/max children into clipto_min / clipto_max so the
+          // serializer (serializeChannelItem) can round-trip it correctly.
+          if (item['clipto'] !== undefined && typeof item['clipto'] === 'object' && item['clipto'] !== null) {
+            const clip = item['clipto'];
+            if (clip['min'] !== undefined) {
+              props.clipto_min = { value: String(extractText(clip['min'])), attrs: {} };
+            }
+            if (clip['max'] !== undefined) {
+              props.clipto_max = { value: String(extractText(clip['max'])), attrs: {} };
+            }
+          }
+
           for (const field of knownFields) {
+            if (field === 'clipto') continue; // handled above
+            if (field === 'clipto_min' || field === 'clipto_max') continue; // already extracted
             if (item[field] !== undefined) {
               if (typeof item[field] === 'object' && item[field] !== null) {
                 // Handle elements with attributes (like noise with distribution)
@@ -637,6 +709,26 @@ function parseComponentSection(fdmConfig, nodes, edges, sectionKey, componentTyp
               if (typeof p === 'string') return p;
               return p['@_name'] || extractText(p);
             }).filter(Boolean);
+          }
+
+          // ── Normalize multiple <input>/<gain> children (e.g. <summer>) ──
+          // In JSBSim these are INTERLEAVED: each <gain> follows the <input> it
+          // scales, i.e. gain[k] (document order) scales input[k+1], while the
+          // first input has an implicit gain of 1.0. Preserve this ordering
+          // losslessly with an ordered `inputs` list plus a parallel `gains`
+          // array (gains[i] is the gain for inputs[i]; gains[0] is always unset).
+          const rawInputs = ensureArray(item['input'])
+            .map(extractSignalName)
+            .filter(s => s !== '');
+          const rawGains = ensureArray(item['gain'])
+            .map(v => extractText(v))
+            .filter(s => s !== '');
+          if (rawInputs.length > 1) {
+            props.inputs = rawInputs;
+            props.gains = rawInputs.map((_, i) =>
+              i === 0 ? undefined : (rawGains[i - 1] !== undefined ? String(rawGains[i - 1]) : undefined));
+            delete props.input;
+            delete props.gain;
           }
 
           if (Object.keys(props).length > 0) {
@@ -662,22 +754,27 @@ function parseComponentSection(fdmConfig, nodes, edges, sectionKey, componentTyp
       params.channels = JSON.stringify(channelData);
     }
 
-    // Extract top-level functions
-    const topFuncs = ensureArray(sysDef['function']);
-    if (topFuncs.length > 0 && channelData.length === 0) {
-      const items = topFuncs.map(f => {
-        const item = { type: 'function', name: f['@_name'] || '' };
+    // Extract top-level functions (no enclosing channel)
+    const topFuncItems = [];
+    for (const fk of ['function', 'fcs_function']) {
+      const topFuncs = ensureArray(sysDef[fk]);
+      for (const f of topFuncs) {
+        if (!f) continue;
+        const fName = f['@_name'] || '';
+        if (!fName) continue;
+        const item = { type: fk, name: fName };
+        const body = fk === 'fcs_function' ? f['function'] : f;
         try {
           const { xmlToExpr } = require('./expressionXml');
-          item.expression = xmlToExpr(f);
+          item.expression = xmlToExpr(body);
         } catch (e) {
           item.expression = { kind: 'value', value: 0 };
         }
-        return item;
-      }).filter(i => i.name);
-      if (items.length > 0) {
-        params.channels = JSON.stringify([{ name: '', items }]);
+        topFuncItems.push(item);
       }
+    }
+    if (topFuncItems.length > 0 && channelData.length === 0) {
+      params.channels = JSON.stringify([{ name: '', items: topFuncItems }]);
     }
 
     // Extract properties
@@ -1087,6 +1184,15 @@ function parseXml(xmlString, fileMap = {}) {
     release: fdmConfig['@_release'] || '',
   };
 
+  // 机型判定（用于 3D 渲染变体选择：fixed_wing / helicopter / multirotor）
+  // 多旋翼：无刷直流电机，或无刷/电动电机且无机翼；直升机：旋翼；其余：固定翼
+  const _combined = xmlString + '\n' + Object.values(fileMap || {}).join('\n');
+  const _hasWing = /<wing[\s>]/.test(_combined);
+  if (_combined.includes('brushless_dc_motor')) aircraft.type = 'multirotor';
+  else if (_combined.includes('electric_engine') && !_hasWing) aircraft.type = 'multirotor';
+  else if (_combined.includes('<rotor') || _combined.includes('rotor>')) aircraft.type = 'helicopter';
+  else aircraft.type = 'fixed_wing';
+
   const nodes = [];
   const edges = [];
 
@@ -1176,6 +1282,7 @@ function parseSubFileXml(xmlString, fileType) {
     if (root['diameter'] !== undefined) result.params.diameter = extractValueWithUnit(root['diameter']);
     if (root['numblades'] !== undefined) result.params.numblades = Number(extractText(root['numblades']));
     if (root['gearratio'] !== undefined) result.params.gearratio = Number(extractText(root['gearratio']));
+    extractTables(root, result.params);
     return result;
   }
 

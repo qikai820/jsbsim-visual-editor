@@ -21,10 +21,17 @@ function AircraftNode({ data, selected }: NodeProps) {
   const def = getComponentDef(nodeData.componentType);
   if (!def) return null;
 
+  const isModule = nodeData.componentType === 'system' || nodeData.componentType === 'flight_control';
+  const hasContent = isModule && nodeData.params?.channels && nodeData.params.channels !== '[]';
+
   const paramEntries = Object.entries(def.params).slice(0, 4);
 
   return (
-    <div className={`aircraft-node ${selected ? 'selected' : ''}`} style={{ borderColor: def.color }}>
+    <div
+      className={`aircraft-node ${selected ? 'selected' : ''} ${isModule ? 'aircraft-node-module' : ''}`}
+      style={{ borderColor: def.color }}
+      title={isModule ? '双击进入模块信号流画布' : undefined}
+    >
       {/* Input handles */}
       {def.inputs.map((input, i) => (
         <Handle
@@ -41,6 +48,11 @@ function AircraftNode({ data, selected }: NodeProps) {
       <div className="node-header" style={{ background: def.color }}>
         <span className="node-icon">{def.icon}</span>
         <span className="node-label">{nodeData.label}</span>
+        {isModule && (
+          <span className={`node-drill-badge ${hasContent ? '' : 'node-drill-badge-empty'}`} title="双击进入">
+            ⤢
+          </span>
+        )}
       </div>
 
       {/* Body - parameter summary */}

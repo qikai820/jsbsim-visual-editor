@@ -91,7 +91,17 @@ export type ExprNode =
   | ExprAtan2
   | ExprIfThen
   | ExprSwitch
-  | ExprComparison;
+  | ExprComparison
+  | ExprMin
+  | ExprMax
+  | ExprAvg
+  | ExprAnd
+  | ExprOr
+  | ExprMod
+  | ExprRoundMultiple
+  | ExprRandom
+  | ExprUrandom
+  | ExprPi;
 
 export interface ExprValue {
   kind: 'value';
@@ -148,7 +158,9 @@ export interface ExprPow {
   exponent: ExprNode;
 }
 
-export type UnaryOp = 'abs' | 'sin' | 'cos' | 'tan' | 'asin' | 'acos' | 'atan' | 'sqrt' | 'exp';
+export type UnaryOp =
+  | 'abs' | 'sin' | 'cos' | 'tan' | 'asin' | 'acos' | 'atan' | 'sqrt' | 'exp'
+  | 'fraction' | 'integer' | 'toradians' | 'todegrees' | 'not';
 
 export interface ExprUnary {
   kind: UnaryOp;
@@ -181,6 +193,57 @@ export interface ExprComparison {
   kind: ComparisonOp;
   left: ExprNode;
   right: ExprNode;
+}
+
+// ── Additional function operations from JSBSimCommon.xsd <func_group> ──
+
+export interface ExprMin {
+  kind: 'min';
+  children: ExprNode[];
+}
+
+export interface ExprMax {
+  kind: 'max';
+  children: ExprNode[];
+}
+
+export interface ExprAvg {
+  kind: 'avg';
+  children: ExprNode[];
+}
+
+export interface ExprAnd {
+  kind: 'and';
+  children: ExprNode[];
+}
+
+export interface ExprOr {
+  kind: 'or';
+  children: ExprNode[];
+}
+
+export interface ExprMod {
+  kind: 'mod';
+  left: ExprNode;
+  right: ExprNode;
+}
+
+export interface ExprRoundMultiple {
+  kind: 'roundmultiple';
+  children: ExprNode[]; // [value, multiple?]
+}
+
+// 0-argument constants / sources
+export interface ExprRandom {
+  kind: 'random';
+}
+
+export interface ExprUrandom {
+  kind: 'urandom';
+}
+
+export interface ExprPi {
+  kind: 'pi';
 }
 
 // Coefficient with expression tree

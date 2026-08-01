@@ -2,8 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const WebSocket = require('ws');
 const { generateXml, generateSubFileXml } = require('./xmlGenerator');
 const { parseXml, parseSubFileXml } = require('./xmlParser');
+const simClient = require('./simClient');
 
 const app = express();
 app.use(cors());
@@ -486,4 +489,52 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`JSBSim Visual Editor server on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`JSBSim Visual Editor server on port ${PORT}`));
+
+// ── 实时仿真 WebSocket (/ws/sim) ─────────────────────────────────────────
+// 把 simClient 收到的 UDP 遥测广播给浏览器，并把浏览器控制指令转发给仿真机。
+const wss = new WebSocket.Server({ server, path: '/ws/sim' });
+
+function broadcast(obj) {
+  const s = JSON.stringify(obj);
+  wss.clients.forEach((c) => {
+    if (c.readyState === WebSocket.OPEN) c.send(s);
+  });
+}
+
+wss.on('connection', (ws) => {
+  // 连上时立即推当前状态与最新帧
+  ws.send(JSON.stringify({ type: 'status', connected: simClient.state.connected }));
+  if (simClient.state.latest) {
+    ws.send(JSON.stringify({ type: 'telemetry', data: simClient.state.latest }));
+  }
+  ws.on('message', (raw) => {
+    try {
+      const m = JSON.parse(raw.toString());
+      if (m.type === 'control') {
+        simClient.sendControl(!!m.override, Array.isArray(m.channels) ? m.channels : []);
+      }
+    } catch (e) {
+      // 忽略非法消息
+    }
+  });
+});
+
+// 遥测广播 ~30Hz（仅在连线时）
+setInterval(() => {
+  if (simClient.state.connected && simClient.state.latest) {
+    broadcast({ type: 'telemetry', data: simClient.state.latest });
+  }
+}, 33);
+
+// 连接状态变化立即广播
+let _lastStatus = null;
+setInterval(() => {
+  const st = simClient.state.connected;
+  if (st !== _lastStatus) {
+    _lastStatus = st;
+    broadcast({ type: 'status', connected: st });
+  }
+}, 250);
+
+console.log('[sim] /ws/sim 实时仿真通道已启用');

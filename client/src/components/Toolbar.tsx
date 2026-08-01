@@ -5,9 +5,10 @@ import AircraftLibrary from './AircraftLibrary';
 
 interface ToolbarProps {
   onShow3D?: () => void;
+  onShowLive?: () => void;
 }
 
-export default function Toolbar({ onShow3D }: ToolbarProps) {
+export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
   const { aircraft, setAircraft, nodes, edges, loadProject, clearAll } = useFlowStore();
   const [showXml, setShowXml] = useState(false);
   const [xmlContent, setXmlContent] = useState('');
@@ -134,7 +135,10 @@ export default function Toolbar({ onShow3D }: ToolbarProps) {
     <>
       <div className="toolbar">
         <div className="toolbar-left">
-          <span className="toolbar-title">✈️ JSBSim Visual Editor</span>
+          <span className="toolbar-title">
+            <img src="/favicon.svg" alt="logo" style={{ width: 22, height: 22, verticalAlign: 'middle', marginRight: 8 }} />
+            JSBSim Visual Editor
+          </span>
           <input
             className="aircraft-name-input"
             value={aircraft.name}
@@ -150,6 +154,9 @@ export default function Toolbar({ onShow3D }: ToolbarProps) {
           <button onClick={handleLoad} disabled={loading}>📂 加载</button>
         </div>
         <div className="toolbar-right">
+          <button className="btn-live" onClick={onShowLive} title="实时融合显示">
+            🔴 实时
+          </button>
           <button className="btn-3d" onClick={onShow3D} title="3D 预览">
             🛩️ 3D
           </button>

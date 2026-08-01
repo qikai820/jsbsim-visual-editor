@@ -49,6 +49,24 @@ function exprToXml(expr, level) {
     case 'sum':
       return multiArgToXml('sum', expr.children, level);
 
+    case 'min':
+      return multiArgToXml('min', expr.children, level);
+
+    case 'max':
+      return multiArgToXml('max', expr.children, level);
+
+    case 'avg':
+      return multiArgToXml('avg', expr.children, level);
+
+    case 'and':
+      return multiArgToXml('and', expr.children, level);
+
+    case 'or':
+      return multiArgToXml('or', expr.children, level);
+
+    case 'roundmultiple':
+      return multiArgToXml('roundmultiple', expr.children, level);
+
     case 'difference':
       return twoArgToXml('difference', expr.left, expr.right, level);
 
@@ -61,12 +79,25 @@ function exprToXml(expr, level) {
     case 'atan2':
       return twoArgToXml('atan2', expr.y, expr.x, level);
 
+    case 'mod':
+      return twoArgToXml('mod', expr.left, expr.right, level);
+
     case 'abs': case 'sin': case 'cos': case 'tan':
     case 'asin': case 'acos': case 'atan': case 'sqrt': case 'exp':
+    case 'fraction': case 'integer': case 'toradians': case 'todegrees': case 'not':
       return unaryToXml(expr.kind, expr.child, level);
 
     case 'gt': case 'lt': case 'ge': case 'le': case 'eq': case 'nq':
       return twoArgToXml(expr.kind, expr.left, expr.right, level);
+
+    case 'pi':
+      return `${ind}<pi/>`;
+
+    case 'random':
+      return `${ind}<random/>`;
+
+    case 'urandom':
+      return `${ind}<urandom/>`;
 
     case 'ifthen':
       return `${ind}<ifthen>\n${exprToXml(expr.cond, level + 1)}\n${exprToXml(expr.then, level + 1)}\n${exprToXml(expr.else, level + 1)}\n${ind}</ifthen>`;
@@ -244,8 +275,20 @@ function parseFuncBody(obj) {
   if (obj['pow']) return parsePow(obj['pow']);
   if (obj['atan2']) return parseAtan2(obj['atan2']);
 
+  // Variable-arity math / logic (func_group: multiple-arguments)
+  if (obj['min']) return parseMulti('min', obj['min']);
+  if (obj['max']) return parseMulti('max', obj['max']);
+  if (obj['avg']) return parseMulti('avg', obj['avg']);
+  if (obj['and']) return parseMulti('and', obj['and']);
+  if (obj['or']) return parseMulti('or', obj['or']);
+  if (obj['roundmultiple']) return parseMulti('roundmultiple', obj['roundmultiple']);
+
+  // Two-argument modulo
+  if (obj['mod']) return parseMod(obj['mod']);
+
   // Unary functions
-  const unaryOps = ['abs', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sqrt', 'exp'];
+  const unaryOps = ['abs', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sqrt', 'exp',
+    'fraction', 'integer', 'toradians', 'todegrees', 'not'];
   for (const op of unaryOps) {
     if (obj[op]) return parseUnary(op, obj[op]);
   }
@@ -264,6 +307,11 @@ function parseFuncBody(obj) {
 
   // table (standalone)
   if (obj['table']) return parseTable(obj['table']);
+
+  // 0-argument constants / sources
+  if (obj['pi'] !== undefined) return { kind: 'pi' };
+  if (obj['random'] !== undefined) return { kind: 'random' };
+  if (obj['urandom'] !== undefined) return { kind: 'urandom' };
 
   // property (standalone)
   if (obj['property']) return { kind: 'property', name: extractText(obj['property']) };
@@ -337,6 +385,16 @@ function parseProduct(obj) {
 function parseSum(obj) {
   const children = parseChildren(obj);
   return { kind: 'sum', children };
+}
+
+function parseMulti(op, obj) {
+  const children = parseChildren(obj);
+  return { kind: op, children };
+}
+
+function parseMod(obj) {
+  const { left, right } = parseTwoChildren(obj);
+  return { kind: 'mod', left, right };
 }
 
 function parseDifference(obj) {

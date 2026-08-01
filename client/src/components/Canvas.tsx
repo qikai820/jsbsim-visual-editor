@@ -15,8 +15,11 @@ interface CanvasProps {
   dragType: ComponentType | null;
 }
 
+// Node types that own an internal signal-flow "module canvas".
+const MODULE_TYPES = new Set(['system', 'flight_control']);
+
 export default function Canvas({ dragType }: CanvasProps) {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode } = useFlowStore();
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode, updateNodeParams, setFocusedNodeId } = useFlowStore();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
 
@@ -48,6 +51,20 @@ export default function Canvas({ dragType }: CanvasProps) {
     setSelectedNode(null);
   }, [setSelectedNode]);
 
+  // Double-click a module (system / flight_control) to drill into its internal
+  // signal-flow canvas. Ensure channels/layout params exist so the embedded
+  // ModuleExpressionCanvas can mount cleanly on a fresh module node.
+  const onNodeDoubleClick = useCallback((_: any, node: any) => {
+    const t = node.data?.componentType;
+    if (!MODULE_TYPES.has(t)) return;
+    const params = node.data?.params || {};
+    const patch: Record<string, any> = {};
+    if (!('channels' in params) || !params.channels) patch.channels = '[]';
+    if (!('layout' in params) || !params.layout) patch.layout = '{}';
+    if (Object.keys(patch).length) updateNodeParams(node.id, patch);
+    setFocusedNodeId(node.id);
+  }, [updateNodeParams, setFocusedNodeId]);
+
   return (
     <div className="canvas-wrapper" ref={reactFlowWrapper}>
       <ReactFlow
@@ -61,6 +78,7 @@ export default function Canvas({ dragType }: CanvasProps) {
         onDragOver={onDragOver}
         onDrop={onDrop}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={onPaneClick}
         fitView
         deleteKeyCode="Delete"
