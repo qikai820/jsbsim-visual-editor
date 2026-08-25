@@ -10,12 +10,10 @@ interface ToolbarProps {
   onShowLive?: () => void;
   jsbsimLogs?: string[];
   onLog?: (message: string) => void;
-  showJsbsimLog?: boolean;
   onToggleJsbsimLog?: () => void;
-  onClearJsbsimLog?: () => void;
 }
 
-export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, showJsbsimLog, onToggleJsbsimLog, onClearJsbsimLog }: ToolbarProps) {
+export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog }: ToolbarProps) {
   const { aircraft, setAircraft, nodes, edges, loadProject, clearAll } = useFlowStore();
   const [showXml, setShowXml] = useState(false);
   const [xmlContent, setXmlContent] = useState('');
@@ -134,14 +132,6 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
             <button className={`jsbsim-log-button ${jsbsimLogs.length ? 'has-log' : ''}`} onClick={onToggleJsbsimLog} title="查看 JSBSim 最新信息">
               🖥️ {jsbsimLogs.length ? jsbsimLogs[jsbsimLogs.length - 1].replace(/^\[[^\]]+\] /, '').slice(0, 18) : 'JSBSim 信息'}
             </button>
-            {showJsbsimLog && (
-              <div className="jsbsim-log-popover" onClick={e => e.stopPropagation()}>
-                <div className="jsbsim-log-popover-head"><span>JSBSim 运行信息</span><button onClick={onClearJsbsimLog}>清空</button></div>
-                <div className="sim-log-window" role="log">
-                  {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
-                </div>
-              </div>
-            )}
           </div>
           <button onClick={handleSave} disabled={loading}>💾 保存</button>
           <button onClick={handleLoad} disabled={loading}>📂 加载</button>

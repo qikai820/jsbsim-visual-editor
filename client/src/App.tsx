@@ -192,9 +192,8 @@ function AppContent() {
   return (
     <div className="app">
       <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)}
-        jsbsimLogs={jsbsimLogs} showJsbsimLog={showJsbsimLog}
+        jsbsimLogs={jsbsimLogs}
         onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
-        onClearJsbsimLog={() => setJsbsimLogs([])}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
       <div className="main-content">
         {focusedModule ? (
