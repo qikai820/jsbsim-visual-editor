@@ -12,7 +12,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const DEFAULT_CTRL_HOST: &str = "127.0.0.1";
+/* The external bridge normally runs on the i.MX board, while this editor
+ * runs on the development PC.  Keep it configurable, but make the board
+ * address the useful default instead of silently sending commands to the PC. */
+const DEFAULT_CTRL_HOST: &str = "192.168.101.81";
 const DEFAULT_CTRL_PORT: u16 = 5802;
 
 // ── public struct ──────────────────────────────────────────────────────────
@@ -175,6 +178,20 @@ impl SimClient {
 
     pub fn send_command(&self, command: u8) -> std::io::Result<()> {
         let packet = [b'V', b'C', b'M', b'D', command];
+        self.send_socket.send_to(&packet, self.ctrl_addr)?;
+        Ok(())
+    }
+
+    /// Request a model reload.  The NuttX bridge accepts a basename only.
+    pub fn send_load(&self, model: &str) -> std::io::Result<()> {
+        let mut packet = [0u8; 80];
+        packet[0..4].copy_from_slice(b"VCMD");
+        packet[4] = 5; // VCMD_LOAD
+        let name = model.rsplit('/').next().unwrap_or(model)
+            .trim_end_matches(".xml");
+        let bytes = name.as_bytes();
+        let count = bytes.len().min(packet.len() - 5);
+        packet[5..5 + count].copy_from_slice(&bytes[..count]);
         self.send_socket.send_to(&packet, self.ctrl_addr)?;
         Ok(())
     }

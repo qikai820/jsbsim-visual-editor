@@ -318,8 +318,12 @@ fn sim_start(
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
-        client.send_command(1).map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({"running": true, "external": true}));
+        if let Some(model_name) = model.as_deref() {
+            client.send_load(model_name).map_err(|e| e.to_string())?;
+        } else {
+            client.send_command(1).map_err(|e| e.to_string())?;
+        }
+        return Ok(serde_json::json!({"running": true, "external": true, "model": model}));
     }
     let state = app.state::<AppState>();
     let manager = state.jsbsim.lock().map_err(|e| e.to_string())?;
