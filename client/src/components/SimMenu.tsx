@@ -44,6 +44,8 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<SimPhase>('idle');
+  const [showLog, setShowLog] = useState(false);
+  const [logLines, setLogLines] = useState<string[]>([]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -98,6 +100,10 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   }, [open]);
 
   const runBusy = parentLoading || loading;
+  const appendLog = useCallback((message: string) => {
+    const stamp = new Date().toLocaleTimeString();
+    setLogLines(lines => [...lines, `[${stamp}] ${message}`].slice(-200));
+  }, []);
   const phaseText: Record<SimPhase, string> = {
     idle: '已停止', starting: '正在启动', running: '运行中', stopping: '正在停止',
     restarting: '正在重新运行', pausing: '正在暂停', paused: '已暂停', resuming: '正在继续', loading: '正在加载模型',
@@ -111,6 +117,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     if (!script && !model) return;
     setLoading(true);
     setPhase('starting');
+    appendLog(`启动请求: ${selectedModel || selectedTest || '当前选择'}`);
     setError('');
     try {
       const res = await simStart({ script, model });
@@ -130,6 +137,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     setSubmenu(null);
     setLoading(true);
     setPhase('starting');
+    appendLog(`脚本启动请求: ${path.split('/').pop()}`);
     setError('');
     try {
       const res = await simStart({ script: path });
@@ -149,6 +157,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     setSubmenu(null);
     setLoading(true);
     setPhase('loading');
+    appendLog(`模型加载请求: ${path.split('/').pop()?.replace(/\.xml$/i, '')}`);
     setError('');
     try {
       const res = await simStart({ model: path });
@@ -171,6 +180,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     if (!script && !model) return;
     setLoading(true);
     setPhase('starting');
+    appendLog(`运行请求: ${selectedTest || selectedModel}`);
     setError('');
     try {
       const res = await simStart({ script, model });
@@ -188,6 +198,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const handleStop = useCallback(async () => {
     setLoading(true);
     setPhase('stopping');
+    appendLog('发送停止请求');
     setError('');
     try {
       await simStop();
@@ -205,6 +216,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const handleRestart = useCallback(async () => {
     setLoading(true);
     setPhase('restarting');
+    appendLog('发送重新运行请求');
     setError('');
     try {
       await simRestart();
@@ -220,6 +232,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const handlePauseToggle = useCallback(async () => {
     setLoading(true);
     setPhase(paused ? 'resuming' : 'pausing');
+    appendLog(paused ? '发送继续请求' : '发送暂停请求');
     setError('');
     try {
       if (paused) {
@@ -233,6 +246,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       }
     } catch (err: any) {
       setError(err.message || '操作失败');
+      appendLog(`错误: ${err.message || '操作失败'}`);
     }
     setLoading(false);
   }, [paused]);
@@ -267,6 +281,20 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
           {external && (
             <div className="sim-menu-external-hint">
               JSBSim 由 px4-jsbsim-bridge 管理
+            </div>
+          )}
+
+          <div className="sim-log-toolbar">
+            <button className="sim-log-toggle" onClick={() => setShowLog(value => !value)}>
+              🖥️ JSBSim 信息 {logLines.length ? `(${logLines.length})` : ''}
+            </button>
+            {showLog && <button className="sim-log-clear" onClick={() => setLogLines([])}>清空</button>}
+          </div>
+          {showLog && (
+            <div className="sim-log-window" role="log" aria-label="JSBSim 运行信息">
+              {logLines.length === 0
+                ? <span className="sim-log-empty">等待仿真输出…</span>
+                : logLines.map((line, index) => <div key={`${index}-${line}`} className="sim-log-line">{line}</div>)}
             </div>
           )}
 

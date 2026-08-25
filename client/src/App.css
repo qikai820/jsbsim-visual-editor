@@ -1786,6 +1786,43 @@ html, body, #root {
   color: var(--accent);
 }
 
+.sim-log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.sim-log-toggle, .sim-log-clear {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 5px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sim-log-toggle { flex: 1; text-align: left; }
+.sim-log-toggle:hover, .sim-log-clear:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.sim-log-window {
+  max-height: 150px;
+  overflow: auto;
+  margin: 0 0 6px;
+  padding: 7px;
+  border: 1px solid #263244;
+  border-radius: var(--radius-sm);
+  background: #0b111a;
+  color: #b9c7d8;
+  font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sim-log-line { border-bottom: 1px solid rgba(148, 163, 184, .08); padding: 1px 0; }
+.sim-log-empty { color: #718096; }
+
 .sim-menu-parent {
   justify-content: space-between;
 }
