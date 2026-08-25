@@ -12,6 +12,7 @@ import {
 
 interface SimMenuProps {
   loading?: boolean;
+  onLog?: (message: string) => void;
 }
 
 interface TestScript {
@@ -29,7 +30,7 @@ interface AircraftModel {
 type Submenu = 'model' | 'script' | null;
 type SimPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'restarting' | 'pausing' | 'paused' | 'resuming' | 'loading';
 
-export default function SimMenu({ loading: parentLoading = false }: SimMenuProps) {
+export default function SimMenu({ loading: parentLoading = false, onLog }: SimMenuProps) {
   const [open, setOpen] = useState(false);
   const [submenu, setSubmenu] = useState<Submenu>(null);
   const [running, setRunning] = useState(false);
@@ -44,8 +45,6 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<SimPhase>('idle');
-  const [showLog, setShowLog] = useState(false);
-  const [logLines, setLogLines] = useState<string[]>([]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -102,7 +101,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const runBusy = parentLoading || loading;
   const appendLog = useCallback((message: string) => {
     const stamp = new Date().toLocaleTimeString();
-    setLogLines(lines => [...lines, `[${stamp}] ${message}`].slice(-200));
+    onLog?.(`[${stamp}] ${message}`);
   }, []);
   const phaseText: Record<SimPhase, string> = {
     idle: '已停止', starting: '正在启动', running: '运行中', stopping: '正在停止',
@@ -281,20 +280,6 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
           {external && (
             <div className="sim-menu-external-hint">
               JSBSim 由 px4-jsbsim-bridge 管理
-            </div>
-          )}
-
-          <div className="sim-log-toolbar">
-            <button className="sim-log-toggle" onClick={() => setShowLog(value => !value)}>
-              🖥️ JSBSim 信息 {logLines.length ? `(${logLines.length})` : ''}
-            </button>
-            {showLog && <button className="sim-log-clear" onClick={() => setLogLines([])}>清空</button>}
-          </div>
-          {showLog && (
-            <div className="sim-log-window" role="log" aria-label="JSBSim 运行信息">
-              {logLines.length === 0
-                ? <span className="sim-log-empty">等待仿真输出…</span>
-                : logLines.map((line, index) => <div key={`${index}-${line}`} className="sim-log-line">{line}</div>)}
             </div>
           )}
 

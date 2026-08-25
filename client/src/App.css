@@ -1823,6 +1823,37 @@ html, body, #root {
 .sim-log-line { border-bottom: 1px solid rgba(148, 163, 184, .08); padding: 1px 0; }
 .sim-log-empty { color: #718096; }
 
+.jsbsim-log-anchor { position: relative; display: inline-flex; }
+.jsbsim-log-button {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.jsbsim-log-button.has-log { color: var(--accent); border-color: var(--accent); }
+.jsbsim-log-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  padding: 8px;
+  z-index: 2100;
+  border: 1px solid rgba(148, 163, 184, .35);
+  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, .86);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+}
+.jsbsim-log-popover-head { display: flex; justify-content: space-between; align-items: center; color: var(--text-primary); font-size: 12px; padding: 3px 4px 7px; }
+.jsbsim-log-popover-head button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 11px; }
+
 .sim-menu-parent {
   justify-content: space-between;
 }
