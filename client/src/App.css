@@ -1596,6 +1596,21 @@ html, body, #root {
   white-space: nowrap;
 }
 
+.sim-status-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sim-status-target {
+  color: var(--text-primary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sim-control-buttons {
   display: flex;
   gap: 8px;

@@ -27,6 +27,7 @@ interface AircraftModel {
 }
 
 type Submenu = 'model' | 'script' | null;
+type SimPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'restarting' | 'pausing' | 'paused' | 'resuming' | 'loading';
 
 export default function SimMenu({ loading: parentLoading = false }: SimMenuProps) {
   const [open, setOpen] = useState(false);
@@ -42,6 +43,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   const [selectedModel, setSelectedModel] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [phase, setPhase] = useState<SimPhase>('idle');
 
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -64,6 +66,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       setExternal(!!status.external);
       setRunning(status.running);
       setPaused(!!status.paused);
+      if (!loading) setPhase(status.running ? (status.paused ? 'paused' : 'running') : 'idle');
       setCurrentScript(status.script || null);
       setCurrentModel(status.model || null);
     } catch {
@@ -95,12 +98,19 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
   }, [open]);
 
   const runBusy = parentLoading || loading;
+  const phaseText: Record<SimPhase, string> = {
+    idle: '已停止', starting: '正在启动', running: '运行中', stopping: '正在停止',
+    restarting: '正在重新运行', pausing: '正在暂停', paused: '已暂停', resuming: '正在继续', loading: '正在加载模型',
+  };
+  const activeName = currentModel || currentScript || selectedModel || selectedTest || '';
+  const displayName = activeName.split('/').pop()?.replace(/\.xml$/i, '') || '';
 
   const handleRunSelected = useCallback(async () => {
     const script = selectedTest || undefined;
     const model = selectedModel || undefined;
     if (!script && !model) return;
     setLoading(true);
+    setPhase('starting');
     setError('');
     try {
       const res = await simStart({ script, model });
@@ -108,6 +118,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       setPaused(false);
       setCurrentScript(res.script || null);
       setCurrentModel(res.model || null);
+      setPhase('running');
     } catch (err: any) {
       setError(err.message || '启动失败');
     }
@@ -118,6 +129,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     setSelectedTest(path);
     setSubmenu(null);
     setLoading(true);
+    setPhase('starting');
     setError('');
     try {
       const res = await simStart({ script: path });
@@ -125,6 +137,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       setPaused(false);
       setCurrentScript(res.script || null);
       setCurrentModel(null);
+      setPhase('running');
     } catch (err: any) {
       setError(err.message || '启动失败');
     }
@@ -135,6 +148,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     setSelectedModel(path);
     setSubmenu(null);
     setLoading(true);
+    setPhase('loading');
     setError('');
     try {
       const res = await simStart({ model: path });
@@ -142,6 +156,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       setPaused(false);
       setCurrentModel(res.model || null);
       setCurrentScript(null);
+      setPhase('running');
     } catch (err: any) {
       setError(err.message || '启动失败');
     }
@@ -155,6 +170,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     const model = !selectedTest && selectedModel ? selectedModel : undefined;
     if (!script && !model) return;
     setLoading(true);
+    setPhase('starting');
     setError('');
     try {
       const res = await simStart({ script, model });
@@ -162,6 +178,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       setPaused(false);
       setCurrentScript(res.script || null);
       setCurrentModel(res.model || null);
+      setPhase('running');
     } catch (err: any) {
       setError(err.message || '启动失败');
     }
@@ -170,6 +187,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
 
   const handleStop = useCallback(async () => {
     setLoading(true);
+    setPhase('stopping');
     setError('');
     try {
       await simStop();
@@ -177,6 +195,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       setPaused(false);
       setCurrentScript(null);
       setCurrentModel(null);
+      setPhase('idle');
     } catch (err: any) {
       setError(err.message || '停止失败');
     }
@@ -185,11 +204,13 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
 
   const handleRestart = useCallback(async () => {
     setLoading(true);
+    setPhase('restarting');
     setError('');
     try {
       await simRestart();
       setRunning(true);
       setPaused(false);
+      setPhase('running');
     } catch (err: any) {
       setError(err.message || '重新运行失败');
     }
@@ -198,14 +219,17 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
 
   const handlePauseToggle = useCallback(async () => {
     setLoading(true);
+    setPhase(paused ? 'resuming' : 'pausing');
     setError('');
     try {
       if (paused) {
         await simResume();
         setPaused(false);
+        setPhase('running');
       } else {
         await simPause();
         setPaused(true);
+        setPhase('paused');
       }
     } catch (err: any) {
       setError(err.message || '操作失败');
@@ -217,21 +241,7 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
     setSubmenu(prev => (prev === key ? null : key));
   };
 
-  const statusText = external
-    ? (running ? '外部 HIL 仿真已连接' : '等待外部 HIL 仿真')
-    : !running
-    ? '已停止'
-    : paused
-      ? currentScript
-        ? `已暂停: ${currentScript}`
-        : currentModel
-          ? `已暂停: ${currentModel}`
-          : '已暂停'
-      : currentScript
-        ? `运行中: ${currentScript}`
-        : currentModel
-          ? `运行中: ${currentModel}`
-          : '运行中';
+  const statusText = external ? (running ? phaseText[phase] : '等待外部 HIL 仿真') : phaseText[phase];
 
   return (
     <div className="sim-menu-wrap" ref={wrapRef}>
@@ -247,8 +257,11 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
       {open && (
         <div className="sim-dropdown">
           <div className="sim-dropdown-header">
-            <span className={`sim-status-dot ${running ? (paused ? 'paused' : 'running') : 'stopped'}`} />
-            <span className="sim-status-text">{statusText}</span>
+            <span className={`sim-status-dot ${phase === 'paused' ? 'paused' : phase === 'idle' ? 'stopped' : 'running'}`} />
+            <div className="sim-status-info">
+              <span className="sim-status-text">{statusText}</span>
+              {displayName && <span className="sim-status-target" title={activeName}>{displayName}</span>}
+            </div>
           </div>
 
           {external && (
@@ -263,28 +276,28 @@ export default function SimMenu({ loading: parentLoading = false }: SimMenuProps
               onClick={handleRunSelected}
               disabled={runBusy || (!running && !selectedTest && !selectedModel)}
             >
-              ▶ 运行
+              {phase === 'starting' ? '⏳ 启动中…' : '▶ 运行'}
             </button>
             <button
               className="sim-menu-item"
               onClick={handleStop}
               disabled={runBusy || !running}
             >
-              ⏹ 停止
+              {phase === 'stopping' ? '⏳ 停止中…' : '⏹ 停止'}
             </button>
             <button
               className="sim-menu-item"
               onClick={handleRestart}
               disabled={runBusy || !running}
             >
-              🔄 重新运行
+              {phase === 'restarting' ? '⏳ 重新运行中…' : '🔄 重新运行'}
             </button>
             <button
               className="sim-menu-item"
               onClick={handlePauseToggle}
               disabled={runBusy || !running}
             >
-              {paused ? '▶ 继续' : '⏸ 暂停'}
+              {phase === 'pausing' ? '⏳ 暂停中…' : phase === 'resuming' ? '⏳ 继续中…' : paused ? '▶ 继续' : '⏸ 暂停'}
             </button>
 
             <div className="sim-menu-divider" />
