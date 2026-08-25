@@ -1,6 +1,6 @@
 import { useRef, useMemo, useState, Component, type ReactNode } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Text, Grid, Line, Html } from '@react-three/drei';
+import { OrbitControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
@@ -128,7 +128,7 @@ export default function Airplane3DViewer({ onClose }: Airplane3DViewerProps) {
         <button className="viewer3d-back-btn" onClick={onClose}>← 返回编辑器</button>
         <span className="viewer3d-title">🛩️ 3D 飞机预览</span>
         <div className="viewer3d-info">
-          <span>{spatialNodes.length} 个部件</span>
+          <span>{spatialNodes.length ? `${spatialNodes.length} 个部件` : '默认参考飞机 · 0 个部件'}</span>
           <span className="viewer3d-hint">🖱️ 左键旋转 | 右键平移 | 滚轮缩放 | 点击选中</span>
         </div>
       </div>
@@ -153,19 +153,11 @@ export default function Airplane3DViewer({ onClose }: Airplane3DViewerProps) {
             maxDistance={20}
           />
 
-          {/* Reference grid */}
-          <Grid
-            args={[10, 10]}
-            position={[0, -0.01, 0]}
-            cellSize={0.1}
-            cellThickness={0.5}
-            cellColor="#1e3a5f"
-            sectionSize={0.5}
-            sectionThickness={1}
-            sectionColor="#2d5a8e"
-            fadeDistance={8}
-            infiniteGrid
-          />
+          {/* Reference grid - simple plane */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
+            <planeGeometry args={[10, 10]} />
+            <meshStandardMaterial color="#1a2a3e" transparent opacity={0.3} />
+          </mesh>
 
           {/* Axis helper */}
           <AxisHelper />
@@ -193,17 +185,33 @@ export default function Airplane3DViewer({ onClose }: Airplane3DViewerProps) {
 
 function AxisHelper() {
   const len = 0.5;
+  const r = 0.008;
   return (
     <group>
-      {/* X axis (red) - right wing */}
-      <Line points={[[0, 0.001, 0], [len, 0.001, 0]]} color="#ef4444" lineWidth={2} />
-      <Text position={[len + 0.05, 0.001, 0]} fontSize={0.04} color="#ef4444" anchorX="left">Y (右翼)</Text>
-      {/* Y axis (green) - up */}
-      <Line points={[[0, 0, 0], [0, len, 0]]} color="#22c55e" lineWidth={2} />
-      <Text position={[0, len + 0.05, 0]} fontSize={0.04} color="#22c55e" anchorX="center">Z (上)</Text>
-      {/* Z axis (blue) - forward (negative in three.js) */}
-      <Line points={[[0, 0.001, 0], [0, 0.001, -len]]} color="#3b82f6" lineWidth={2} />
-      <Text position={[0, 0.001, -len - 0.05]} fontSize={0.04} color="#3b82f6" anchorX="center">X (机头)</Text>
+      {/* X axis (red) - right wing (JSBSim Y) */}
+      <mesh position={[len / 2, 0.001, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[r, r, len, 8]} />
+        <meshBasicMaterial color="#ef4444" />
+      </mesh>
+      <Html position={[len + 0.05, 0.001, 0]} center style={{ pointerEvents: 'none' }}>
+        <div style={{ color: '#ef4444', fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap', textShadow: '0 0 3px #000' }}>Y (右翼)</div>
+      </Html>
+      {/* Y axis (green) - up (JSBSim Z) */}
+      <mesh position={[0, len / 2, 0]}>
+        <cylinderGeometry args={[r, r, len, 8]} />
+        <meshBasicMaterial color="#22c55e" />
+      </mesh>
+      <Html position={[0, len + 0.05, 0]} center style={{ pointerEvents: 'none' }}>
+        <div style={{ color: '#22c55e', fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap', textShadow: '0 0 3px #000' }}>Z (上)</div>
+      </Html>
+      {/* Z axis (blue) - forward (JSBSim X, negative in Three.js) */}
+      <mesh position={[0, 0.001, -len / 2]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[r, r, len, 8]} />
+        <meshBasicMaterial color="#3b82f6" />
+      </mesh>
+      <Html position={[0, 0.001, -len - 0.05]} center style={{ pointerEvents: 'none' }}>
+        <div style={{ color: '#3b82f6', fontSize: 11, fontWeight: 'bold', whiteSpace: 'nowrap', textShadow: '0 0 3px #000' }}>X (机头)</div>
+      </Html>
     </group>
   );
 }

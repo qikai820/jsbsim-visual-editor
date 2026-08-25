@@ -5,7 +5,7 @@
  * 职责：
  *   - 监听仿真机 jsbsim_server 经 UDP 推送的 JSON 遥测 (默认 :5801)
  *   - 把最新一帧存到 state.latest，并做断线检测 (2s 无包 => connected=false)
- *   - 把浏览器发来的手动控制指令打包成 VisControlFrame (72B) 经 UDP 发回仿真机
+ *   - 把浏览器发来的手动控制指令打包成 VisControlFrame (72B) 经独立 UDP 端口发回仿真机
  *
  * 协议与 px4-jsbsim-bridge/src/jsbsim_server.cpp 严格对称。
  */
@@ -14,7 +14,7 @@ const dgram = require('dgram');
 
 const LISTEN_PORT = parseInt(process.env.SIM_UDP_PORT || '5801', 10);
 const CTRL_HOST = process.env.SIM_UDP_HOST || '127.0.0.1'; // 仿真机 IP
-const CTRL_PORT = parseInt(process.env.SIM_UDP_CTRL_PORT || process.env.SIM_UDP_PORT || '5801', 10);
+const CTRL_PORT = parseInt(process.env.SIM_UDP_CTRL_PORT || '5802', 10);
 const DISCONNECT_TIMEOUT = 2000; // ms
 
 const state = {

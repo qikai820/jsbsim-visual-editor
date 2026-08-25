@@ -78,9 +78,10 @@ function buildMergedGraph(expressions: ModuleExpression[]) {
 
     for (const n of sub.nodes) {
       const globalId = prefix + n.id;
-      const isProp = n.data?.exprNode?.kind === 'property';
+      const exprNodeAny = n.data?.exprNode as any;
+      const isProp = exprNodeAny?.kind === 'property';
+      const pname: string | undefined = isProp ? exprNodeAny?.name : undefined;
       if (isProp) {
-        const pname = (n.data.exprNode as any).name;
         if (pname && propMerge.has(pname)) {
           idMap.set(n.id, propMerge.get(pname)!);
           continue;
@@ -117,7 +118,7 @@ function buildMergedGraph(expressions: ModuleExpression[]) {
     }
 
     rootIds[exprItem.id] = prefix + sub.rootId;
-    offsetX = localMaxX + offsetX + 160;
+    offsetX = localMaxX + offsetX + 80;
   });
 
   return { nodes, edges, rootIds };
@@ -829,31 +830,31 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         <div className="expr-props">
           {editingExprId && editingNode ? (
             <ExpressionEditor
-              expression={editingNode.data.expression}
+              expression={(editingNode.data as any).expression as ExprNode}
               onChange={handleExprSave}
               onBack={() => setEditingExprId(null)}
             />
-          ) : selectedNode && selectedNode.data?.kind === 'exprBlock' ? (
+          ) : selectedNode && (selectedNode.data as any)?.kind === 'exprBlock' ? (
             <BlockPropertyPanel
-              expr={selectedNode.data.exprNode as ExprNode}
+              expr={(selectedNode.data as any).exprNode as ExprNode}
               onChange={(updatedExpr: ExprNode) => handleExprBlockUpdate(selectedNode.id, updatedExpr)}
               onDelete={handleDelete}
               isRoot={selectedNode.id === ((nodes.find(n => n.id === (selectedNode.data as any).ownerId)?.data as any)?.expRootId)}
             />
-          ) : selectedNode && selectedNode.data?.kind === 'component' ? (
+          ) : selectedNode && (selectedNode.data as any)?.kind === 'component' ? (
             <ComponentPropertyPanel
-              data={selectedNode.data}
+              data={selectedNode.data as any}
               onChange={(patch) => updateComponent(selectedNode.id, patch)}
               onDelete={handleDelete}
-              onEditExpression={(selectedNode.data.itemType === 'function' || selectedNode.data.itemType === 'fcs_function')
+              onEditExpression={((selectedNode.data as any).itemType === 'function' || (selectedNode.data as any).itemType === 'fcs_function')
                 ? () => setEditingExprId(selectedNode.id) : undefined}
             />
-          ) : selectedNode && selectedNode.data?.kind === 'signal' ? (
+          ) : selectedNode && (selectedNode.data as any)?.kind === 'signal' ? (
             <div className="expr-props-empty">
               <p>信号端点</p>
               <p className="expr-props-hint">
-                {selectedNode.data.signalRole === 'source' ? '输入信号' : '输出信号'}：<br />
-                <code>{selectedNode.data.signalName}</code>
+                {(selectedNode.data as any).signalRole === 'source' ? '输入信号' : '输出信号'}：<br />
+                <code>{String((selectedNode.data as any).signalName)}</code>
               </p>
             </div>
           ) : isSignal ? (

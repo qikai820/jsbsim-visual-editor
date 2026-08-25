@@ -7,10 +7,15 @@ const WebSocket = require('ws');
 const { generateXml, generateSubFileXml } = require('./xmlGenerator');
 const { parseXml, parseSubFileXml } = require('./xmlParser');
 const simClient = require('./simClient');
+const jsbsimProcess = require('./jsbsimProcess');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// In HIL mode JSBSim is owned by px4-jsbsim-bridge.  The editor remains a
+// monitor/control station and must not spawn a second local JSBSim process.
+const EXTERNAL_SIM = /^(1|true|yes)$/i.test(process.env.SIM_EXTERNAL || '');
 
 // Serve static files in production
 app.use(express.static(path.join(__dirname, '../dist/client')));
@@ -483,6 +488,111 @@ app.post('/api/load-aircraft', (req, res) => {
   }
 });
 
+// ── JSBSim Simulation Control ───────────────────────────────────────────────
+
+// Start simulation with a script, model, or both
+app.post('/api/sim/start', (req, res) => {
+  if (EXTERNAL_SIM) {
+    return res.status(409).json({
+      error: '外部仿真模式：请启动 px4-jsbsim-bridge/jsbsim_server',
+      external: true,
+    });
+  }
+  try {
+    const { script, model } = req.body;
+    let result;
+    if (script) {
+      result = jsbsimProcess.startScript(script);
+    } else if (model) {
+      result = jsbsimProcess.startModel(model);
+    } else {
+      return res.status(400).json({ error: 'Either script or model must be provided' });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stop simulation
+app.post('/api/sim/stop', (req, res) => {
+  if (EXTERNAL_SIM) {
+    return res.status(409).json({ error: '外部仿真模式不支持本地停止', external: true });
+  }
+  try {
+    res.json(jsbsimProcess.stop());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Pause simulation
+app.post('/api/sim/pause', (req, res) => {
+  if (EXTERNAL_SIM) {
+    return res.status(409).json({ error: '外部仿真模式不支持本地暂停', external: true });
+  }
+  try {
+    res.json(jsbsimProcess.pause());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Resume simulation
+app.post('/api/sim/resume', (req, res) => {
+  if (EXTERNAL_SIM) {
+    return res.status(409).json({ error: '外部仿真模式不支持本地继续', external: true });
+  }
+  try {
+    res.json(jsbsimProcess.resume());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Restart the last simulation
+app.post('/api/sim/restart', (req, res) => {
+  if (EXTERNAL_SIM) {
+    return res.status(409).json({ error: '外部仿真模式不支持本地重启', external: true });
+  }
+  try {
+    res.json(jsbsimProcess.restart());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get simulation status
+app.get('/api/sim/status', (req, res) => {
+  if (EXTERNAL_SIM) {
+    return res.json({
+      external: true,
+      running: simClient.state.connected,
+      paused: false,
+      connected: simClient.state.connected,
+    });
+  }
+  res.json(jsbsimProcess.getStatus());
+});
+
+// List available test scripts
+app.get('/api/sim/tests', (req, res) => {
+  try {
+    res.json({ tests: jsbsimProcess.listTests() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List available aircraft models
+app.get('/api/sim/models', (req, res) => {
+  try {
+    res.json({ models: jsbsimProcess.listModels() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Fallback to index.html for SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/client/index.html'));
@@ -538,3 +648,12 @@ setInterval(() => {
 }, 250);
 
 console.log('[sim] /ws/sim 实时仿真通道已启用');
+
+// Forward JSBSim process telemetry to WebSocket clients
+jsbsimProcess.setTelemetryCallback((telemetry) => {
+  broadcast({ type: 'telemetry', data: telemetry });
+});
+
+jsbsimProcess.setStatusCallback((status) => {
+  broadcast({ type: 'sim-process-status', ...status });
+});

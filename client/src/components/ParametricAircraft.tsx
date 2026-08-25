@@ -87,6 +87,9 @@ function FixedWingBody({ rpm, spinProp }: { rpm?: number; spinProp?: boolean }) 
   const htailChordW = (htail ? Math.sqrt(num(htail.data.params.htailarea, 22)) * 0.5 : 2.2) * SCALE;
   const vtailH = (vtail ? Math.sqrt(num(vtail.data.params.vtailarea, 16)) * 2 : 8.2) * SCALE;
   const vtailChordW = (vtail ? Math.sqrt(num(vtail.data.params.vtailarea, 16)) * 0.5 : 2.0) * SCALE;
+  const wingLoc = wing ? locOf(wing.data.params) : { x: 0, y: 0, z: 0 };
+  const htailLoc = htail ? locOf(htail.data.params) : { x: 105, y: 0, z: 4 };
+  const vtailLoc = vtail ? locOf(vtail.data.params) : { x: 105, y: 0, z: 7 };
 
   const xs = [locOf(wing?.data.params).x, locOf(htail?.data.params).x, locOf(engines[0]?.data.params).x, locOf(fus?.data.params).x].filter((v) => v !== 0);
   const minX = xs.length ? Math.min(...xs) - 60 : -120;
@@ -95,9 +98,25 @@ function FixedWingBody({ rpm, spinProp }: { rpm?: number; spinProp?: boolean }) 
   const bodyCenter = jsbToThree((minX + maxX) / 2, 0, locOf(fus?.data.params).z);
   const Rbody = Math.max(0.06, spanW * 0.045);
 
+  // A small swept surface reads much more like an aircraft wing than a box.
+  // The mesh is intentionally procedural so it remains usable with arbitrary
+  // JSBSim XML files and does not require shipping a binary model asset.
+  const wingShape = useMemo(() => {
+    const s = new THREE.Shape();
+    s.moveTo(-0.5, 0);
+    s.lineTo(0.5, 0);
+    s.lineTo(0.42, 0.72);
+    s.lineTo(0.1, 1);
+    s.lineTo(-0.5, 1);
+    s.closePath();
+    return s;
+  }, []);
+  const wingExtrude = useMemo(() => ({ depth: 0.035, bevelEnabled: true, bevelSegments: 2, bevelSize: 0.012, bevelThickness: 0.008 }), []);
+
   return (
     <group>
       <group position={bodyCenter}>
+        {/* tapered nose and tail make the body read as an airframe */}
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <cylinderGeometry args={[Rbody, Rbody, Lbody * 0.7, 24]} />
           <meshStandardMaterial color="#cdd6e0" metalness={0.3} roughness={0.5} />
@@ -110,26 +129,46 @@ function FixedWingBody({ rpm, spinProp }: { rpm?: number; spinProp?: boolean }) 
           <coneGeometry args={[Rbody * 0.5, Lbody * 0.18, 24]} />
           <meshStandardMaterial color="#cdd6e0" metalness={0.3} roughness={0.5} />
         </mesh>
-        <mesh position={[0, Rbody * 0.7, -Lbody * 0.32]} scale={[0.7, 0.5, 1.3]}>
-          <sphereGeometry args={[Rbody, 20, 16]} />
-          <meshStandardMaterial color="#3b82f6" transparent opacity={0.45} metalness={0.1} roughness={0.1} />
+        {/* cockpit canopy */}
+        <mesh position={[0, Rbody * 0.72, -Lbody * 0.25]} scale={[0.72, 0.42, 1.25]}>
+          <sphereGeometry args={[Rbody, 24, 16]} />
+          <meshStandardMaterial color="#173b61" transparent opacity={0.82} metalness={0.35} roughness={0.12} />
+        </mesh>
+        <mesh position={[0, Rbody * 0.94, -Lbody * 0.02]} scale={[0.35, 0.08, 0.8]}>
+          <boxGeometry args={[Rbody, Rbody * 0.08, Lbody * 0.22]} />
+          <meshStandardMaterial color="#e8eef5" metalness={0.4} roughness={0.25} />
         </mesh>
       </group>
 
-      {wing && (
-        <mesh position={jsbToThree(locOf(wing.data.params).x, locOf(wing.data.params).y, locOf(wing.data.params).z)}>
-          <boxGeometry args={[spanW, Rbody * 0.18, chordW]} />
-          <meshStandardMaterial color="#5a6b7a" metalness={0.2} roughness={0.6} />
-        </mesh>
+      {(
+        <group position={jsbToThree(wingLoc.x, wingLoc.y, wingLoc.z)} rotation={[0, 0, Math.PI / 2]}>
+          <mesh scale={[spanW, chordW, 1]}>
+            <extrudeGeometry args={[wingShape, wingExtrude]} />
+            <meshStandardMaterial color="#d7e0e8" metalness={0.35} roughness={0.42} />
+          </mesh>
+          {/* dark control surfaces */}
+          <mesh position={[0.02, chordW * 0.34, 0.022]} scale={[spanW * 0.92, chordW * 0.18, 0.5]}>
+            <boxGeometry args={[1, 1, 0.02]} />
+            <meshStandardMaterial color="#536576" metalness={0.25} roughness={0.55} />
+          </mesh>
+          <mesh position={[spanW * 0.5, chordW * 0.45, 0.08]} rotation={[0, 0, -0.18]}>
+            <boxGeometry args={[0.018, chordW * 0.42, 0.16]} />
+            <meshStandardMaterial color="#b7c4cf" metalness={0.25} roughness={0.5} />
+          </mesh>
+          <mesh position={[-spanW * 0.5, chordW * 0.45, 0.08]} rotation={[0, 0, 0.18]}>
+            <boxGeometry args={[0.018, chordW * 0.42, 0.16]} />
+            <meshStandardMaterial color="#b7c4cf" metalness={0.25} roughness={0.5} />
+          </mesh>
+        </group>
       )}
-      {htail && (
-        <mesh position={jsbToThree(locOf(htail.data.params).x, locOf(htail.data.params).y, locOf(htail.data.params).z)}>
+      {(
+        <mesh position={jsbToThree(htailLoc.x, htailLoc.y, htailLoc.z)} rotation={[0, 0, Math.PI / 2]}>
           <boxGeometry args={[htailSpanW, Rbody * 0.14, htailChordW]} />
           <meshStandardMaterial color="#5a6b7a" metalness={0.2} roughness={0.6} />
         </mesh>
       )}
-      {vtail && (
-        <mesh position={jsbToThree(locOf(vtail.data.params).x, locOf(vtail.data.params).y, locOf(vtail.data.params).z)}>
+      {(
+        <mesh position={jsbToThree(vtailLoc.x, vtailLoc.y, vtailLoc.z)} rotation={[0, 0, Math.PI / 2]}>
           <boxGeometry args={[Rbody * 0.14, vtailH, vtailChordW]} />
           <meshStandardMaterial color="#5a6b7a" metalness={0.2} roughness={0.6} />
         </mesh>
@@ -173,7 +212,7 @@ function FixedWingBody({ rpm, spinProp }: { rpm?: number; spinProp?: boolean }) 
   );
 }
 
-// ── 多旋翼机体（四/六/八旋翼等）────────────────────────────────────────────
+// ── 多旋翼机体（四/六/八旋翼等）── MicoAir 配置器风格 ─────────────────
 function MultirotorBody({ rpm, spinProp }: { rpm?: number; spinProp?: boolean }) {
   const nodes = useFlowStore((s) => s.nodes);
   const motors = useMemo(
@@ -182,70 +221,118 @@ function MultirotorBody({ rpm, spinProp }: { rpm?: number; spinProp?: boolean })
   );
   const gears = useMemo(() => nodes.filter((n) => n.data.componentType === 'landing_gear').map((n) => jsbToThree(locOf(n.data.params).x, locOf(n.data.params).y, locOf(n.data.params).z)), [nodes]);
 
-  // 几何中心 = 各电机位置平均
   const center: [number, number, number] = motors.length
     ? [motors.reduce((s, m) => s + m[0], 0) / motors.length, motors.reduce((s, m) => s + m[1], 0) / motors.length, motors.reduce((s, m) => s + m[2], 0) / motors.length]
     : [0, 0, 0];
 
   const armLen = motors.length ? Math.max(...motors.map((m) => Math.hypot(m[0] - center[0], m[1] - center[1]))) : 1;
-  const hull = Math.max(0.15, armLen * 0.5);
-  const propR = Math.max(0.12, armLen * 0.7);
+  const hullR = Math.max(0.12, armLen * 0.22);
+  const propR = Math.max(0.12, armLen * 0.55);
+  const armR = hullR * 0.18;
+
+  // Materials
+  const bodyColor = '#2a2a2e';
+  const plateColor = '#1a1a1e';
+  const armColor = '#222226';
+  const motorColor = '#888890';
+  const motorTopColor = '#555560';
+  const legColor = '#333338';
+  const accentColor = '#e63946';
 
   return (
     <group>
-      {/* 中央机架 */}
-      <mesh position={center}>
-        <boxGeometry args={[hull, hull * 0.35, hull * 0.7]} />
-        <meshStandardMaterial color="#374151" metalness={0.4} roughness={0.5} />
-      </mesh>
-      {/* 顶层板 */}
-      <mesh position={[center[0], center[1] + hull * 0.2, center[2]]}>
-        <boxGeometry args={[hull * 1.05, hull * 0.06, hull * 0.75]} />
-        <meshStandardMaterial color="#4b5563" metalness={0.3} roughness={0.6} />
-      </mesh>
+      {/* ── 中央机身：圆润造型 ── */}
+      <group position={center}>
+        {/* 主体 */}
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[hullR, hullR, hullR * 0.5, 32]} />
+          <meshStandardMaterial color={bodyColor} metalness={0.6} roughness={0.25} />
+        </mesh>
+        {/* 顶板 */}
+        <mesh position={[0, 0, hullR * 0.28]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[hullR * 0.92, hullR * 0.95, hullR * 0.08, 32]} />
+          <meshStandardMaterial color={plateColor} metalness={0.7} roughness={0.2} />
+        </mesh>
+        {/* 底板 */}
+        <mesh position={[0, 0, -hullR * 0.28]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[hullR * 0.88, hullR * 0.85, hullR * 0.06, 32]} />
+          <meshStandardMaterial color={plateColor} metalness={0.7} roughness={0.2} />
+        </mesh>
+      </group>
 
-      {/* 机臂 + 电机 + 螺旋桨 */}
+      {/* ── 机臂 + 电机 + 螺旋桨 ── */}
       {motors.map((m, i) => {
-        const dx = m[0] - center[0]; const dy = m[1] - center[1];
+        const dx = m[0] - center[0];
+        const dy = m[1] - center[1];
         const dist = Math.hypot(dx, dy) || 0.001;
         const angle = Math.atan2(dy, dx);
         const mid: [number, number, number] = [(center[0] + m[0]) / 2, (center[1] + m[1]) / 2, (center[2] + m[2]) / 2];
+        const motorH = hullR * 0.35;
+        const motorR = propR * 0.16;
+
         return (
           <group key={i}>
-            {/* 机臂 */}
+            {/* 机臂 - 圆管 */}
             <mesh position={mid} rotation={[0, 0, angle]}>
-              <boxGeometry args={[dist, hull * 0.12, hull * 0.2]} />
-              <meshStandardMaterial color="#1f2937" metalness={0.3} roughness={0.6} />
+              <cylinderGeometry args={[armR, armR, dist, 12]} />
+              <meshStandardMaterial color={armColor} metalness={0.5} roughness={0.3} />
             </mesh>
-            {/* 电机座 */}
-            <mesh position={m}>
-              <cylinderGeometry args={[propR * 0.18, propR * 0.18, hull * 0.18, 12]} />
-              <meshStandardMaterial color="#111" metalness={0.5} roughness={0.4} />
+            {/* 电机座 - 金属圆柱 */}
+            <mesh position={[m[0], m[1], m[2] + motorH * 0.3]}>
+              <cylinderGeometry args={[motorR, motorR * 1.15, motorH, 16]} />
+              <meshStandardMaterial color={motorColor} metalness={0.85} roughness={0.15} />
             </mesh>
-            {/* 螺旋桨（相邻反向旋转） */}
-            <SpinningProp position={[m[0], m[1] + hull * 0.12, m[2]]} radius={propR} rpm={rpm} spinProp={spinProp} blades={2} dir={i % 2 ? -1 : 1} />
+            {/* 电机顶盖 */}
+            <mesh position={[m[0], m[1], m[2] + motorH * 0.65]}>
+              <cylinderGeometry args={[motorR * 0.7, motorR, motorH * 0.15, 16]} />
+              <meshStandardMaterial color={motorTopColor} metalness={0.9} roughness={0.1} />
+            </mesh>
+            {/* 螺旋桨 - 半透明 */}
+            <SpinningProp
+              position={[m[0], m[1], m[2] + motorH * 0.75]}
+              radius={propR}
+              rpm={rpm}
+              spinProp={spinProp}
+              blades={2}
+              dir={i % 2 ? -1 : 1}
+              color="#222"
+            />
           </group>
         );
       })}
 
-      {/* 起落架（有则画，无则省略） */}
+      {/* ── 起落架 ── */}
       {gears.length === 0 && motors.length > 0 && (
-        motors.map((m, i) => (
-          <mesh key={`leg-${i}`} position={[m[0], m[1], m[2] - hull * 0.4]}>
-            <cylinderGeometry args={[hull * 0.04, hull * 0.04, hull * 0.8, 8]} />
-            <meshStandardMaterial color="#444" />
-          </mesh>
-        ))
+        motors.map((m, i) => {
+          const dx = m[0] - center[0];
+          const dy = m[1] - center[1];
+          const angle = Math.atan2(dy, dx);
+          const legH = hullR * 1.2;
+          return (
+            <group key={`leg-${i}`}>
+              {/* 支撑杆 */}
+              <mesh position={[m[0], m[1], m[2] - legH * 0.5]}>
+                <cylinderGeometry args={[armR * 0.6, armR * 0.6, legH, 8]} />
+                <meshStandardMaterial color={legColor} metalness={0.3} roughness={0.5} />
+              </mesh>
+              {/* 脚垫 */}
+              <mesh position={[m[0], m[1], m[2] - legH]}>
+                <sphereGeometry args={[armR * 1.2, 8, 8]} />
+                <meshStandardMaterial color="#222" roughness={0.8} />
+              </mesh>
+            </group>
+          );
+        })
       )}
       {gears.map((p, i) => (
         <group key={`g-${i}`} position={p}>
           <mesh>
-            <cylinderGeometry args={[hull * 0.05, hull * 0.05, hull * 0.9, 8]} />
-            <meshStandardMaterial color="#444" />
+            <cylinderGeometry args={[hullR * 0.04, hullR * 0.04, hullR * 0.9, 8]} />
+            <meshStandardMaterial color={legColor} metalness={0.3} roughness={0.5} />
           </mesh>
-          <mesh position={[0, -hull * 0.45, 0]} rotation={[Math.PI / 2, 0, 0]}>
-            <cylinderGeometry args={[hull * 0.28, hull * 0.28, hull * 0.14, 16]} />
-            <meshStandardMaterial color="#111" />
+          <mesh position={[0, -hullR * 0.45, 0]} rotation={[Math.PI / 2, 0, 0]}>
+            <sphereGeometry args={[hullR * 0.12, 8, 8]} />
+            <meshStandardMaterial color="#222" roughness={0.8} />
           </mesh>
         </group>
       ))}

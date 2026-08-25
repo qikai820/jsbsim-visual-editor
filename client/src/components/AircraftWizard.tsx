@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { generateAircraft } from '../utils/tauriApi';
 
 type AircraftType = 'fixed_wing' | 'multirotor' | 'helicopter';
 type UnitSystem = 'IMPERIAL' | 'METRIC';
@@ -232,15 +233,8 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const res = await fetch('/api/generate-aircraft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error(`服务器错误 (${res.status})`);
-      const result = await res.json();
-      if (result.error) throw new Error(result.error);
-      setPreviewXml(result.xml);
+      const xml = await generateAircraft(data);
+      setPreviewXml(xml);
     } catch (err: any) {
       alert('生成失败: ' + err.message);
     }
@@ -248,7 +242,7 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
   };
 
   const canNext = () => {
-    if (step === 0) return data.aircraftType !== '';
+    if (step === 0) return !!data.aircraftType;
     if (step === 1) return data.name.trim().length > 0;
     return true;
   };

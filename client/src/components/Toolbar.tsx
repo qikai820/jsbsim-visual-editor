@@ -1,7 +1,9 @@
 import { useState, useRef } from 'react';
 import { useFlowStore } from '../store/flowStore';
+import { generateXml, parseXml, saveProject, loadProject as loadProjectApi } from '../utils/tauriApi';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
+import SimMenu from './SimMenu';
 
 interface ToolbarProps {
   onShow3D?: () => void;
@@ -20,15 +22,8 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
   const handleExportXml = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/generate-xml', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aircraft, nodes, edges }),
-      });
-      if (!res.ok) throw new Error(`服务器错误 (${res.status})`);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setXmlContent(data.xml);
+      const xml = await generateXml({ aircraft, nodes, edges });
+      setXmlContent(xml);
       setShowXml(true);
     } catch (err: any) {
       alert('导出失败: ' + err.message);
@@ -53,17 +48,7 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
       const mainXml = allFiles[0].xml;
       const refFiles = allFiles.slice(1);
 
-      const res = await fetch('/api/parse-xml', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ xml: mainXml, files: refFiles }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`服务器错误 (${res.status})${text ? ': ' + text : ''}`);
-      }
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      const data = await parseXml(mainXml, refFiles);
       loadProject(data);
 
       // Persist to localStorage so data survives refresh
@@ -88,11 +73,7 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
     const filename = prompt('保存文件名:', 'project.json');
     if (!filename) return;
     try {
-      await fetch('/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, aircraft, nodes, edges }),
-      });
+      await saveProject(filename, { aircraft, nodes, edges });
       alert('保存成功!');
     } catch (err: any) {
       alert('保存失败: ' + err.message);
@@ -103,14 +84,7 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
     const filename = prompt('加载文件名:', 'project.json');
     if (!filename) return;
     try {
-      const res = await fetch('/api/load', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename }),
-      });
-      if (!res.ok) throw new Error(`文件不存在或服务器错误 (${res.status})`);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      const data = await loadProjectApi(filename);
       loadProject(data);
     } catch (err: any) {
       alert('加载失败: ' + err.message);
@@ -150,6 +124,7 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
           <button onClick={() => { clearAll(); localStorage.removeItem('jsbsim-project'); localStorage.removeItem('jsbsim-raw-xml'); }} disabled={loading}>📄 新建</button>
           <button onClick={() => setShowWizard(true)} disabled={loading}>🪄 创建向导</button>
           <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 模型库</button>
+          <SimMenu loading={loading} />
           <button onClick={handleSave} disabled={loading}>💾 保存</button>
           <button onClick={handleLoad} disabled={loading}>📂 加载</button>
         </div>
@@ -191,14 +166,7 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
           onClose={() => setShowWizard(false)}
           onGenerate={async (xml) => {
             try {
-              const res = await fetch('/api/parse-xml', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ xml }),
-              });
-              if (!res.ok) throw new Error(`服务器错误 (${res.status})`);
-              const data = await res.json();
-              if (data.error) throw new Error(data.error);
+              const data = await parseXml(xml);
               loadProject(data);
               setShowWizard(false);
             } catch (err: any) {

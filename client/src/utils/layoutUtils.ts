@@ -127,10 +127,10 @@ export function assignChannelLanePositions(
 ): LaneLayoutResult {
   const startX = opts.startX ?? 80;
   const startY = opts.startY ?? 80;
-  const blockW = opts.blockW ?? 190;
-  const blockH = opts.blockH ?? 120;
-  const minXGap = opts.minXGap ?? 44;
-  const minYGap = opts.minYGap ?? 40;
+  const blockW = opts.blockW ?? 60;
+  const blockH = opts.blockH ?? 40;
+  const minXGap = opts.minXGap ?? 20;
+  const minYGap = opts.minYGap ?? 16;
   // Floor spacings that guarantee no node overlap at scale = 1.
   const sxMin = blockW + minXGap;
   const syMin = blockH + minYGap;
@@ -184,6 +184,22 @@ export function assignChannelLanePositions(
     y = top + laneRows * syMin + lgMin;
   }
 
+  // Post-processing: detect and fix overlaps by pushing overlapping nodes apart.
+  // This ensures no two nodes occupy the same space, even if the floor layout
+  // has edge cases.
+  const posArray = [...positions.entries()].map(([id, p]) => ({ id, ...p }));
+  posArray.sort((a, b) => a.x - b.x || a.y - b.y);
+  for (let i = 1; i < posArray.length; i++) {
+    const prev = posArray[i - 1];
+    const curr = posArray[i];
+    // Check if current node overlaps with previous node (same x, too close y)
+    if (Math.abs(prev.x - curr.x) < blockW && curr.y - prev.y < blockH) {
+      // Push current node down to avoid overlap
+      curr.y = prev.y + blockH + minYGap;
+      positions.set(curr.id, { x: curr.x, y: curr.y });
+    }
+  }
+
   // Floor extent (centre-to-centre span + one block).
   const R = (Math.max(0, ...[...byRank.keys()]) + 1) || 1;
   const numLanes = orderedChannels.length;
@@ -192,20 +208,25 @@ export function assignChannelLanePositions(
   const fh = (totalRows > 0 ? totalRows * syMin + (numLanes - 1) * lgMin : 0) + blockH;
 
   // Adaptive scale: fill the canvas (>=1) but never below 1 (no-overlap floor),
-  // capped at capExtent when provided.
-  let scale = 1;
+  // capped at capExtent when provided. Use non-uniform scaling to fill both
+  // width and height independently for better canvas utilization.
+  let scaleX = 1;
+  let scaleY = 1;
   if (opts.targetExtent && opts.capExtent) {
-    const capScale = Math.min(opts.capExtent.w / fw, opts.capExtent.h / fh);
-    const fillScale = Math.min(opts.targetExtent.w / fw, opts.targetExtent.h / fh);
+    const capScaleX = opts.capExtent.w / fw;
+    const capScaleY = opts.capExtent.h / fh;
+    const fillScaleX = opts.targetExtent.w / fw;
+    const fillScaleY = opts.targetExtent.h / fh;
     // If even the floor exceeds the cap, keep the floor (no-overlap wins).
-    scale = capScale < 1 ? 1 : Math.min(Math.max(fillScale, 1), capScale);
+    scaleX = capScaleX < 1 ? 1 : Math.min(Math.max(fillScaleX, 1), capScaleX);
+    scaleY = capScaleY < 1 ? 1 : Math.min(Math.max(fillScaleY, 1), capScaleY);
   }
-  if (scale !== 1) {
+  if (scaleX !== 1 || scaleY !== 1) {
     for (const p of positions.values()) {
-      p.x = startX + (p.x - startX) * scale;
-      p.y = startY + (p.y - startY) * scale;
+      p.x = startX + (p.x - startX) * scaleX;
+      p.y = startY + (p.y - startY) * scaleY;
     }
   }
 
-  return { positions, laneTops, orderedChannels, scale };
+  return { positions, laneTops, orderedChannels, scale: Math.max(scaleX, scaleY) };
 }

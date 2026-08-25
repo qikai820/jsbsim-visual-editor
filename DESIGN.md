@@ -436,6 +436,25 @@ jsbsim-visual-editor/
 
 ## 9. 部署与运行
 
+### 9.0 外部 PX4 HIL 模式
+
+当 JSBSim 由 `px4-jsbsim-bridge/jsbsim_server` 管理时，visual editor
+只作为上位机监控和手动接管界面，不启动本地 JSBSim。推荐使用独立 UDP
+端口：
+
+```bash
+SIM_EXTERNAL=1 \
+SIM_UDP_PORT=5801 \
+SIM_UDP_CTRL_PORT=5802 \
+SIM_UDP_HOST=127.0.0.1 \
+node server/index.js
+```
+
+其中 5801 接收 JSON 遥测，5802 发送 `VCTL` 手动控制帧。bridge 侧对应设置
+`VIS_UDP_TELEM_PORT=5801`、`VIS_UDP_CTRL_PORT=5802` 和
+`VIS_DEST=127.0.0.1:5801`。外部模式下 `/api/sim/start`、`stop`、`pause`、
+`resume` 和 `restart` 不会操作本机 JSBSim 进程。
+
 ### 9.1 开发环境
 
 ```bash

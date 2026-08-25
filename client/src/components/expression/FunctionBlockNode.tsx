@@ -41,20 +41,19 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
   const exprName = (data as any).exprName as string | undefined;
   const isRoot = (data as any).isExprRoot as boolean | undefined;
 
+  // Build compact formula display - only show operator symbol, no names
+  const formula = isLeaf
+    ? summary
+    : blockDef.icon;
+
   return (
     <div
-      className={`fn-block fn-block-${blockDef.category} ${selected ? 'selected' : ''} ${isRoot ? 'fn-block-root' : ''}`}
+      className={`fn-block fn-block-${blockDef.category} ${selected ? 'selected' : ''} ${isRoot ? 'fn-block-root' : ''} fn-block-compact`}
       style={{ '--block-color': blockDef.color } as React.CSSProperties}
     >
-      {/* Expression name label for module-canvas root nodes */}
-      {exprName && (
-        <div className="fn-expr-name" title={exprName}>{exprName}</div>
-      )}
-
       {/* Input handles */}
       {Array.from({ length: inputCount }, (_, i) => {
         const labels = INPUT_LABELS[exprNode.kind];
-        // Simulink Sum: mark each input port with a '+' sign.
         const label = exprNode.kind === 'sum' ? '+' : (labels ? labels[i] : (blockDef.inputCount === 'variable' ? String(i + 1) : undefined));
         const topPct = inputCount === 1 ? 50 : (i + 1) * (100 / (inputCount + 1));
         return (
@@ -65,19 +64,13 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
             id={`in-${i}`}
             style={{ top: `${topPct}%`, background: blockDef.color }}
             title={label || `Input ${i + 1}`}
-          >
-            {label && <span className="fn-port-label">{label}</span>}
-          </Handle>
+          />
         );
       })}
 
-      {/* Simulink-style operator body: big symbol (or leaf value) */}
-      <div className={`fn-op-body ${isLeaf ? 'fn-op-leaf' : ''}`}>
-        {isLeaf ? (
-          <span className="fn-op-leafval" title={summary}>{summary}</span>
-        ) : (
-          <span className="fn-op-symbol" style={{ color: blockDef.color }}>{blockDef.icon}</span>
-        )}
+      {/* Compact formula display */}
+      <div className="fn-compact-formula" title={summary || exprNode.kind}>
+        {formula}
       </div>
 
       {/* Variable arity: add port button */}

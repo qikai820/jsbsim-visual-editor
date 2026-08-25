@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<output name="localhost" type="SOCKET" port="5124" protocol="TCP" rate="10">
+  <property> position/h-sl-ft </property>
+  <property> position/lat-gc-deg </property>
+  <property> position/long-gc-deg </property>
+  <property> attitude/phi-deg </property>
+  <property> attitude/theta-deg </property>
+  <property> attitude/psi-deg </property>
+  <property> velocities/u-fps </property>
+  <property> velocities/v-fps </property>
+  <property> velocities/w-fps </property>
+  <property> velocities/p-rad_sec </property>
+  <property> velocities/q-rad_sec </property>
+  <property> velocities/r-rad_sec </property>
+  <property> accelerations/udot-ft_sec2 </property>
+  <property> accelerations/vdot-ft_sec2 </property>
+  <property> accelerations/wdot-ft_sec2 </property>
+  <property> fcs/throttle-cmd-norm </property>
+  <property> fcs/aileron-cmd-norm </property>
+  <property> fcs/elevator-cmd-norm </property>
+  <property> fcs/rudder-cmd-norm </property>
+</output>

@@ -9,6 +9,7 @@ interface SignalBlockData {
   inputs: string[];
   expression?: any;
   meta: { label: string; icon: string; color: string };
+  hasMultipleOutputs?: boolean;  // True when this block's output fans out to multiple targets
   [key: string]: any;
 }
 
@@ -37,10 +38,18 @@ function paramSummary(itemType: string, compProps: any): string {
     return String(val);
   };
   switch (itemType) {
-    // JSBSim defaults: omitted Ki/Kd == 0. Missing Kp is invalid but we still
-    // show a concrete default instead of a confusing "?" glyph.
-    case 'pid':
-      return `Kp ${get('kp') ?? '1'}  Ki ${get('ki') ?? '0'}  Kd ${get('kd') ?? '0'}`;
+    // PID: only show non-zero parameters
+    case 'pid': {
+      const kp = get('kp');
+      const ki = get('ki');
+      const kd = get('kd');
+      const parts: string[] = [];
+      // Check for non-zero: compare as numbers to handle both string and numeric values
+      if (kp && Number(kp) !== 0) parts.push(`P${kp}`);
+      if (ki && Number(ki) !== 0) parts.push(`I${ki}`);
+      if (kd && Number(kd) !== 0) parts.push(`D${kd}`);
+      return parts.length > 0 ? parts.join(' ') : 'PID';
+    }
     case 'pure_gain':
     case 'scheduled_gain':
       return `G ${get('gain') ?? '1'}`;
@@ -81,6 +90,7 @@ function SignalBlockNode({ data, selected }: NodeProps) {
   };
   const mathSym = MATH_SYMBOL[d.itemType];
   const isSummer = d.itemType === 'summer';
+  const isPID = d.itemType === 'pid';
 
   // Gain → Simulink triangle.
   if (isGain) {
@@ -93,71 +103,72 @@ function SignalBlockNode({ data, selected }: NodeProps) {
         <div className="sig-gain-tri" style={{ background: color }} title={d.name || d.outputSignal}>
           <span className="sig-gain-val">{gainVal}</span>
         </div>
-        <div className="sig-shape-gain-name">{shortName(d.name || d.outputSignal)}</div>
         {inputList.map((s, i) => (
           <Handle key={i} type="target" position={Position.Left} id={`in-${i}`} className="sig-input-handle sig-gain-in" style={{ background: color }} />
         ))}
-        <Handle type="source" position={Position.Right} id="out" className="sig-output-handle sig-gain-out" style={{ background: color }} />
+        <div style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)' }}>
+          <Handle type="source" position={Position.Right} id="out" className="sig-output-handle sig-gain-out" style={{ background: color }} />
+          {d.hasMultipleOutputs && (
+            <div style={{
+              position: 'absolute',
+              right: -3,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: '#000',
+              border: '1.5px solid #fff',
+              pointerEvents: 'none',
+              zIndex: 10,
+            }} />
+          )}
+        </div>
       </div>
     );
   }
 
   return (
     <div
-      className={`sig-block ${isFunction ? 'sig-block-fn' : ''} ${selected ? 'selected' : ''}`}
+      className={`sig-block ${isFunction ? 'sig-block-fn' : ''} ${selected ? 'selected' : ''} sig-block-compact`}
       style={{ '--block-color': color } as React.CSSProperties}
     >
-      <div className="sig-block-header" style={{ background: color }}>
-        <span className="sig-block-icon">{meta.icon}</span>
-        <span className="sig-block-type">{meta.label}</span>
-        {isFunction && <span className="sig-block-tag">f()</span>}
-      </div>
-
+      {/* Compact formula display for functions */}
       {isFunction && (
-        <>
-          <span className="sig-expand-btn" data-expand-toggle="1" title="展开为运算子图">⤢</span>
-          <div className="sig-block-fn-body">
-            <span className="sig-block-fn-symbol">{exprIcon || 'ƒ'}</span>
-          </div>
-          {(d.cliptoMin !== undefined || d.cliptoMax !== undefined) && (
-            <div
-              className="sig-block-clip"
-              title={`输出限幅 clipto [${d.cliptoMin ?? '-∞'}, ${d.cliptoMax ?? '+∞'}]`}
-            >
-              ⌈{d.cliptoMin ?? '-∞'}, {d.cliptoMax ?? '+∞'}⌋
-            </div>
-          )}
-          <div className="sig-block-name" title={d.name || d.outputSignal}>
-            {shortName(d.name || d.outputSignal)}
-          </div>
-        </>
-      )}
-
-      {!isFunction && (mathSym || isSummer) && (
-        <>
-          <div className="sig-block-fn-body">
-            <span className="sig-block-fn-symbol">{isSummer ? 'Σ' : mathSym}</span>
-          </div>
-          <div className="sig-block-name" title={d.name || d.outputSignal}>
-            {shortName(d.name || d.outputSignal)}
-          </div>
-        </>
-      )}
-
-      {!isFunction && !mathSym && !isSummer && (
-        <div className="sig-block-name" title={d.name || d.outputSignal}>
-          {shortName(d.name || d.outputSignal)}
-          {d.name && d.name.includes('/') && (
-            <span className="sig-block-full">{d.name}</span>
-          )}
+        <div className="sig-compact-formula" title={d.name || d.outputSignal}>
+          <span className="sig-block-fn-symbol">{exprIcon || 'ƒ'}</span>
         </div>
       )}
 
-      {!isFunction && !mathSym && !isSummer && (() => {
-        const ps = paramSummary(d.itemType, d.compProps);
-        return ps ? <div className="sig-block-params" title={ps}>{ps}</div> : null;
-      })()}
+      {/* Math operators */}
+      {!isFunction && (mathSym || isSummer) && (
+        <div className="sig-compact-formula">
+          <span className="sig-block-fn-symbol">{isSummer ? 'Σ' : mathSym}</span>
+        </div>
+      )}
 
+      {/* PID block: show PID label with non-zero params */}
+      {isPID && (
+        <div className="sig-compact-formula" title="PID 控制器">
+          <span className="sig-block-fn-symbol">{paramSummary('pid', d.compProps) || 'PID'}</span>
+        </div>
+      )}
+
+      {/* Other blocks: show operator symbol only (no name, no params) */}
+      {!isFunction && !mathSym && !isSummer && !isPID && (
+        <div className="sig-compact-formula">
+          <span className="sig-block-fn-symbol">•</span>
+        </div>
+      )}
+
+      {/* Clip limits */}
+      {isFunction && (d.cliptoMin !== undefined || d.cliptoMax !== undefined) && (
+        <div className="sig-compact-clip" title={`输出限幅`}>
+          [{d.cliptoMin ?? '-∞'}, {d.cliptoMax ?? '+∞'}]
+        </div>
+      )}
+
+      {/* Input handles */}
       <div className="sig-block-inputs sig-block-inputs-bare">
         {inputList.map((s: string, i: number) => (
           <div className="sig-input-row" key={i}>
@@ -173,13 +184,31 @@ function SignalBlockNode({ data, selected }: NodeProps) {
         ))}
       </div>
 
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="out"
-        className="sig-output-handle"
-        style={{ background: color }}
-      />
+      {/* Output handle with optional fan-out dot indicator */}
+      <div style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)' }}>
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="out"
+          className="sig-output-handle"
+          style={{ background: color }}
+        />
+        {d.hasMultipleOutputs && (
+          <div style={{
+            position: 'absolute',
+            right: -3,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: '#000',
+            border: '1.5px solid #fff',
+            pointerEvents: 'none',
+            zIndex: 10,
+          }} />
+        )}
+      </div>
     </div>
   );
 }

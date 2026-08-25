@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, Component, type ReactNode, lazy, Suspense } from 'react';
+import { useState, useCallback, useEffect, useRef, Component, type ReactNode, Suspense } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
 import Palette from './components/Palette';
@@ -6,57 +6,11 @@ import Canvas from './components/Canvas';
 import PropertyPanel from './components/PropertyPanel';
 import FileManager from './components/FileManager';
 import ModuleExpressionCanvas from './components/expression/ModuleExpressionCanvas';
+import Airplane3DViewer from './components/Airplane3DViewer';
+import LiveView from './components/LiveView';
 import { useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
-
-// Lazy load live view (reuses three.js)
-const LiveView = lazy(() =>
-  import('./components/LiveView').catch(err => {
-    console.error('[Live] Failed to load:', err);
-    return {
-      default: ({ onClose }: { onClose: () => void }) => (
-        <div className="viewer3d-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center', color: '#fff', padding: 40 }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
-            <h2 style={{ marginBottom: 8 }}>实时视图加载失败</h2>
-            <p style={{ color: '#aaa', marginBottom: 20, fontSize: 13 }}>{err?.message || '加载出错'}</p>
-            <button onClick={onClose} style={{ padding: '10px 24px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>← 返回编辑器</button>
-          </div>
-        </div>
-      ),
-    };
-  })
-);
-
-// Lazy load 3D viewer with error-safe wrapper
-const Airplane3DViewer = lazy(() =>
-  import('./components/Airplane3DViewer').catch(err => {
-    console.error('[3D] Failed to load viewer:', err);
-    // Return a fallback component that shows the error
-    return {
-      default: ({ onClose }: { onClose: () => void }) => (
-        <div className="viewer3d-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center', color: '#fff', padding: 40, maxWidth: 420 }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
-            <h2 style={{ marginBottom: 8 }}>3D 引擎加载失败</h2>
-            <p style={{ color: '#aaa', marginBottom: 12, fontSize: 13 }}>
-              {err?.message || 'Three.js 加载出错'}
-            </p>
-            <p style={{ color: '#888', marginBottom: 20, fontSize: 12 }}>
-              可能原因：浏览器不支持 WebGL、显卡驱动过旧、或运行在远程/虚拟环境中。<br />
-              请尝试使用最新版 Chrome / Firefox / Edge 浏览器。
-            </p>
-            <button onClick={onClose} style={{
-              padding: '10px 24px', background: '#3b82f6', color: '#fff',
-              border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14,
-            }}>← 返回编辑器</button>
-          </div>
-        </div>
-      ),
-    };
-  })
-);
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {

@@ -47,7 +47,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   focusedNodeId: null,
 
   onNodesChange: (changes) => {
-    set({ nodes: applyNodeChanges(changes, get().nodes) });
+    set({ nodes: applyNodeChanges(changes, get().nodes) as Node<AircraftNodeData>[] });
   },
 
   onEdgesChange: (changes) => {

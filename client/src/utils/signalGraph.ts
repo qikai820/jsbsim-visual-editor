@@ -12,7 +12,7 @@
 import type { ExprNode } from '../types';
 import { BLOCK_DEFS } from './expressionConverter';
 import { exprToFormula } from './exprToFormula';
-import { orderRanksByBarycenter, assignChannelLanePositions } from './layoutUtils';
+import { orderRanksByBarycenter } from './layoutUtils';
 
 export interface ChannelItem {
   type: string;
@@ -296,6 +296,10 @@ export function buildSignalGraph(
       backfill('ki', '0');
       backfill('kd', '0');
     }
+    // Count how many other components consume this block's output signal
+    const outputConsumers = items.filter(other => 
+      other.id !== e.id && consumerInputs.get(other.id)?.includes(sig)
+    ).length;
     nodes.push({
       id: e.id,
       type: 'signalBlock',
@@ -319,6 +323,7 @@ export function buildSignalGraph(
         chName: e.chName,
         itemIdx: 0,
         meta,
+        hasMultipleOutputs: outputConsumers > 1,  // Fan-out indicator
       },
     });
   }
@@ -350,49 +355,115 @@ export function buildSignalGraph(
     }
   }
 
-  // ── Channel-swimlane layout (classification + NO overlap + fill canvas) ──
-  // Group modules by channel into horizontal lanes; x follows the global
-  // data-flow rank, y the crossing-minimal in-lane order. The layout uses a
-  // no-overlap FLOOR spacing, then scales UP to fill the canvas (capped at
-  // 150%) and never below 1 — so modules absolutely cannot overlap.
-  const channelOf = new Map<string, number>();
-  for (const e of items) channelOf.set(e.id, e.ch);
+  // ── Data-flow-driven layout ──
+  // 1) Group modules by channel
+  // 2) Topological-sort channels by signal dependencies (data flow direction)
+  // 3) Place each channel as a column, left→right
+  // 4) Within each column, order modules by barycenter of connections
+  const NODE_W = 56;
+  const NODE_H = 40;
+  const COL_GAP = 200;   // horizontal gap between channel columns
+  const ROW_GAP = 50;    // vertical gap between modules in same column
 
-  const laneOpts: any = {
-    startX: 80, startY: 80, blockW: 190, blockH: 120, minXGap: 44, minYGap: 40,
-  };
-  if (opts.canvas) {
-    laneOpts.targetExtent = { w: opts.canvas.w, h: opts.canvas.h };
-    laneOpts.capExtent = { w: opts.canvas.w * 1.5, h: opts.canvas.h * 1.5 };
-  }
-  const lanePos = assignChannelLanePositions(byRank, rank, channelOf, laneOpts).positions;
-  for (const n of nodes) {
-    const p = lanePos.get(n.id);
-    if (p) n.position = p;
+  // Group items by channel index
+  const byChannel = new Map<number, typeof items>();
+  for (const e of items) {
+    if (!byChannel.has(e.ch)) byChannel.set(e.ch, []);
+    byChannel.get(e.ch)!.push(e);
   }
 
-  // Component bounds drive endpoint placement (kept attached to their lane).
+  // Determine channel order by data flow: channel A → channel B if A produces
+  // a signal consumed by B.  Topological sort.
+  const chIds = [...byChannel.keys()].sort((a, b) => a - b);
+  const chConsumers = new Map<number, Set<number>>(); // ch → set of downstream ch
+  for (const e of items) {
+    const outSig = extractOutputSignal(e.item);
+    if (!outSig) continue;
+    for (const cid of (consumersOf.get(outSig) || [])) {
+      const consumer = items.find(x => x.id === cid);
+      if (consumer && consumer.ch !== e.ch) {
+        if (!chConsumers.has(e.ch)) chConsumers.set(e.ch, new Set());
+        chConsumers.get(e.ch)!.add(consumer.ch);
+      }
+    }
+  }
+  // Topological sort of channels
+  const chInDeg = new Map<number, number>();
+  for (const c of chIds) chInDeg.set(c, 0);
+  for (const [, downs] of chConsumers) {
+    for (const d of downs) chInDeg.set(d, (chInDeg.get(d) ?? 0) + 1);
+  }
+  const sortedChs: number[] = [];
+  const queue = chIds.filter(c => (chInDeg.get(c) ?? 0) === 0);
+  while (queue.length > 0) {
+    const c = queue.shift()!;
+    sortedChs.push(c);
+    for (const d of (chConsumers.get(c) || [])) {
+      chInDeg.set(d, (chInDeg.get(d) ?? 0) - 1);
+      if (chInDeg.get(d) === 0) queue.push(d);
+    }
+  }
+  // Add any remaining channels (cycles or disconnected)
+  for (const c of chIds) if (!sortedChs.includes(c)) sortedChs.push(c);
+
+  // Assign x position per channel column
+  const chX = new Map<number, number>();
+  sortedChs.forEach((c, i) => { chX.set(c, 80 + i * (NODE_W + COL_GAP)); });
+
+  // Within each channel, order modules by barycenter of their upstream connections
+  const compY = new Map<string, number>(); // temporary y for ordering
+  for (const chIdx of sortedChs) {
+    const group = byChannel.get(chIdx)!;
+    // Initial order: by original index
+    group.sort((a, b) => a.id.localeCompare(b.id));
+
+    // Barycenter sweep (2 passes)
+    for (let pass = 0; pass < 3; pass++) {
+      for (const e of group) {
+        const ups = (consumerInputs.get(e.id) || [])
+          .map(s => producerOf.get(s))
+          .filter((p): p is string => !!p && p !== e.id && compY.has(p));
+        if (ups.length > 0) {
+          const avg = ups.reduce((s, p) => s + (compY.get(p) ?? 0), 0) / ups.length;
+          compY.set(e.id, avg);
+        }
+      }
+      group.sort((a, b) => (compY.get(a.id) ?? 0) - (compY.get(b.id) ?? 0));
+    }
+
+    // Assign final positions
+    const x = chX.get(chIdx)!;
+    group.forEach((e, i) => {
+      const n = nodes.find(nd => nd.id === e.id);
+      if (n) {
+        const y = 80 + i * (NODE_H + ROW_GAP);
+        n.position = { x, y };
+        compY.set(e.id, y);
+      }
+    });
+  }
+
+  // Component bounds drive endpoint placement.
   const compNodes = nodes.filter(n => n.data.kind === 'component');
   const compXs = compNodes.map(n => n.position.x);
+  const compYs = compNodes.map(n => n.position.y);
   const compMinX = compXs.length ? Math.min(...compXs) : 80;
   const compMaxX = compXs.length ? Math.max(...compXs) : 80;
-  const maxRank = Math.max(0, ...[...byRank.keys()]);
-  // Endpoints aligned to the lane/row of their connected component.
+  const compMinY = compYs.length ? Math.min(...compYs) : 80;
+  const compMaxY = compYs.length ? Math.max(...compYs) : 80;
+  const epGap = 100;
+  // Sources: place in a compact column to the left of the components.
+  const SOURCE_ROW = 40;
   let si = 0;
   for (const [s, nid] of sourceIds) {
     const n = nodes.find(x => x.id === nid)!;
-    const ys = (consumersOf.get(s) || [])
-      .map((c) => lanePos.get(c)?.y)
-      .filter((v): v is number => v !== undefined);
-    n.position = { x: compMinX - 90, y: ys.length ? Math.min(...ys) : 80 + si * ROW };
+    n.position = { x: compMinX - epGap, y: compMinY + si * SOURCE_ROW };
     si++;
   }
   let ki = 0;
   for (const [sig, nid] of sinkIds) {
     const n = nodes.find(x => x.id === nid)!;
-    const prod = producerOf.get(sig);
-    const p = prod ? lanePos.get(prod) : undefined;
-    n.position = { x: compMaxX + 90, y: p ? p.y : 80 + ki * ROW };
+    n.position = { x: compMaxX + epGap, y: compMinY + ki * SOURCE_ROW };
     ki++;
   }
 
@@ -443,8 +514,10 @@ export function buildSignalGraph(
  * Assign a small per-edge vertical offset so wires sharing a source handle
  * (fan-out) or a target handle (fan-in) don't lie exactly on top of each other.
  * Purely visual: `data.srcOffset` / `data.tgtOffset` are read by SignalEdge.
+ *
+ * Note: spread=0 means all wires from the same handle exit from the same point.
  */
-export function assignSignalEdgeOffsets(edges: any[], spread = 16): any[] {
+export function assignSignalEdgeOffsets(edges: any[], spread = 0): any[] {
   const bySrc = new Map<string, any[]>();
   const byTgt = new Map<string, any[]>();
   for (const e of edges) {

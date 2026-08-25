@@ -6,6 +6,7 @@ import type {
   ExprUnary, ExprAtan2, ExprIfThen, ExprSwitch, ExprComparison,
   UnaryOp, ComparisonOp,
 } from '../types';
+import dagre from 'dagre';
 
 // ── Block definitions ──────────────────────────────────────────────────────
 
@@ -67,8 +68,8 @@ export const BLOCK_DEFS: Record<string, BlockDef> = {
 
 // ── Layout constants ────────────────────────────────────────────────────────
 
-const COL_WIDTH = 220;
-const ROW_HEIGHT = 90;
+const COL_WIDTH = 100;
+const ROW_HEIGHT = 50;
 const START_X = 50;
 const START_Y = 50;
 
@@ -162,7 +163,7 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
   }
   orderRanksByBarycenter(byDepthIds, { prev: prevAdj, next: nextAdj });
 
-  // Create nodes with positions
+  // Create nodes (without positions first)
   for (const [depth, ids] of byDepthIds) {
     ids.forEach((id, rowIdx) => {
       const e = idToExpr.get(id)!;
@@ -173,10 +174,7 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
       nodes.push({
         id: info.id,
         type: 'functionBlock',
-        position: {
-          x: START_X + depth * COL_WIDTH,
-          y: START_Y + rowIdx * ROW_HEIGHT,
-        },
+        position: { x: 0, y: 0 },
         data: {
           exprNode: e,
           blockDef: def,
@@ -204,6 +202,42 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
         animated: false,
       });
     });
+  }
+
+  // Use dagre for layout (mature Sugiyama algorithm)
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  dagreGraph.setGraph({
+    rankdir: 'LR',
+    nodesep: 20,
+    ranksep: 60,
+    marginx: 50,
+    marginy: 50,
+  });
+
+  const NODE_W = 56;
+  const NODE_H = 40;
+
+  for (const n of nodes) {
+    dagreGraph.setNode(n.id, { width: NODE_W, height: NODE_H });
+  }
+  for (const e of edges) {
+    if (e.source && e.target) {
+      dagreGraph.setEdge(e.source, e.target);
+    }
+  }
+
+  dagre.layout(dagreGraph);
+
+  // Apply dagre positions
+  for (const n of nodes) {
+    const nodeWithPosition = dagreGraph.node(n.id);
+    if (nodeWithPosition) {
+      n.position = {
+        x: nodeWithPosition.x - NODE_W / 2,
+        y: nodeWithPosition.y - NODE_H / 2,
+      };
+    }
   }
 
   const rootInfo = infoMap.get(expr)!;

@@ -29,7 +29,7 @@ function formatNum(n: number | undefined | null): string {
 
 // ── 1D Line Chart ───────────────────────────────────────────────────────────
 
-function LineChart1D({ expr, width, height }: TableChartProps) {
+function LineChart1D({ expr, width = 300, height = 200 }: TableChartProps) {
   const padding = { top: 20, right: 15, bottom: 35, left: 50 };
   const chartW = width - padding.left - padding.right;
   const chartH = height - padding.top - padding.bottom;
@@ -148,7 +148,7 @@ function LineChart1D({ expr, width, height }: TableChartProps) {
 
 // ── 2D Heatmap ──────────────────────────────────────────────────────────────
 
-function Heatmap2D({ expr, width, height }: TableChartProps) {
+function Heatmap2D({ expr, width = 300, height = 200 }: TableChartProps) {
   const padding = { top: 25, right: 60, bottom: 35, left: 55 };
   const chartW = width - padding.left - padding.right;
   const chartH = height - padding.top - padding.bottom;
@@ -248,7 +248,7 @@ function Heatmap2D({ expr, width, height }: TableChartProps) {
 
 // ── 3D Multi-Heatmap ────────────────────────────────────────────────────────
 
-function Heatmap3D({ expr, width, height }: TableChartProps) {
+function Heatmap3D({ expr, width = 300, height = 200 }: TableChartProps) {
   const bp1 = expr.breakpoints1 || [];
   const bp2 = expr.breakpoints2 || [];
   const bp3 = expr.breakpoints3 || [];

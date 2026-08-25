@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getAircraftLibrary, loadAircraft } from '../utils/tauriApi';
 
 interface AircraftEntry {
   id: string;
@@ -37,9 +38,8 @@ export default function AircraftLibrary({ onClose, onLoad }: Props) {
   const [loadingAircraft, setLoadingAircraft] = useState(false);
 
   useEffect(() => {
-    fetch('/api/aircraft-library')
-      .then(r => r.json())
-      .then(data => { setLibrary(data.library || []); setLoading(false); })
+    getAircraftLibrary()
+      .then(data => { setLibrary(data); setLoading(false); })
       .catch(err => { console.error(err); setLoading(false); });
   }, []);
 
@@ -52,18 +52,12 @@ export default function AircraftLibrary({ onClose, onLoad }: Props) {
   const handleLoad = async (aircraft: AircraftEntry) => {
     setLoadingAircraft(true);
     try {
-      const res = await fetch('/api/load-aircraft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aircraftId: aircraft.id }),
-      });
-      if (!res.ok) throw new Error(`服务器错误 (${res.status})`);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      const data = await loadAircraft(aircraft.id);
       onLoad(data);
       onClose();
     } catch (err: any) {
-      alert('加载失败: ' + err.message);
+      const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || '未知错误');
+      alert('加载失败：' + msg);
     }
     setLoadingAircraft(false);
   };

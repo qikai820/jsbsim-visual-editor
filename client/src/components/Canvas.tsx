@@ -25,7 +25,7 @@ const MODULE_TYPES = new Set(['system', 'flight_control']);
 export default function Canvas({ dragType }: CanvasProps) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode, updateNodeParams, setFocusedNodeId } = useFlowStore();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const rfInstance = useRef<ReactFlowInstance | null>(null);
+  const rfInstance = useRef<ReactFlowInstance<any, any> | null>(null);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
