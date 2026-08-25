@@ -1854,6 +1854,11 @@ html, body, #root {
 .jsbsim-log-popover-head { display: flex; justify-content: space-between; align-items: center; color: var(--text-primary); font-size: 12px; padding: 3px 4px 7px; }
 .jsbsim-log-popover-head button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 11px; }
 
+.jsbsim-log-sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.jsbsim-log-sidebar-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; color: var(--text-primary); font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border); }
+.jsbsim-log-sidebar-head button { border: 0; background: transparent; color: var(--text-secondary); font-size: 20px; cursor: pointer; }
+.jsbsim-log-sidebar-window { flex: 1; max-height: none; margin: 0; border: 0; border-radius: 0; background: rgba(15, 23, 42, .72); }
+
 .sim-menu-parent {
   justify-content: space-between;
 }

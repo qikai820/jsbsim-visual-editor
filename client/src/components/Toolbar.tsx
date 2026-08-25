@@ -8,17 +8,20 @@ import SimMenu from './SimMenu';
 interface ToolbarProps {
   onShow3D?: () => void;
   onShowLive?: () => void;
+  jsbsimLogs?: string[];
+  onLog?: (message: string) => void;
+  showJsbsimLog?: boolean;
+  onToggleJsbsimLog?: () => void;
+  onClearJsbsimLog?: () => void;
 }
 
-export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
+export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, showJsbsimLog, onToggleJsbsimLog, onClearJsbsimLog }: ToolbarProps) {
   const { aircraft, setAircraft, nodes, edges, loadProject, clearAll } = useFlowStore();
   const [showXml, setShowXml] = useState(false);
   const [xmlContent, setXmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
-  const [showJsbsimLog, setShowJsbsimLog] = useState(false);
-  const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExportXml = async () => {
@@ -126,14 +129,14 @@ export default function Toolbar({ onShow3D, onShowLive }: ToolbarProps) {
           <button onClick={() => { clearAll(); localStorage.removeItem('jsbsim-project'); localStorage.removeItem('jsbsim-raw-xml'); }} disabled={loading}>📄 新建</button>
           <button onClick={() => setShowWizard(true)} disabled={loading}>🪄 创建向导</button>
           <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 模型库</button>
-          <SimMenu loading={loading} onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
+          <SimMenu loading={loading} onLog={onLog} />
           <div className="jsbsim-log-anchor">
-            <button className={`jsbsim-log-button ${jsbsimLogs.length ? 'has-log' : ''}`} onClick={() => setShowJsbsimLog(value => !value)} title="查看 JSBSim 最新信息">
+            <button className={`jsbsim-log-button ${jsbsimLogs.length ? 'has-log' : ''}`} onClick={onToggleJsbsimLog} title="查看 JSBSim 最新信息">
               🖥️ {jsbsimLogs.length ? jsbsimLogs[jsbsimLogs.length - 1].replace(/^\[[^\]]+\] /, '').slice(0, 18) : 'JSBSim 信息'}
             </button>
             {showJsbsimLog && (
               <div className="jsbsim-log-popover" onClick={e => e.stopPropagation()}>
-                <div className="jsbsim-log-popover-head"><span>JSBSim 运行信息</span><button onClick={() => setJsbsimLogs([])}>清空</button></div>
+                <div className="jsbsim-log-popover-head"><span>JSBSim 运行信息</span><button onClick={onClearJsbsimLog}>清空</button></div>
                 <div className="sim-log-window" role="log">
                   {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
                 </div>

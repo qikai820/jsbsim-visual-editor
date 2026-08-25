@@ -103,6 +103,8 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
 }
 
 function AppContent() {
+  const [showJsbsimLog, setShowJsbsimLog] = useState(false);
+  const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
   const [dragType, setDragType] = useState<ComponentType | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLive, setShowLive] = useState(false);
@@ -189,7 +191,11 @@ function AppContent() {
 
   return (
     <div className="app">
-      <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)} />
+      <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)}
+        jsbsimLogs={jsbsimLogs} showJsbsimLog={showJsbsimLog}
+        onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
+        onClearJsbsimLog={() => setJsbsimLogs([])}
+        onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
       <div className="main-content">
         {focusedModule ? (
           <ModuleExpressionCanvas
@@ -212,8 +218,14 @@ function AppContent() {
             <Palette onDragStart={handleDragStart} />
             <Canvas dragType={dragType} onDragStart={handleDragStart} />
             <div className="right-sidebar">
-              <PropertyPanel />
-              <FileManager />
+              {showJsbsimLog ? (
+                <div className="jsbsim-log-sidebar">
+                  <div className="jsbsim-log-sidebar-head"><span>🖥️ JSBSim 信息</span><button onClick={() => setShowJsbsimLog(false)}>×</button></div>
+                  <div className="sim-log-window jsbsim-log-sidebar-window">
+                    {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
+                  </div>
+                </div>
+              ) : <><PropertyPanel /><FileManager /></>}
             </div>
           </>
         )}
