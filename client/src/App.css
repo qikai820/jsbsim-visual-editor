@@ -41,16 +41,26 @@ html, body, #root {
 /* ========== Toolbar ========== */
 .toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  height: 52px; padding: 0 20px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0; z-index: 10;
+  height: 48px; padding: 0 10px 0 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-bottom: 1px solid #dbe3ea;
+  box-shadow: 0 1px 4px rgba(31, 52, 68, .06);
+  flex-shrink: 0; z-index: 2300;
 }
-.window-controls { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+.window-controls { display: flex; align-items: center; gap: 5px; margin-left: 12px; }
 .window-controls, .window-controls * { -webkit-app-region: no-drag; }
-.window-controls button { width: 30px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--text-secondary); font-size: 17px; cursor: pointer; }
-.window-controls button:hover { background: var(--bg-hover); color: var(--text-primary); }
-.window-controls .window-close:hover { background: #e74c3c; color: #fff; }
+.toolbar .window-controls button { display: grid; place-items: center; width: 30px; height: 28px; padding: 0; border: 1px solid #dde5ec; border-radius: 7px; background: #f5f8fa; color: #637585; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease; }
+.toolbar .window-controls button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+.toolbar .window-controls button:hover { background: #eaf1f5; border-color: #c7d5df; color: #294758; transform: translateY(-1px); }
+.toolbar .window-controls button:active { transform: translateY(0); background: #dfe9ef; }
+.toolbar .window-controls .window-close:hover { background: #e85c62; border-color: #e85c62; color: #fff; }
+.toolbar .file-menu-trigger { border-color: #dde5ec; border-radius: 7px; background: #f5f8fa; box-shadow: 0 1px 1px rgba(31,52,68,.03); }
+.toolbar .file-menu-trigger:hover:not(:disabled), .toolbar .file-menu-trigger.active { background: #eaf3f8; border-color: #bfd2df; color: #315e73; }
+.xml-change-notice { position: fixed; z-index: 2600; left: 50%; top: 58px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(620px, calc(100vw - 32px)); padding: 9px 12px; border: 1px solid #b9d5e2; border-radius: 9px; background: rgba(247,251,253,.97); color: #355568; box-shadow: 0 8px 24px rgba(35,67,84,.16); }
+.xml-change-notice-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; background: #dcecf3; color: #39748d; font-weight: 700; }
+.xml-change-notice > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 2px; font-size: 12px; }
+.xml-change-notice small { overflow: hidden; color: #69808e; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar + .xml-change-notice button, .xml-change-notice button { margin-left: auto; padding: 2px 5px; border: 0; background: transparent; color: #7c909b; cursor: pointer; font-size: 16px; }
 .toolbar-left, .toolbar-center, .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .toolbar-center { margin-right: auto; }
 
@@ -77,6 +87,10 @@ html, body, #root {
 .toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .file-menu-anchor { position: relative; }
+.file-menu-section-title { padding: 5px 12px 3px; color: var(--text-muted); font-size: 10px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; }
+.toolbar .file-menu-dropdown .recent-project-item { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 280px; }
+.toolbar .file-menu-dropdown .recent-project-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar .file-menu-dropdown .recent-project-item small { overflow: hidden; color: var(--text-muted); font-size: 9px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar .file-menu-trigger { min-width: 82px; }
 .toolbar .file-menu-trigger.active {
   color: var(--accent);
@@ -190,9 +204,9 @@ html, body, #root {
 
 .canvas-wrapper .react-flow__edge-path { stroke: var(--accent); stroke-width: 2; }
 .canvas-wrapper .react-flow__handle {
-  width: 10px; height: 10px;
+  width: 8px; height: 8px;
   border: 2px solid var(--bg-secondary);
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+  box-shadow: 0 0 0 1px rgba(15,23,42,0.09), 0 1px 2px rgba(15,23,42,0.12);
 }
 
 /* ========== Right Sidebar ========== */
@@ -330,48 +344,52 @@ html, body, #root {
   padding: 5px 8px; font-size: 12px; transition: all 0.15s;
 }
 .axis-input input:focus { border-color: var(--accent); background: var(--bg-secondary); outline: none; }
+.dsdl-load-button { display: inline-flex; justify-content: center; margin-top: 6px; padding: 7px 10px; border: 1px dashed #79a9bf; border-radius: 6px; background: #eef7fa; color: #367c9d; cursor: pointer; font-size: 11px; font-weight: 600; }
+.dsdl-load-button:hover { background: #e1f1f6; border-color: #367c9d; }
+.dsdl-loaded-state { display: block; margin-top: 5px; color: var(--text-muted); font-size: 10px; }
 
 /* ========== Aircraft Node ========== */
 .aircraft-node {
-  background: var(--bg-secondary);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-lg);
-  min-width: 180px; max-width: 220px;
-  box-shadow: var(--shadow-md);
-  transition: all 0.2s; overflow: visible;
+  background: rgba(255,255,255,0.98);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 166px; min-width: 166px; max-width: 166px;
+  box-shadow: 0 2px 7px rgba(15,23,42,0.09), 0 0 0 1px rgba(255,255,255,0.55) inset;
+  transition: box-shadow 0.16s ease, transform 0.16s ease; overflow: visible;
 }
-.aircraft-node:hover { box-shadow: var(--shadow-lg); }
+.aircraft-node:hover { box-shadow: 0 7px 18px rgba(15,23,42,0.14); transform: translateY(-1px); }
 .aircraft-node.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59,130,246,0.12), var(--shadow-lg);
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.16), 0 7px 18px rgba(15,23,42,0.14);
 }
 /* Module nodes (system / flight_control) are drillable: cursor + badge */
 .aircraft-node-module { cursor: pointer; }
 .aircraft-node-module:hover { box-shadow: 0 0 0 3px rgba(142,68,173,0.18), var(--shadow-lg); }
 .node-drill-badge {
-  margin-left: auto; font-size: 13px; line-height: 1;
-  background: rgba(255,255,255,0.25); border-radius: 4px; padding: 1px 3px;
+  margin-left: auto; font-size: 10px; line-height: 1;
+  background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 4px; padding: 2px 3px;
 }
 .node-drill-badge-empty { opacity: 0.55; }
 
 .node-header {
-  display: flex; align-items: center; gap: 7px;
-  padding: 8px 12px; border-radius: 12px 12px 0 0;
-  color: #fff; font-size: 12px; font-weight: 600;
-  letter-spacing: -0.1px;
+  display: flex; align-items: center; gap: 6px;
+  min-height: 28px; padding: 5px 9px; border-radius: 7px 7px 0 0;
+  color: #fff; font-size: 11px; font-weight: 650;
+  letter-spacing: -0.08px;
 }
-.node-icon { display: inline-flex; align-items: center; justify-content: center; }
+.node-icon { display: inline-flex; align-items: center; justify-content: center; opacity: 0.94; }
 .node-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.node-body { padding: 8px 12px 10px; }
+.node-body { padding: 5px 9px 6px; }
 .node-param {
   display: flex; justify-content: space-between; align-items: baseline;
-  font-size: 11px; margin-bottom: 3px;
+  min-height: 16px; font-size: 9.5px; line-height: 15px; margin: 0;
 }
-.param-label { color: var(--text-muted); flex-shrink: 0; margin-right: 8px; }
+.param-label { color: #8291a5; flex-shrink: 0; margin-right: 6px; font-weight: 500; }
 .param-value {
-  color: var(--text-primary); font-weight: 600; text-align: right;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px;
+  color: #243247; font-weight: 650; text-align: right;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 94px;
 }
 
 /* ========== XML Modal ========== */
@@ -2136,6 +2154,18 @@ html, body, #root {
 .sim-script-state { color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
 .sim-script-card.selected .sim-script-icon { background: #dcfce7; color: #16a34a; }
 .sim-selected-target { display: inline-block; max-width: 150px; margin-left: 6px; padding: 7px 10px; border: 1px solid #bfdbfe; border-radius: var(--radius-sm); background: #eff6ff; color: #2563eb; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.sim-connection-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 2px; padding: 7px 9px; border: 1px solid #d8e1e8; border-radius: var(--radius-sm); background: #f8fafc; color: #64748b; font-size: 11px; white-space: nowrap; vertical-align: middle; }
+.sim-connection-chip.online { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
+.sim-connection-dot { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; }
+.sim-connection-chip.online .sim-connection-dot { background: #22c55e; box-shadow: 0 0 5px #86efac; }
+.sim-connection-cpu { padding: 0 0 0 5px; border: 0; border-left: 1px solid currentColor; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: .9; }
+.sim-connection-memory { padding-left: 5px; border-left: 1px solid currentColor; font: inherit; opacity: .9; }
+.sim-cpu-popup { position: absolute; z-index: 850; top: calc(100% + 7px); right: 0; width: 264px; padding: 10px 11px 9px; border: 1px solid #bfdbfe; border-radius: 9px; background: rgba(255,255,255,.97); box-shadow: 0 10px 28px rgba(15,23,42,.2); color: #334155; }
+.sim-cpu-popup-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 11px; }.sim-cpu-popup-head span { color: #94a3b8; font: 10px monospace; }
+.sim-cpu-chart { display: block; width: 100%; height: 92px; border-radius: 5px; background: #f8fafc; overflow: visible; }
+.sim-cpu-grid { stroke: #e2e8f0; stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.sim-cpu-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }.sim-cpu-line.core-0 { stroke: #0ea5e9; }.sim-cpu-line.core-1 { stroke: #8b5cf6; }
+.sim-cpu-legend { display: flex; gap: 14px; margin-top: 7px; font: 10px monospace; }.sim-cpu-legend .core-0 { color: #0284c7; }.sim-cpu-legend .core-1 { color: #7c3aed; }
 
 .sim-submenu-empty {
   padding: 6px 10px;

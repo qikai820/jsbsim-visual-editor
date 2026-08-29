@@ -16,6 +16,7 @@ const paths: Record<ComponentType, string> = {
   flight_control: 'M4 6h16M7 6v5m10-5v9M4 11h6m4 4h6M7 15v4m10-8v8',
   input: 'M3 5h10v4h8v6h-8v4H3z M8 9v6m-3-3h6',
   output: 'M3 5h10v4h8v6h-8v4H3z M16 9l4 3-4 3',
+  uavcan: 'M5 5h14v14H5z M8 9h8M8 12h8M8 15h5 M3 8h2m14 0h2M3 16h2m14 0h2',
 };
 
 export default function AviationIcon({ type, size = 18 }: { type: ComponentType; size?: number }) {

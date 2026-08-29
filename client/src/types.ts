@@ -4,7 +4,7 @@ export type ComponentType =
   | 'fuselage' | 'wing' | 'htail' | 'vtail'
   | 'engine' | 'propeller'
   | 'landing_gear' | 'fuel_tank' | 'point_mass'
-  | 'inertia' | 'aero_coefficients' | 'system' | 'flight_control' | 'input' | 'output';
+  | 'inertia' | 'aero_coefficients' | 'system' | 'flight_control' | 'input' | 'output' | 'uavcan';
 
 export type SubFileType = 'engine' | 'thruster' | 'system';
 
@@ -70,6 +70,17 @@ export interface AircraftNodeData {
   componentType: ComponentType;
   params: Record<string, any>;
   [key: string]: any;
+}
+
+export type XmlFileCategory = 'main' | 'engine' | 'thruster' | 'system';
+
+export interface ProjectXmlFile {
+  id: string;
+  path: string;
+  category: XmlFileCategory;
+  originalXml: string;
+  currentXml: string;
+  dirty: boolean;
 }
 
 export type AircraftNode = Node<AircraftNodeData>;

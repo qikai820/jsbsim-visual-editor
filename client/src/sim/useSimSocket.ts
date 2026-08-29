@@ -23,6 +23,7 @@ export interface TaskTopEntry {
 
 export interface TaskTopSnapshot {
   tasks: TaskTopEntry[];
+  memory?: { total: number; used: number; free: number; percent: number };
 }
 
 /* NuttX sends the complete JSBSim tree in small UDP slices under

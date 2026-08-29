@@ -37,6 +37,7 @@ async function call(command: string, args: Record<string, any> = {}): Promise<an
     generate_subfile: { method: 'POST', path: '/api/generate-subfile' },
     parse_subfile: { method: 'POST', path: '/api/parse-subfile' },
     save_project: { method: 'POST', path: '/api/save' },
+    get_project_path: { method: 'POST', path: '/api/project-path' },
     load_project: { method: 'POST', path: '/api/load' },
     list_projects: { method: 'GET', path: '/api/projects' },
     generate_aircraft: { method: 'POST', path: '/api/generate-aircraft', bodyKey: 'data' },
@@ -112,9 +113,22 @@ export async function parseSubfile(xml: string, fileType: string): Promise<any> 
   return result;
 }
 
-export async function saveProject(filename: string, data: any): Promise<void> {
-  const result = await call('save_project', { filename, ...data });
+export async function saveProject(filename: string, data: any): Promise<{ path?: string }> {
+  let result: any;
+  if (isTauri) {
+    await ensureTauri();
+    result = await tauriInvoke('save_project', { filename, data });
+  } else {
+    result = await call('save_project', { filename, ...data });
+  }
   if (result.error) throw new Error(result.error);
+  return result;
+}
+
+export async function getProjectPath(filename: string): Promise<string> {
+  const result = await call('get_project_path', { filename });
+  if (result.error) throw new Error(result.error);
+  return result.path || filename;
 }
 
 export async function loadProject(filename: string): Promise<any> {
@@ -186,7 +200,7 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; memory?: { total: number; used: number; free: number; percent: number } }> {
   return call('sim_status');
 }
 
@@ -221,6 +235,20 @@ export async function ftpListEngineCatalog(): Promise<{ engines: string[]; prope
     engines: (result.engines || []).map((file: any) => String(file.path || file).replace(/^engine\//, '')),
     propellers: (result.propellers || []).map((file: any) => String(file.path || file).replace(/^engine\//, '')),
   };
+}
+
+export async function ftpListDsdl(): Promise<string[]> {
+  const result = await call('ftp_list_dsdl');
+  return result.files || [];
+}
+
+export async function ftpDownloadDsdl(file: string): Promise<string> {
+  const result = await call('ftp_download_dsdl', { file });
+  return result.content || '';
+}
+
+export async function ftpUploadFile(path: string, content: string): Promise<{ path: string; uploaded: boolean }> {
+  return call('ftp_upload_file', { path, content });
 }
 
 export async function ftpDownloadScript(file: string): Promise<{ file: string; xml: string; source: string }> {

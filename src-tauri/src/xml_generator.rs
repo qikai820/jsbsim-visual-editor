@@ -1391,6 +1391,14 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
             })
             .unwrap_or("unknown");
 
+        // A file-backed system is represented in the aircraft XML only by
+        // its reference. Its channels/properties are serialized into the
+        // referenced systems XML by the per-file generator.
+        if p.get("file").and_then(|v| v.as_str()).map(|v| !v.is_empty()).unwrap_or(false) {
+            lines.push(xml_element("system", &[("file", file)], None, 1));
+            continue;
+        }
+
         let properties = p.get("properties");
         let mut body = String::new();
 
@@ -1451,6 +1459,11 @@ fn build_flight_control(groups: &std::collections::HashMap<String, Vec<&Value>>)
                     .and_then(|v| v.as_str())
             })
             .unwrap_or("");
+
+        if !file.is_empty() {
+            lines.push(xml_element("flight_control", &[("file", file)], None, 1));
+            continue;
+        }
 
         let mut body = String::new();
 
@@ -1612,10 +1625,11 @@ fn build_aerodynamics(groups: &std::collections::HashMap<String, Vec<&Value>>) -
 }
 
 fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
-    let output_nodes = match groups.get("output") {
-        Some(n) => n,
-        None => return String::new(),
-    };
+    let mut output_nodes = groups.get("output").cloned().unwrap_or_default();
+    output_nodes.extend(groups.get("uavcan").cloned().unwrap_or_default());
+    if output_nodes.is_empty() {
+        return String::new();
+    }
 
     let mut blocks = vec![];
     for out in output_nodes {
@@ -1674,6 +1688,22 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
         if let Some(t) = p.get("type").and_then(|v| v.as_str()) {
             if !t.is_empty() {
                 attrs.push(("type".to_string(), t.to_string()));
+            }
+        }
+        let component_type = out
+            .get("data")
+            .and_then(|d| d.get("componentType"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if component_type == "uavcan" {
+            attrs.push(("type".to_string(), "UAVCAN".to_string()));
+            for key in ["interface", "node_id", "subject_id", "dsdl_path", "dsdl_type", "sensor_type"] {
+                if let Some(value) = p.get(key) {
+                    let text = val_to_str(value);
+                    if !text.is_empty() {
+                        attrs.push((key.to_string(), text));
+                    }
+                }
             }
         }
         if let Some(port) = p.get("port") {
@@ -1925,6 +1955,13 @@ pub fn generate_subfile_xml(
                 if !prop.is_empty() {
                     content.push(xml_element("property", &[], Some(prop), 1));
                 }
+            }
+            // System signal-flow edits live in `channels`.  Omitting them
+            // produced an almost empty child XML and encouraged callers to
+            // regenerate the aircraft XML instead.
+            let channels = serialize_channels_xml(params);
+            if !channels.trim().is_empty() {
+                content.push(channels);
             }
             let body = if content.is_empty() {
                 None

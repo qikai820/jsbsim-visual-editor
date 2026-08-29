@@ -8,7 +8,50 @@ import AeroEditor from './AeroEditor';
 import TableChart from './expression/TableChart';
 import ExpressionEditor from './expression/ExpressionEditor';
 import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
-import { ftpListSystems, ftpListEngineCatalog } from '../utils/tauriApi';
+import { ftpListSystems, ftpListEngineCatalog, ftpListDsdl, ftpDownloadDsdl } from '../utils/tauriApi';
+
+const UAVCAN_SENSOR_MAPPINGS: Record<string, { labels: string[]; properties: string[] }> = {
+  IMU: {
+    labels: ['UAVCAN 加速度 X', 'UAVCAN 加速度 Y', 'UAVCAN 加速度 Z'],
+    properties: ['sensor/imu/accelX_mps2', 'sensor/imu/accelY_mps2', 'sensor/imu/accelZ_mps2'],
+  },
+  MAG: {
+    labels: ['UAVCAN 磁场 X', 'UAVCAN 磁场 Y', 'UAVCAN 磁场 Z'],
+    properties: ['sensor/imu/magX_nT', 'sensor/imu/magY_nT', 'sensor/imu/magZ_nT'],
+  },
+  BAROMETER: {
+    labels: ['UAVCAN 绝对气压'],
+    properties: ['sensor/baro/pressure_hpa'],
+  },
+  GPS: {
+    labels: ['UAVCAN GPS 纬度', 'UAVCAN GPS 经度', 'UAVCAN GPS 高度', 'UAVCAN GPS 北向速度', 'UAVCAN GPS 东向速度', 'UAVCAN GPS 地向速度'],
+    properties: ['sensor/gps/lat_rad', 'sensor/gps/long_rad', 'sensor/gps/alt_m', 'sensor/gps/vNorth_mps', 'sensor/gps/vEast_mps', 'sensor/gps/vDown_mps'],
+  },
+  AIRSPEED: {
+    labels: ['UAVCAN 空速'],
+    properties: ['velocities/vc-kts'],
+  },
+};
+
+const UAVCAN_DSDL_TYPES: Record<string, string> = {
+  IMU: 'uavcan.si.sample.acceleration.Vector3.1.0',
+  MAG: 'uavcan.si.sample.magnetic_flux_density.Vector3.1.0',
+  BAROMETER: 'uavcan.si.sample.pressure.Scalar.1.0',
+  GPS: 'reg.udral.physics.kinematics.geodetic.PointStateVarTs.0.1',
+  AIRSPEED: 'uavcan.si.sample.velocity.Scalar.1.0',
+};
+
+function parseDsdlFields(source: unknown): string[] {
+  if (typeof source !== 'string' || !source.trim()) return [];
+  const fields: string[] = [];
+  for (const line of source.split(/\r?\n/)) {
+    const text = line.replace(/#.*$/, '').trim();
+    if (!text || text.startsWith('@') || text.startsWith('---') || text.startsWith('=') || text.includes('=') || text.startsWith('[')) continue;
+    const match = text.match(/(?:[A-Za-z_][\w.<>]*(?:\[[^\]]*\])?|void\d+)\s+([A-Za-z_]\w*)$/);
+    if (match && !fields.includes(match[1])) fields.push(match[1]);
+  }
+  return fields;
+}
 
 // Normalize param value: could be a plain number or { value, unit }
 function getNumVal(p: any): number {
@@ -34,23 +77,53 @@ export default function PropertyPanel() {
   const [systemFiles, setSystemFiles] = useState<string[]>([]);
   const [engineFiles, setEngineFiles] = useState<string[]>([]);
   const [propellerFiles, setPropellerFiles] = useState<string[]>([]);
+  const [dsdlFiles, setDsdlFiles] = useState<string[]>([]);
+  const [dsdlLoading, setDsdlLoading] = useState(false);
+  const [dsdlError, setDsdlError] = useState('');
+  const selectedNode = nodes.find(node => node.id === selectedNodeId);
 
   useEffect(() => {
+    if (selectedNode?.data.componentType !== 'system' && selectedNode?.data.componentType !== 'flight_control') {
+      setSystemFiles([]);
+      return;
+    }
     ftpListSystems()
       .then(files => setSystemFiles(files
         .filter(file => file.toLowerCase().endsWith('.xml'))
         .map(file => file.replace(/\.xml$/i, ''))
         .sort()))
       .catch(() => setSystemFiles([]));
-  }, []);
+  }, [selectedNode?.data.componentType]);
   useEffect(() => {
+    if (selectedNode?.data.componentType !== 'uavcan') {
+      setDsdlFiles([]);
+      setDsdlError('');
+      setDsdlLoading(false);
+      return;
+    }
+    setDsdlLoading(true);
+    setDsdlError('');
+    ftpListDsdl()
+      .then(setDsdlFiles)
+      .catch(error => {
+        setDsdlFiles([]);
+        setDsdlError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setDsdlLoading(false));
+  }, [selectedNode?.data.componentType]);
+  useEffect(() => {
+    if (selectedNode?.data.componentType !== 'engine' && selectedNode?.data.componentType !== 'propeller') {
+      setEngineFiles([]);
+      setPropellerFiles([]);
+      return;
+    }
     ftpListEngineCatalog().then(({ engines, propellers }) => {
       const clean = (files: string[]) => files.filter(file => file.toLowerCase().endsWith('.xml'))
         .map(file => file.replace(/\.xml$/i, '')).sort();
       setEngineFiles(clean(engines));
       setPropellerFiles(clean(propellers));
     }).catch(() => { setEngineFiles([]); setPropellerFiles([]); });
-  }, []);
+  }, [selectedNode?.data.componentType]);
 
   if (editingSubFileId) return <SubFileEditor />;
 
@@ -221,6 +294,14 @@ export default function PropertyPanel() {
   }
 
   const handleChange = (key: string, value: any) => {
+    if (node.data.componentType === 'uavcan' && key === 'sensor_type') {
+      const mapping = UAVCAN_SENSOR_MAPPINGS[value];
+      updateNodeParams(node.id, {
+        sensor_type: value,
+        ...(mapping ? { properties: mapping.properties.join(','), dsdl_type: UAVCAN_DSDL_TYPES[value] } : {}),
+      });
+      return;
+    }
     updateNodeParams(node.id, { [key]: value });
   };
 
@@ -428,6 +509,73 @@ export default function PropertyPanel() {
           return true;
         })
         .map(([key, paramDef]) => {
+          if (node.data.componentType === 'uavcan' && key === 'properties') {
+            const sensorType = String(node.data.params.sensor_type || 'CUSTOM');
+            const preset = UAVCAN_SENSOR_MAPPINGS[sensorType];
+            const dsdlFields = parseDsdlFields(node.data.params.dsdl_source);
+            const values = String(node.data.params.properties || '')
+              .split(',').map(value => value.trim()).filter(Boolean);
+            const mappingLabels = dsdlFields.length > 0 ? dsdlFields.map(field => `DSDL · ${field}`) : (preset?.labels || []);
+            const count = mappingLabels.length || Math.max(values.length, 1);
+            const updateMapping = (index: number, value: string) => {
+              const next = Array.from({ length: count }, (_, i) => values[i] || preset?.properties[i] || '');
+              next[index] = value;
+              updateNodeParams(node.id, { properties: next.join(',') });
+            };
+            return (
+              <div className="field-row" key={key}>
+                <label>{paramDef.label}</label>
+                {Array.from({ length: count }, (_, index) => (
+                  <div className="field-row" key={`${key}-${index}`}>
+                    <label>{mappingLabels[index] || `DSDL 字段 ${index + 1}`}</label>
+                    <input type="text"
+                      value={values[index] || preset?.properties[index] || ''}
+                      placeholder="JSBSim 传感器输出变量"
+                      onChange={event => updateMapping(index, event.target.value)} />
+                  </div>
+                ))}
+                <small className="dsdl-loaded-state">{dsdlFields.length > 0 ? `已根据 DSDL 解析 ${dsdlFields.length} 个字段` : '按预设字段顺序映射 JSBSim 传感器输出变量'}</small>
+              </div>
+            );
+          }
+          if (node.data.componentType === 'uavcan' && key === 'dsdl_path') {
+            const currentPath = String(node.data.params[key] || '');
+            return (
+              <div className="field-row" key={key}>
+                <label>{paramDef.label}</label>
+                <select value={currentPath} disabled={dsdlLoading} onChange={async e => {
+                  const path = e.target.value;
+                  if (!path) return updateNodeParams(node.id, { dsdl_path: '', dsdl_source: '' });
+                  const parts = path.replace(/\.(dsdl|uavcan)$/i, '').split('/');
+                  const namespaceIndex = parts.findIndex(part => part === 'uavcan' || part === 'reg' || part === 'com');
+                  const typeParts = parts.slice(namespaceIndex >= 0 ? namespaceIndex : 0);
+                  typeParts[typeParts.length - 1] = typeParts[typeParts.length - 1].replace(/^\d+\./, '');
+                  try {
+                    const content = await ftpDownloadDsdl(path);
+                    updateNodeParams(node.id, { dsdl_path: path, dsdl_type: typeParts.join('.'), dsdl_source: content });
+                  } catch {
+                    updateNodeParams(node.id, { dsdl_path: path, dsdl_type: typeParts.join('.') });
+                  }
+                }}>
+                  <option value="">{dsdlLoading ? '正在读取 NuttX DSDL…' : '从 NuttX SD 卡选择 DSDL'}</option>
+                  {currentPath && !dsdlFiles.includes(currentPath) && <option value={currentPath}>{currentPath}（当前值）</option>}
+                  {dsdlFiles.map(file => <option key={file} value={file}>{file}</option>)}
+                </select>
+                <label className="dsdl-load-button">
+                  从本机补充加载 DSDL
+                  <input type="file" accept=".dsdl" hidden onChange={async e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    updateNodeParams(node.id, { dsdl_path: file.name, dsdl_source: await file.text() });
+                    e.target.value = '';
+                  }} />
+                </label>
+                {node.data.params.dsdl_source && <small className="dsdl-loaded-state">已从 DSDL 加载：{node.data.params.dsdl_path} · {String(node.data.params.dsdl_source).length} bytes</small>}
+                {!dsdlLoading && dsdlError && <small className="dsdl-loaded-state">NuttX DSDL 读取失败：{dsdlError}</small>}
+                {!dsdlLoading && !dsdlError && dsdlFiles.length === 0 && <small className="dsdl-loaded-state">NuttX `/mnt/sdcard/dsdl/px4` 中未发现 DSDL</small>}
+              </div>
+            );
+          }
           if (node.data.componentType === 'system' && key === 'file') {
             return (
               <div className="field-row" key={key}>

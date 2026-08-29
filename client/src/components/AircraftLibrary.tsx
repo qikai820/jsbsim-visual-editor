@@ -60,6 +60,10 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
     try {
       const data = await loadAircraft(aircraft.id);
       onLoad(data);
+      // Loading a model into the editor also makes it the launch target.
+      // Keeping these as separate actions left simStart() without a model
+      // parameter even though the canvas already showed that aircraft.
+      onSelectForSimulation?.(aircraft.id);
       onClose();
     } catch (err: any) {
       const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || '未知错误');

@@ -3,7 +3,7 @@ import {
   applyNodeChanges, applyEdgeChanges, addEdge,
   type Node, type Edge, type OnNodesChange, type OnEdgesChange, type Connection,
 } from '@xyflow/react';
-import { AircraftNodeData, ComponentType, SubFile, SubFileType } from '../types';
+import { AircraftNodeData, ComponentType, ProjectXmlFile, SubFile, SubFileType } from '../types';
 import { getComponentDef } from '../utils/componentDefs';
 
 interface FlowState {
@@ -12,6 +12,7 @@ interface FlowState {
   aircraft: { name: string; version: string; release: string; type?: 'fixed_wing' | 'helicopter' | 'multirotor' };
   selectedNodeId: string | null;
   subFiles: SubFile[];
+  xmlFiles: ProjectXmlFile[];
   editingSubFileId: string | null;
   focusedNodeId: string | null;
 
@@ -25,7 +26,7 @@ interface FlowState {
   setSelectedNode: (id: string | null) => void;
   setFocusedNodeId: (id: string | null) => void;
   setAircraft: (aircraft: { name: string; version: string; release: string }) => void;
-  loadProject: (data: { nodes: Node<AircraftNodeData>[]; edges: Edge[]; aircraft: any; subFiles?: SubFile[] }) => void;
+  loadProject: (data: { nodes: Node<AircraftNodeData>[]; edges: Edge[]; aircraft: any; subFiles?: SubFile[]; xmlFiles?: ProjectXmlFile[] }) => void;
   clearAll: () => void;
   restoreLayout: () => void;
 
@@ -37,6 +38,48 @@ interface FlowState {
 
 let nodeCounter = 0;
 let subFileCounter = 0;
+
+export function resolveNodeOwnedPath(node: Node<AircraftNodeData> | undefined): string {
+  if (!node) return '';
+  const type = node.data.componentType;
+  if (!['system', 'flight_control', 'engine', 'propeller'].includes(type)) return '';
+  const params = node.data.params || {};
+  let raw = String(params.referencePath || params._source_file || params.file || '').trim();
+  // v2 cached projects expanded referenced files but discarded their `file`
+  // attribute. Recover the well-known F450 module ownership from the module
+  // identity so editing an old cached sensor cannot fall back to F450.xml.
+  if (!raw && (type === 'system' || type === 'flight_control')) {
+    const identity = `${node.data.label || ''} ${params.name || ''}`.toLowerCase();
+    if (identity.includes('sensor') && identity.includes('imu')) raw = 'SensorImu.xml';
+    else if (identity.includes('sensor') && (identity.includes('baro') || identity.includes('barometer'))) raw = 'SensorBaro.xml';
+    else if (identity.includes('sensor') && identity.includes('gps')) raw = 'SensorGps.xml';
+    else if (identity.includes('effectors')) raw = 'Effectors.xml';
+    else if (type === 'flight_control' && (identity.includes('fcs') || identity.includes('flight'))) raw = 'FlightControl.xml';
+  }
+  if (!raw) return '';
+  const withExt = raw.toLowerCase().endsWith('.xml') ? raw : `${raw}.xml`;
+  return withExt.includes('/') ? withExt
+    : type === 'system' || type === 'flight_control' ? `systems/${withExt}` : `engine/${withExt}`;
+}
+
+function normalizeNodeOwnership(node: Node<AircraftNodeData>): Node<AircraftNodeData> {
+  const type = node.data.componentType;
+  const path = resolveNodeOwnedPath(node);
+  if (!path) return node;
+  const params = node.data.params || {};
+  const category = type === 'system' || type === 'flight_control' ? 'system' : 'engine';
+  return {
+    ...node,
+    data: {
+      ...node.data,
+      params: {
+        ...params,
+        referencePath: path,
+        source: { fileId: `${category}:${path}`, path, category },
+      },
+    },
+  };
+}
 
 // Convert aircraft's physical coordinates into a compact display layout while
 // retaining their relative arrangement.  A minimum grid spacing prevents the
@@ -88,15 +131,15 @@ function compactDisplayNodes(nodes: Node<AircraftNodeData>[]): Node<AircraftNode
   // physical location; this avoids converting the aircraft into a row/grid.
   const placed: typeof sorted = [];
   const overlaps = (x: number, y: number) => placed.some(item =>
-    Math.abs(x - item.x) < 230 && Math.abs(y - item.y) < 125);
+    Math.abs(x - item.x) < 188 && Math.abs(y - item.y) < 100);
   for (const current of sorted) {
     const baseX = current.x, baseY = current.y;
     if (overlaps(baseX, baseY)) {
       for (let step = 1; step <= 48; step++) {
         const ring = Math.ceil(step / 8);
         const angle = (step % 8) * Math.PI / 4;
-        const candidateX = Math.max(20, baseX + Math.cos(angle) * ring * 70);
-        const candidateY = Math.max(20, baseY + Math.sin(angle) * ring * 55);
+        const candidateX = Math.max(20, baseX + Math.cos(angle) * ring * 58);
+        const candidateY = Math.max(20, baseY + Math.sin(angle) * ring * 45);
         if (!overlaps(candidateX, candidateY)) {
           current.x = candidateX;
           current.y = candidateY;
@@ -107,11 +150,11 @@ function compactDisplayNodes(nodes: Node<AircraftNodeData>[]): Node<AircraftNode
     placed.push(current);
   }
   const positions = new Map(sorted.map(item => [item.node.id, { x: item.x, y: item.y }]));
-  const aircraftRight = Math.max(...sorted.map(item => item.x)) + 300;
+  const aircraftRight = Math.max(...sorted.map(item => item.x)) + 220;
   unlocated.forEach((node, index) => {
     positions.set(node.id, {
-      x: aircraftRight + (index % 2) * 260,
-      y: 60 + Math.floor(index / 2) * 140,
+      x: aircraftRight + (index % 2) * 205,
+      y: 60 + Math.floor(index / 2) * 108,
     });
   });
   return nodes.map(n => ({
@@ -126,6 +169,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   aircraft: { name: 'New Aircraft', version: '2.0', release: 'PRODUCTION' },
   selectedNodeId: null,
   subFiles: [],
+  xmlFiles: [],
   editingSubFileId: null,
   focusedNodeId: null,
 
@@ -142,6 +186,22 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const source = state.nodes.find(n => n.id === connection.source);
     const target = state.nodes.find(n => n.id === connection.target);
     const nextEdges = addEdge({ ...connection, type: 'smoothstep', animated: true }, state.edges);
+
+    // A sensor-to-UAVCAN connection selects a standard DSDL type and copies
+    // the corresponding JSBSim property mapping into the protocol node.
+    if (source && target?.data.componentType === 'uavcan') {
+      const sourceName = `${source.data.label || ''} ${source.data.params?.file || ''}`.toLowerCase();
+      const sensorType = sourceName.includes('gps') ? 'GPS' : sourceName.includes('baro') ? 'BAROMETER' : sourceName.includes('mag') ? 'MAG' : sourceName.includes('airspeed') ? 'AIRSPEED' : 'IMU';
+      const presets: Record<string, { dsdl_type: string; properties: string }> = {
+        IMU: { dsdl_type: 'uavcan.si.sample.acceleration.Vector3.1.0', properties: 'sensor/imu/accelX_mps2,sensor/imu/accelY_mps2,sensor/imu/accelZ_mps2' },
+        MAG: { dsdl_type: 'uavcan.si.sample.magnetic_flux_density.Vector3.1.0', properties: 'sensor/imu/magX_nT,sensor/imu/magY_nT,sensor/imu/magZ_nT' },
+        BAROMETER: { dsdl_type: 'uavcan.si.sample.pressure.Scalar.1.0', properties: 'sensor/baro/pressure_hpa' },
+        GPS: { dsdl_type: 'reg.udral.physics.kinematics.geodetic.PointStateVarTs.0.1', properties: 'sensor/gps/lat_rad,sensor/gps/long_rad,sensor/gps/alt_m,sensor/gps/vNorth_mps,sensor/gps/vEast_mps,sensor/gps/vDown_mps' },
+        AIRSPEED: { dsdl_type: 'uavcan.si.sample.velocity.Scalar.1.0', properties: 'velocities/vc-kts' },
+      };
+      set({ edges: nextEdges, nodes: state.nodes.map(n => n.id === target.id ? { ...n, data: { ...n.data, params: { ...n.data.params, sensor_type: sensorType, ...presets[sensorType] } } } : n) });
+      return;
+    }
 
     // A sensor-to-HIL connection is also a configuration action.  Copy the
     // standard sensor-module property paths into the selected protocol.
@@ -213,11 +273,16 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   updateNodeParams: (id, params) => {
-    set({
-      nodes: get().nodes.map(n =>
-        n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...params } } } : n
-      ),
-    });
+    const state = get();
+    const node = state.nodes.find(n => n.id === id);
+    const nextNodes = state.nodes.map(n =>
+      n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...params } } } : n
+    );
+    const sourcePath = resolveNodeOwnedPath(node) || String(node?.data.params?.source?.path || '').trim();
+    const xmlFiles = sourcePath
+      ? state.xmlFiles.map(file => file.path === sourcePath ? { ...file, dirty: true } : file)
+      : state.xmlFiles;
+    set({ nodes: nextNodes, xmlFiles });
   },
 
   restoreLayout: () => {
@@ -231,11 +296,13 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   setAircraft: (aircraft) => set({ aircraft }),
 
   loadProject: (data) => {
+    const ownedNodes = data.nodes.map(normalizeNodeOwnership);
     set({
-      nodes: compactDisplayNodes(data.nodes),
+      nodes: (data as any).preserveLayout ? ownedNodes : compactDisplayNodes(ownedNodes),
       edges: data.edges,
       aircraft: data.aircraft || { name: 'Loaded Aircraft', version: '2.0', release: 'PRODUCTION' },
       subFiles: data.subFiles || [],
+      xmlFiles: (data as any).xmlFiles || [],
       selectedNodeId: null,
       editingSubFileId: null,
       focusedNodeId: null,
@@ -244,7 +311,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     nodeCounter = maxId;
   },
 
-  clearAll: () => set({ nodes: [], edges: [], selectedNodeId: null, subFiles: [], editingSubFileId: null, focusedNodeId: null }),
+  clearAll: () => set({ nodes: [], edges: [], selectedNodeId: null, subFiles: [], xmlFiles: [], editingSubFileId: null, focusedNodeId: null }),
 
   addSubFile: (fileType, fileName) => {
     const id = `sf-${++subFileCounter}`;
@@ -263,7 +330,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       defaultData.properties = [];
     }
     const newFile: SubFile = { id, fileName, fileType, data: defaultData };
-    set({ subFiles: [...get().subFiles, newFile] });
+    const category = fileType === 'system' ? 'system' : fileType === 'thruster' ? 'thruster' : 'engine';
+    const path = `${category === 'system' ? 'systems' : 'engine'}/${fileName.replace(/\.xml$/i, '')}.xml`;
+    const xmlFile: ProjectXmlFile = { id: `${category}:${path}`, path, category, originalXml: '', currentXml: '', dirty: true };
+    set({ subFiles: [...get().subFiles, newFile], xmlFiles: [...get().xmlFiles, xmlFile] });
   },
 
   removeSubFile: (id) => {
@@ -274,11 +344,18 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   updateSubFile: (id, data) => {
-    set({
-      subFiles: get().subFiles.map(f =>
-        f.id === id ? { ...f, ...data, data: { ...f.data, ...(data.data || {}) } } : f
-      ),
-    });
+    const state = get();
+    const subFiles = state.subFiles.map(f =>
+      f.id === id ? { ...f, ...data, data: { ...f.data, ...(data.data || {}) } } : f
+    );
+    const changed = subFiles.find(f => f.id === id);
+    const xmlFiles = changed ? state.xmlFiles.map(file => {
+      const path = file.path.split('/').pop()?.replace(/\.xml$/i, '');
+      return path === changed.fileName.replace(/\.xml$/i, '')
+        ? { ...file, dirty: true }
+        : file;
+    }) : state.xmlFiles;
+    set({ subFiles, xmlFiles });
   },
 
   setEditingSubFile: (id) => set({ editingSubFileId: id, selectedNodeId: null }),

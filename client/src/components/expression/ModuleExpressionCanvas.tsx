@@ -679,15 +679,15 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   }, [editingExprId, updateComponent]);
 
   // ── Add / delete components (signal mode) ──
-  const handleAddComponent = useCallback((type: string) => {
+  const handleAddComponent = useCallback((type: string, dropPosition?: { x: number; y: number }) => {
     const meta = COMPONENT_META[type] || { label: type, icon: '•', color: '#64748b' };
     const id = `c-new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const inputs = SINGLE_INPUT_TYPES.has(type) ? [''] : ['', ''];
     const compProps: any = {};
     if (type === 'pure_gain') compProps.gain = { value: '1', attrs: {} };
     if (type === 'pid') { compProps.kp = { value: '1', attrs: {} }; compProps.ki = { value: '0', attrs: {} }; compProps.kd = { value: '0', attrs: {} }; }
-    let position = { x: 400, y: 200 };
-    if (rfInstance.current && rfWrapper.current) {
+    let position = dropPosition || { x: 400, y: 200 };
+    if (!dropPosition && rfInstance.current && rfWrapper.current) {
       const b = rfWrapper.current.getBoundingClientRect();
       const p = rfInstance.current.screenToFlowPosition({ x: b.width / 2, y: b.height / 2 });
       position = { x: p.x + (Math.random() - 0.5) * 60, y: p.y + (Math.random() - 0.5) * 60 };
@@ -736,6 +736,19 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     commitSignal(next);
     setSelectedNodeId(null);
   }, [selectedNodeId, commitSignal, expandedFnId, expSync]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (!selectedNodeId) return;
+      event.preventDefault();
+      handleDelete();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedNodeId, handleDelete]);
 
   // ── Expr-mode add/edit (kept for aero / propulsion tables) ──
   const handleAddBlock = useCallback((kind: string) => {
@@ -827,6 +840,12 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           className="expr-canvas-wrapper"
           ref={rfWrapper}
           onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+          onDrop={(e) => {
+            const type = e.dataTransfer.getData('application/signal-component');
+            if (!type || !rfInstance.current) return;
+            e.preventDefault();
+            handleAddComponent(type, rfInstance.current.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+          }}
         >
           <SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, updateFanoutRoute, persistBendpoints }}>
           <ReactFlow
@@ -962,6 +981,11 @@ function SignalPalette({ onAdd }: { onAdd: (type: string) => void }) {
               className="expr-palette-item"
               style={{ borderLeftColor: meta.color }}
               onClick={() => onAdd(type)}
+              draggable
+              onDragStart={event => {
+                event.dataTransfer.setData('application/signal-component', type);
+                event.dataTransfer.effectAllowed = 'copy';
+              }}
               title={`添加 ${meta.label}`}
             >
               <span style={{ color: meta.color }}>{meta.icon}</span> {meta.label}

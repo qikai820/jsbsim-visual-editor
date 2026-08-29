@@ -833,6 +833,10 @@ fn parse_component_section(
         let mut params = json!({});
         if !file.is_empty() {
             params["file"] = json!(file);
+            // Preserve ownership for edits made in the signal-flow editor.
+            // This is an external systems/flight_control XML, not the
+            // aircraft's main XML.
+            params["_source_file"] = json!(file);
         }
 
         let sys_def = el;
@@ -1192,6 +1196,14 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
         let mut params = json!({});
         params["name"] = json!(get_attr(out, "name").unwrap_or("localhost"));
         params["type"] = json!(get_attr(out, "type").unwrap_or("SOCKET"));
+        let is_uavcan = get_attr(out, "type") == Some("UAVCAN");
+        if is_uavcan {
+            for key in ["interface", "node_id", "subject_id", "dsdl_path", "dsdl_type", "sensor_type"] {
+                if let Some(value) = get_attr(out, key) {
+                    params[key] = json!(value);
+                }
+            }
+        }
         if let Some(port) = get_attr(out, "port").and_then(|s| s.parse::<f64>().ok()) {
             params["port"] = json!(port);
         }
@@ -1229,7 +1241,7 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
             "type": "aircraftComponent",
             "data": {
                 "label": format!("Output: {}", name),
-                "componentType": "output",
+                "componentType": if is_uavcan { "uavcan" } else { "output" },
                 "params": params
             },
             "position": layout.next_position()
@@ -1631,9 +1643,79 @@ pub fn parse_xml(xml: &str, file_map: &HashMap<String, String>) -> Result<Value,
     // Apply location-based layout
     apply_location_layout(&mut nodes);
 
+    // Every parsed node gets an explicit file owner.  This metadata is part
+    // of the v3 project format; the generator can therefore keep referenced
+    // systems/engines out of the main aircraft XML.
+    let model_name = aircraft["name"].as_str().unwrap_or("aircraft").to_string();
+    let main_path = format!("aircraft/{model_name}/{model_name}.xml");
+    let mut owned_paths = std::collections::BTreeSet::new();
+    owned_paths.insert(main_path.clone());
+    for node in &mut nodes {
+        let data = node.get_mut("data").and_then(|v| v.as_object_mut());
+        let Some(data) = data else { continue };
+        let component_type = data.get("componentType").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let params = data.get_mut("params").and_then(|v| v.as_object_mut());
+        let Some(params) = params else { continue };
+        let source = params.get("_source_file").and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+        let path = source.map(|raw| {
+            let with_ext = if raw.to_ascii_lowercase().ends_with(".xml") { raw } else { format!("{raw}.xml") };
+            if with_ext.contains('/') {
+                with_ext
+            } else if component_type == "system" || component_type == "flight_control" {
+                format!("systems/{with_ext}")
+            } else if component_type == "engine" || component_type == "propeller" {
+                format!("engine/{with_ext}")
+            } else {
+                with_ext
+            }
+        }).unwrap_or_else(|| main_path.clone());
+        owned_paths.insert(path.clone());
+        if path != main_path {
+            params.insert("referencePath".into(), json!(path.clone()));
+        }
+        let category = if path == main_path { "main" } else if path.starts_with("engine/") { "engine" } else { "system" };
+        params.insert("source".into(), json!({
+            "fileId": format!("{category}:{path}"), "path": path, "category": category
+        }));
+    }
+    let xml_files: Vec<Value> = owned_paths.into_iter().map(|path| {
+        let category = if path == main_path { "main" } else if path.starts_with("systems/") { "system" } else if path.starts_with("engine/") { "engine" } else { "system" };
+        let original = if path == main_path {
+            xml.to_string()
+        } else {
+            file_map.get(&path).or_else(|| file_map.get(path.rsplit('/').next().unwrap_or(&path))).cloned().unwrap_or_default()
+        };
+        json!({ "id": format!("{category}:{path}"), "path": path, "category": category, "originalXml": original, "currentXml": original, "dirty": false })
+    }).collect();
+
     Ok(json!({
         "aircraft": aircraft,
         "nodes": nodes,
-        "edges": edges
+        "edges": edges,
+        "xmlFiles": xml_files,
+        "format": "jsbsim-model-project",
+        "version": 3
     }))
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn file_backed_sensor_is_owned_by_systems_xml() {
+        let xml = r#"<?xml version="1.0"?>
+<fdm_config name="F450" version="2.0" release="PRODUCTION">
+  <system file="SensorImu.xml"/>
+</fdm_config>"#;
+        let parsed = parse_xml(xml, &HashMap::new()).expect("parse F450");
+        let node = parsed["nodes"].as_array().unwrap().iter()
+            .find(|node| node["data"]["componentType"] == "system")
+            .expect("system node");
+        assert_eq!(node["data"]["params"]["referencePath"], "systems/SensorImu.xml");
+        assert_eq!(node["data"]["params"]["source"]["path"], "systems/SensorImu.xml");
+        assert_eq!(node["data"]["params"]["source"]["category"], "system");
+    }
 }

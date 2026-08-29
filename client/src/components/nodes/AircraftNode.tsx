@@ -24,7 +24,7 @@ function AircraftNode({ data, selected }: NodeProps) {
 
   const isModule = nodeData.componentType === 'system' || nodeData.componentType === 'flight_control';
   const hasContent = isModule && nodeData.params?.channels && nodeData.params.channels !== '[]';
-  const nodeInputs = nodeData.componentType === 'output'
+  const nodeInputs = nodeData.componentType === 'uavcan' ? def.inputs : nodeData.componentType === 'output'
     ? (nodeData.params?.type === 'HIL_GPS'
       ? [{ id: 'gps', label: 'GPS' }]
       : nodeData.params?.type === 'HIL_SENSOR'
@@ -47,14 +47,14 @@ function AircraftNode({ data, selected }: NodeProps) {
           type="target"
           position={Position.Left}
           id={input.id}
-          style={{ top: `${30 + i * 25}px`, background: def.color }}
+          style={{ top: `${((i + 1) / (nodeInputs.length + 1)) * 100}%`, background: def.color }}
           title={input.label}
         />
       ))}
 
       {/* Header */}
       <div className="node-header" style={{ background: def.color }}>
-        <span className="node-icon"><AviationIcon type={nodeData.componentType} size={16} /></span>
+        <span className="node-icon"><AviationIcon type={nodeData.componentType} size={14} /></span>
         <span className="node-label">{nodeData.label}</span>
         {isModule && (
           <span className={`node-drill-badge ${hasContent ? '' : 'node-drill-badge-empty'}`} title="双击进入">
@@ -89,7 +89,7 @@ function AircraftNode({ data, selected }: NodeProps) {
           type="source"
           position={Position.Right}
           id={output.id}
-          style={{ top: `${30 + i * 25}px`, background: def.color }}
+          style={{ top: `${((i + 1) / (def.outputs.length + 1)) * 100}%`, background: def.color }}
           title={output.label}
         />
       ))}

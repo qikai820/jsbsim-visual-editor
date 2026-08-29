@@ -184,6 +184,12 @@ fn save_project(
 }
 
 #[tauri::command]
+fn get_project_path(app: tauri::AppHandle, filename: String) -> Result<serde_json::Value, String> {
+    let projects_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "path": projects_dir.join(filename).to_string_lossy() }))
+}
+
+#[tauri::command]
 fn load_project(
     app: tauri::AppHandle,
     filename: Option<String>,
@@ -194,8 +200,11 @@ fn load_project(
         .map_err(|e| e.to_string())?;
     let file_path = projects_dir.join(filename.unwrap_or_else(|| "project.json".into()));
     let data = std::fs::read_to_string(&file_path).map_err(|_| "Project not found".to_string())?;
-    let json: serde_json::Value =
+    let mut json: serde_json::Value =
         serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    if let Some(object) = json.as_object_mut() {
+        object.insert("_projectPath".into(), serde_json::json!(file_path.to_string_lossy()));
+    }
     Ok(json)
 }
 
@@ -266,10 +275,24 @@ fn load_aircraft(
 ) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let xml = ftp_sync::download_model(&aircraft_id)?;
-        let state = app.state::<AppState>();
-        let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
-        let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
-        return xml_parser::parse_xml(&xml, file_index);
+        let mut refs: Vec<ReferenceFile> = Vec::new();
+        let mut cursor = xml.as_str();
+        while let Some(start) = cursor.find("file=\"") {
+            cursor = &cursor[start + 6..];
+            let Some(end) = cursor.find('"') else { break };
+            let value = &cursor[..end];
+            let stem = value.trim_end_matches(".xml");
+            let candidates = [format!("systems/{stem}.xml"), format!("engine/{stem}.xml"), format!("aircraft/{aircraft_id}/{stem}.xml")];
+            for path in candidates {
+                if let Ok(content) = ftp_sync::download_path(&path) {
+                    refs.push(ReferenceFile { name: path, xml: content });
+                    break;
+                }
+            }
+            cursor = &cursor[end + 1..];
+        }
+        let result = parse_xml(app.clone(), xml, Some(refs))?;
+        return Ok(result);
     }
     let state = app.state::<AppState>();
     let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
@@ -443,20 +466,26 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
         let connected = client.is_connected();
+        let task_alive = client.jsbsim_task_alive();
         /* task_top and other auxiliary UDP packets do not contain a
          * lifecycle state.  Use the last full visual telemetry frame so a
          * STOP acknowledgement cannot be overwritten by a later task_top
          * packet and make the Start/Stop control flicker. */
         let latest = client.latest_sim_status();
-        let remote_state = client.lifecycle_state()
+        let remote_state = if task_alive == Some(false) {
+            "crashed".to_owned()
+        } else { client.lifecycle_state()
             .unwrap_or_else(|| if connected {
-                "running".to_owned()
+                "waiting".to_owned()
             } else {
                 "disconnected".to_owned()
-            });
+            }) };
         let model = latest.as_ref()
             .and_then(|value| value.get("model"))
             .and_then(|value| value.as_str());
+        let cpu = client.jsbsim_cpu_load();
+        let cpu_cores = client.cpu_core_loads();
+        let memory = client.memory_usage();
         return Ok(serde_json::json!({
             "external": true,
             "running": connected && (remote_state == "running" || remote_state == "paused"),
@@ -464,8 +493,12 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "stopped": remote_state == "stopped",
             "state": remote_state,
             "connected": connected,
+            "taskAlive": task_alive,
             "model": model,
             "packets": client.packet_count(),
+            "cpu": cpu,
+            "cpuCores": cpu_cores,
+            "memory": memory,
         }));
     }
     let state = app.state::<AppState>();
@@ -529,6 +562,23 @@ fn ftp_list_systems() -> Result<serde_json::Value, String> {
 fn ftp_list_engines() -> Result<serde_json::Value, String> {
     let (engines, propellers) = ftp_sync::list_engine_catalog()?;
     Ok(serde_json::json!({ "engines": engines, "propellers": propellers, "source": "nuttx-ftp" }))
+}
+
+#[tauri::command]
+fn ftp_list_dsdl() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({ "files": ftp_sync::list_dsdl_files()?, "root": "/mnt/sdcard/dsdl/px4", "source": "nuttx-ftp" }))
+}
+
+#[tauri::command]
+fn ftp_download_dsdl(file: String) -> Result<serde_json::Value, String> {
+    let content = ftp_sync::download_dsdl(&file)?;
+    Ok(serde_json::json!({ "file": file, "content": content, "source": "nuttx-ftp" }))
+}
+
+#[tauri::command]
+fn ftp_upload_file(path: String, content: String) -> Result<serde_json::Value, String> {
+    ftp_sync::upload_file(&path, &content)?;
+    Ok(serde_json::json!({ "path": path, "uploaded": true, "source": "nuttx-ftp" }))
 }
 
 #[tauri::command]
@@ -599,6 +649,7 @@ fn main() {
             generate_subfile,
             parse_subfile,
             save_project,
+            get_project_path,
             load_project,
             list_projects,
             generate_aircraft,
@@ -618,6 +669,9 @@ fn main() {
             ftp_download_model,
             ftp_list_systems,
             ftp_list_engines,
+            ftp_list_dsdl,
+            ftp_download_dsdl,
+            ftp_upload_file,
             ftp_download_script,
             ftp_upload_model,
         ])

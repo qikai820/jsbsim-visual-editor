@@ -440,8 +440,27 @@ pub fn load_aircraft(
         file_map.insert(no_ext.to_string(), content.clone());
     }
 
-    // Parse using the XML parser
-    crate::xml_parser::parse_xml(&main_xml, &file_map)
+    // Parse using the XML parser, then retain the complete source-file set
+    // for v3 project ownership and later per-file saves.
+    let mut result = crate::xml_parser::parse_xml(&main_xml, &file_map)?;
+    let mut project_files = vec![serde_json::json!({
+        "id": format!("main:aircraft/{}/{}", aircraft_id, main_file_name),
+        "path": format!("aircraft/{}/{}", aircraft_id, main_file_name),
+        "category": "main", "originalXml": main_xml.clone(), "currentXml": main_xml, "dirty": false
+    })];
+    for (name, content) in ref_files {
+        let category = if name.to_ascii_lowercase().contains("system") { "system" } else { "engine" };
+        project_files.push(serde_json::json!({
+            "id": format!("{}:{}", category, name), "path": name, "category": category,
+            "originalXml": content, "currentXml": content, "dirty": false
+        }));
+    }
+    if let Some(object) = result.as_object_mut() {
+        object.insert("xmlFiles".into(), serde_json::Value::Array(project_files));
+        object.insert("format".into(), serde_json::json!("jsbsim-model-project"));
+        object.insert("version".into(), serde_json::json!(3));
+    }
+    Ok(result)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

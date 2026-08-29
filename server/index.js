@@ -234,12 +234,17 @@ app.post('/api/save', (req, res) => {
   }
 });
 
+app.post('/api/project-path', (req, res) => {
+  res.json({ path: path.join(__dirname, '../projects', req.body.filename || 'project.json') });
+});
+
 // POST /api/load - Load JSON project from file
 app.post('/api/load', (req, res) => {
   try {
     const fs = require('fs');
     const filePath = path.join(__dirname, '../projects', req.body.filename || 'project.json');
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    data._projectPath = filePath;
     res.json(data);
   } catch (err) {
     res.status(404).json({ error: 'Project not found' });

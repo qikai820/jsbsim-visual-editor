@@ -41,6 +41,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [running, setRunning] = useState(false);
   const [external, setExternal] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [cpuLoad, setCpuLoad] = useState<number | null>(null);
+  const [cpuCores, setCpuCores] = useState<number[]>([]);
+  const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
+  const [cpuHistory, setCpuHistory] = useState<number[][]>([]);
+  const [cpuPopupOpen, setCpuPopupOpen] = useState(false);
+  const [remoteState, setRemoteState] = useState('disconnected');
   const [paused, setPaused] = useState(false);
   const [currentScript, setCurrentScript] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
@@ -62,7 +68,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   /* Once this UI has issued a lifecycle command, its successful result is
    * authoritative.  The NuttX bridge reports asynchronously over UDP and a
    * status poll must never alternate the Start/Stop button with stale frames. */
-  const localLifecycleControlRef = useRef(false);
+  const localLifecycleControlUntilRef = useRef(0);
+  const crashReportedRef = useRef(false);
+  const appendLog = useCallback((message: string) => {
+    const stamp = new Date().toLocaleTimeString();
+    onLog?.(`[${stamp}] ${message}`);
+  }, [onLog]);
 
   const loadLists = useCallback(async () => {
     try {
@@ -85,18 +96,45 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       const status = await simGetStatus();
       setExternal(!!status.external);
       setConnected(!!status.connected);
-      if (!localLifecycleControlRef.current) {
+      setCpuLoad(typeof status.cpu === 'number' ? status.cpu : null);
+      const cores = Array.isArray(status.cpuCores)
+        ? status.cpuCores.map((value: unknown) => Number(value)).filter(Number.isFinite)
+        : [];
+      setCpuCores(cores);
+      const remoteMemory = status.memory;
+      setMemory(remoteMemory && Number.isFinite(Number(remoteMemory.percent)) ? {
+        total: Number(remoteMemory.total) || 0,
+        used: Number(remoteMemory.used) || 0,
+        free: Number(remoteMemory.free) || 0,
+        percent: Number(remoteMemory.percent) || 0,
+      } : null);
+      if (cores.length) {
+        setCpuHistory(history => [...history, cores].slice(-100));
+      }
+      setRemoteState(status.state || (status.connected ? 'waiting' : 'disconnected'));
+      const remoteStopped = status.running === false &&
+        (status.connected === false || status.taskAlive === false || status.state === 'crashed' || status.state === 'stopped');
+      if (remoteStopped || Date.now() >= localLifecycleControlUntilRef.current) {
         setRunning(status.running);
         setPaused(!!status.paused);
         setPhase(status.state === 'paused' ? 'paused' :
           status.state === 'running' ? 'running' : 'idle');
+      }
+      if (status.taskAlive === false || status.state === 'crashed') {
+        if (!crashReportedRef.current) {
+          crashReportedRef.current = true;
+          setError('JSBSim 任务异常退出');
+          appendLog('检测到 NuttX 上的 JSBSim 任务已退出');
+        }
+      } else if (status.running) {
+        crashReportedRef.current = false;
       }
       setCurrentScript(status.script || null);
       setCurrentModel(status.model || null);
     } catch {
       // ignore
     }
-  }, []);
+  }, [appendLog]);
 
   // Refresh the remote lists only when the menu is opened.
   useEffect(() => {
@@ -112,7 +150,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // closed or the bridge state is changed by another client.
   useEffect(() => {
     checkStatus();
-    const id = setInterval(checkStatus, 1000);
+    const id = setInterval(checkStatus, 100);
     return () => clearInterval(id);
   }, [checkStatus]);
 
@@ -142,10 +180,6 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   }, [open]);
 
   const runBusy = parentLoading || loading;
-  const appendLog = useCallback((message: string) => {
-    const stamp = new Date().toLocaleTimeString();
-    onLog?.(`[${stamp}] ${message}`);
-  }, []);
   const phaseText: Record<SimPhase, string> = {
     idle: '已停止', starting: '正在启动', running: '运行中', stopping: '正在停止',
     restarting: '正在重新运行', pausing: '正在暂停', paused: '已暂停', resuming: '正在继续', loading: '正在加载模型',
@@ -168,12 +202,19 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     try {
       if (modelToSync && onSyncRemoteModel) {
         setPhase('loading');
-        const synced = await onSyncRemoteModel(modelToSync);
-        if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
-        else appendLog(`未检测到本地修改，直接运行 NuttX 模型: ${modelToSync}`);
+        try {
+          const synced = await onSyncRemoteModel(modelToSync);
+          if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
+          else appendLog(`未检测到本地修改，直接运行 NuttX 模型: ${modelToSync}`);
+        } catch (syncErr: any) {
+          // A failed optional upload must not prevent starting the model that
+          // is already present on NuttX. This is especially important after
+          // Stop: an FTP timeout used to leave the UI in "启动失败" forever.
+          appendLog(`模型同步失败，继续启动 NuttX 现有模型: ${syncErr?.message || syncErr}`);
+        }
       }
       const res = await simStart({ script, model: script ? modelToSync : model });
-      localLifecycleControlRef.current = true;
+      localLifecycleControlUntilRef.current = Date.now() + 3000;
       setPreparedTarget({ script: script || '', model: modelToSync || '' });
       setRunning(true);
       setPaused(false);
@@ -287,7 +328,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setError('');
     try {
       await simStop();
-      localLifecycleControlRef.current = true;
+      localLifecycleControlUntilRef.current = Date.now() + 3000;
       setRunning(false);
       setPaused(false);
       /* Restore a target only if another state change cleared the visible
@@ -325,7 +366,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setError('');
     try {
       await simRestart();
-      localLifecycleControlRef.current = true;
+      localLifecycleControlUntilRef.current = Date.now() + 3000;
       setRunning(true);
       setPaused(false);
       setPhase('running');
@@ -343,12 +384,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     try {
       if (paused) {
         await simResume();
-        localLifecycleControlRef.current = true;
+        localLifecycleControlUntilRef.current = Date.now() + 3000;
         setPaused(false);
         setPhase('running');
       } else {
         await simPause();
-        localLifecycleControlRef.current = true;
+        localLifecycleControlUntilRef.current = Date.now() + 3000;
         setPaused(true);
         setPhase('paused');
       }
@@ -364,7 +405,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   };
 
   const statusText = external
-    ? (!connected ? '外部 HIL 未连接' : phaseText[phase])
+    ? (!connected ? '等待连接' : remoteState === 'waiting' ? '已连接 · 等待开始' : phaseText[phase])
     : phaseText[phase];
 
   const handlePrimaryAction = () => {
@@ -403,6 +444,35 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {selectedTest ? '📋' : '🛩️'} {displayName}
         </span>
       )}
+      <span className={`sim-connection-chip ${connected ? 'online' : 'offline'}`} title="仿真机连接状态">
+        <span className="sim-connection-dot" />
+        {connected ? '已连接' : '等待连接'}
+        {external && cpuCores.length > 0 && (
+          <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
+            CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(0)}%`).join(' · ')}
+          </button>
+        )}
+        {external && memory && (
+          <span className="sim-connection-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
+            RAM {memory.percent.toFixed(1)}%
+          </span>
+        )}
+      </span>
+      {cpuPopupOpen && cpuCores.length > 0 && (
+        <div className="sim-cpu-popup">
+          <div className="sim-cpu-popup-head"><b>双核 CPU 利用率</b><span>10 Hz</span></div>
+          <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
+            {[25, 50, 75].map(value => <line key={value} x1="0" x2="240" y1={92-value*.92} y2={92-value*.92} className="sim-cpu-grid" />)}
+            {cpuCores.map((_, core) => {
+              const points = cpuHistory.map((sample, index) => `${cpuHistory.length < 2 ? 0 : index * 240 / (cpuHistory.length - 1)},${92 - Math.max(0, Math.min(100, sample[core] || 0)) * .92}`).join(' ');
+              return <polyline key={core} points={points} className={`sim-cpu-line core-${core}`} />;
+            })}
+          </svg>
+          <div className="sim-cpu-legend">
+            {cpuCores.map((value, core) => <span key={core} className={`core-${core}`}>CPU{core} <b>{value.toFixed(1)}%</b></span>)}
+          </div>
+        </div>
+      )}
 
       {open && (
         <div className="sim-dropdown">
@@ -411,6 +481,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             <div className="sim-status-info">
               <span className="sim-status-text">{statusText}</span>
               {displayName && <span className="sim-status-target" title={activeName}>{displayName}</span>}
+              {external && cpuLoad !== null && <span className="sim-status-target">CPU {cpuLoad.toFixed(1)}%</span>}
             </div>
           </div>
 

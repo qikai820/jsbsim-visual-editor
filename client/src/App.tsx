@@ -10,7 +10,7 @@ import Airplane3DViewer from './components/Airplane3DViewer';
 import LiveView from './components/LiveView';
 import FlightHud from './components/FlightHud';
 import { useSimSocket } from './sim/useSimSocket';
-import { useFlowStore } from './store/flowStore';
+import { resolveNodeOwnedPath, useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
 import { listenJsbsimLog } from './utils/tauriApi';
@@ -152,10 +152,13 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
 function AppContent() {
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
+  const [xmlChangeNotice, setXmlChangeNotice] = useState<string[]>([]);
+  const [modifiedXmlFiles, setModifiedXmlFiles] = useState<string[]>([]);
+  const xmlNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [logReservedHeight, setLogReservedHeight] = useState(82);
   const [dragType, setDragType] = useState<ComponentType | null>(null);
-  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
-  const [paletteWidth, setPaletteWidth] = useState(250);
+  const [paletteCollapsed, setPaletteCollapsed] = useState(() => localStorage.getItem('jsbsim-palette-collapsed') === 'true');
+  const [paletteWidth, setPaletteWidth] = useState(() => Number(localStorage.getItem('jsbsim-palette-width') || 250));
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLive, setShowLive] = useState(false);
@@ -164,10 +167,10 @@ function AppContent() {
   const logWindowRef = useRef<HTMLDivElement | null>(null);
   const followLogTailRef = useRef(true);
   const { telemetry, connected } = useSimSocket();
-  const [logPos, setLogPos] = useState({ x: 0, y: 0 });
+  const [logPos, setLogPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'));
   const logDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const [draggingLog, setDraggingLog] = useState(false);
-  const [hudPos, setHudPos] = useState({ x: 0, y: 0 });
+  const [hudPos, setHudPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
   const [draggingHud, setDraggingHud] = useState(false);
   const hudDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const undoStack = useRef<any[]>([]);
@@ -176,6 +179,22 @@ function AppContent() {
   const historyBurst = useRef<ReturnType<typeof setTimeout> | null>(null);
   const applyingHistory = useRef(false);
   const copiedNode = useRef<any>(null);
+
+  useEffect(() => { localStorage.setItem('jsbsim-palette-collapsed', String(paletteCollapsed)); }, [paletteCollapsed]);
+  useEffect(() => { localStorage.setItem('jsbsim-palette-width', String(paletteWidth)); }, [paletteWidth]);
+  useEffect(() => { localStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
+  useEffect(() => { localStorage.setItem('jsbsim-log-position', JSON.stringify(logPos)); }, [logPos]);
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const settings = (event as CustomEvent).detail || {};
+      setPaletteCollapsed(!!settings.paletteCollapsed);
+      setPaletteWidth(Number(settings.paletteWidth || 250));
+      setHudPos(settings.hudPosition || { x: 0, y: 0 });
+      setLogPos(settings.logPosition || { x: 0, y: 0 });
+    };
+    window.addEventListener('jsbsim-project-settings-loaded', restore);
+    return () => window.removeEventListener('jsbsim-project-settings-loaded', restore);
+  }, []);
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
@@ -190,14 +209,60 @@ function AppContent() {
 
   const snapshotProject = useCallback(() => {
     const state = useFlowStore.getState();
-    return { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles };
+    return { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles };
   }, []);
 
   useEffect(() => {
     historyCurrent.current = snapshotProject();
     return useFlowStore.subscribe(state => {
-      const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles };
+      const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles };
       if (applyingHistory.current || JSON.stringify(next) === JSON.stringify(historyCurrent.current)) return;
+      const previous = historyCurrent.current;
+      if (previous) {
+        const mainFile = `${state.aircraft.name || 'aircraft'}.xml`;
+        const files = new Set<string>();
+        if (JSON.stringify(previous.aircraft) !== JSON.stringify(next.aircraft) || JSON.stringify(previous.edges) !== JSON.stringify(next.edges)) files.add(mainFile);
+        const previousNodes = new Map((previous.nodes || []).map((node: any) => [node.id, node]));
+        if ((previous.nodes || []).length !== next.nodes.length) files.add(mainFile);
+        for (const node of next.nodes) {
+          const oldNode: any = previousNodes.get(node.id);
+          if (!oldNode || JSON.stringify(oldNode.data) === JSON.stringify(node.data)) continue;
+          const type = node.data?.componentType;
+          const rawSource = resolveNodeOwnedPath(node as any) || node.data?.params?.source?.path;
+          if (rawSource) {
+            const source = String(rawSource).includes('/') ? String(rawSource) :
+              (type === 'system' || type === 'flight_control' ? `systems/${rawSource}` :
+                type === 'engine' || type === 'propeller' ? `engine/${rawSource}` : String(rawSource));
+            files.add(source.toLowerCase().endsWith('.xml') ? source : `${source}.xml`);
+          }
+        }
+        const previousSubFiles = new Map((previous.subFiles || []).map((file: any) => [file.id, file]));
+        for (const file of next.subFiles) {
+          if (JSON.stringify(previousSubFiles.get(file.id)) !== JSON.stringify(file)) files.add(file.fileName.toLowerCase().endsWith('.xml') ? file.fileName : `${file.fileName}.xml`);
+        }
+        if ((previous.subFiles || []).length !== next.subFiles.length) {
+          const currentNames = next.subFiles.map(file => file.fileName.toLowerCase().endsWith('.xml') ? file.fileName : `${file.fileName}.xml`);
+          currentNames.forEach(file => files.add(file));
+          files.add(mainFile);
+        }
+        if (files.size) {
+          const changed = Array.from(files);
+          setXmlChangeNotice(changed);
+          // An external system edit supersedes stale main-file notices left
+          // by an earlier edit in the same session. Otherwise the toast can
+          // keep showing aircraft/F450/F450.xml even though the current edit
+          // belongs to systems/SensorImu.xml.
+          const hasExternalChange = changed.some(file => !file.endsWith(`${mainFile}`) && !file.endsWith(`/${mainFile}`));
+          setModifiedXmlFiles(current => {
+            const cleaned = hasExternalChange
+              ? current.filter(file => !file.endsWith(`${mainFile}`) && !file.endsWith(`/${mainFile}`))
+              : current;
+            return Array.from(new Set([...cleaned, ...changed]));
+          });
+          if (xmlNoticeTimer.current) clearTimeout(xmlNoticeTimer.current);
+          xmlNoticeTimer.current = setTimeout(() => setXmlChangeNotice([]), 3600);
+        }
+      }
       if (!historyBurst.current && historyCurrent.current) undoStack.current.push(historyCurrent.current);
       redoStack.current = [];
       historyCurrent.current = next;
@@ -365,6 +430,10 @@ function AppContent() {
       ? focusedNode
       : null;
   const focusedAero = focusedModule?.data.componentType === 'aero_coefficients';
+  const focusedXmlPath = (() => {
+    if (!focusedModule) return '';
+    return resolveNodeOwnedPath(focusedModule as any) || String(focusedModule.data.params?.source?.path || '');
+  })();
   let focusedChannels: any[] = [];
   let focusedCoefficients: any[] = [];
   let focusedLayout: Record<string, { x: number; y: number }> | undefined;
@@ -393,15 +462,21 @@ function AppContent() {
     <div className="app">
       <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)}
         onUndo={handleUndo} onRedo={handleRedo} onCopy={handleCopy} onPaste={handlePaste}
+        modifiedXmlFiles={modifiedXmlFiles} onSaveComplete={savedFiles => setModifiedXmlFiles(current => savedFiles ? current.filter(file => !savedFiles.includes(file)) : [])}
         jsbsimLogs={jsbsimLogs}
         onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
+      {xmlChangeNotice.length > 0 && <div className="xml-change-notice" role="status">
+        <span className="xml-change-notice-icon">✎</span>
+        <span><strong>编辑内容已修改</strong><small>影响文件：{xmlChangeNotice.join('、')}</small></span>
+        <button onClick={() => setXmlChangeNotice([])} aria-label="关闭提示">×</button>
+      </div>}
       <div className="main-content">
         {focusedModule ? (
           <ModuleExpressionCanvas
             embedded
             mode="signal"
-            title={focusedAero ? '气动系数数据流' : `${focusedModule.data.componentType === 'flight_control' ? '飞控' : '系统'} 信号流`}
+            title={`${focusedAero ? '气动系数数据流' : `${focusedModule.data.componentType === 'flight_control' ? '飞控' : '系统'} 信号流`}${focusedXmlPath ? `  ·  XML: ${focusedXmlPath}` : '  ·  XML: 未绑定'}`}
             channels={focusedChannels}
             topLevelProps={focusedAero ? [] : (focusedModule.data.params.properties || '')
               .split(',')
