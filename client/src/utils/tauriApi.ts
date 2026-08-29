@@ -32,6 +32,8 @@ async function call(command: string, args: Record<string, any> = {}): Promise<an
     generate_xml: { method: 'POST', path: '/api/generate-xml', bodyKey: 'data' },
     parse_xml: { method: 'POST', path: '/api/parse-xml' },
     get_jsbsim_files: { method: 'GET', path: '/api/jsbsim-files' },
+    ftp_list_systems: { method: 'GET', path: '/api/nuttx-system-files' },
+    ftp_list_engines: { method: 'GET', path: '/api/nuttx-engine-files' },
     generate_subfile: { method: 'POST', path: '/api/generate-subfile' },
     parse_subfile: { method: 'POST', path: '/api/parse-subfile' },
     save_project: { method: 'POST', path: '/api/save' },
@@ -184,7 +186,7 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; script?: string; model?: string; external?: boolean; connected?: boolean }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number }> {
   return call('sim_status');
 }
 
@@ -198,6 +200,37 @@ export async function simListModels(): Promise<any[]> {
   return result.models || [];
 }
 
+export async function ftpDownloadModel(model: string): Promise<{ model: string; xml: string; source: string }> {
+  return call('ftp_download_model', { model });
+}
+
+export async function ftpListSystems(): Promise<string[]> {
+  const result = await call('ftp_list_systems');
+  if (Array.isArray(result.files) && typeof result.files[0] === 'string') return result.files;
+  return (result.files || []).map((file: any) => String(file.path || '').replace(/^systems\//, ''));
+}
+
+export async function ftpListEngines(): Promise<string[]> {
+  const result = await call('ftp_list_engines');
+  return (result.engines || result.files || []).map((file: any) => String(file.path || file).replace(/^engine\//, ''));
+}
+
+export async function ftpListEngineCatalog(): Promise<{ engines: string[]; propellers: string[] }> {
+  const result = await call('ftp_list_engines');
+  return {
+    engines: (result.engines || []).map((file: any) => String(file.path || file).replace(/^engine\//, '')),
+    propellers: (result.propellers || []).map((file: any) => String(file.path || file).replace(/^engine\//, '')),
+  };
+}
+
+export async function ftpDownloadScript(file: string): Promise<{ file: string; xml: string; source: string }> {
+  return call('ftp_download_script', { file });
+}
+
+export async function ftpUploadModel(model: string, xml: string): Promise<{ model: string; uploaded: boolean }> {
+  return call('ftp_upload_model', { model, xml });
+}
+
 // ── Tauri event listeners (for telemetry) ───────────────────────────────────
 
 type EventCallback = (payload: any) => void;
@@ -209,6 +242,14 @@ export async function listenSimProcessStatus(callback: EventCallback): Promise<(
   const unlisten = await tauriListen('sim-process-status', (event: any) => {
     callback(event.payload);
   });
+  unlistenFns.push(unlisten);
+  return unlisten;
+}
+
+export async function listenJsbsimLog(callback: EventCallback): Promise<() => void> {
+  if (!isTauri) return () => {};
+  await ensureTauri();
+  const unlisten = await tauriListen('jsbsim-log', (event: any) => callback(event.payload));
   unlistenFns.push(unlisten);
   return unlisten;
 }

@@ -728,9 +728,10 @@ fn build_file_header(aircraft: &Value) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("Unnamed Aircraft");
     lines.push(xml_element("name", &[], Some(name), 1));
-    if let Some(ver) = aircraft.get("version").and_then(|v| v.as_str()) {
-        lines.push(xml_element("version", &[], Some(ver), 1));
-    }
+    /* Keep the file-header revision independent from the JSBSim schema
+     * version.  Legacy models contain SVN values such as "$Revision: 1.91
+     * $" here; copying those into fdm_config makes the next load invalid. */
+    lines.push(xml_element("version", &[], Some("2.0"), 1));
     if let Some(rel) = aircraft.get("release").and_then(|v| v.as_str()) {
         let desc = format!("Aircraft configuration - {}", rel);
         lines.push(xml_element("description", &[], Some(&desc), 1));
@@ -1728,10 +1729,9 @@ pub fn generate_xml(data: &Value) -> Result<String, String> {
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("Unnamed Aircraft");
-    let version = aircraft
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("2.0");
+    /* JSBSim 1.3/2.x expects the aircraft configuration schema version,
+     * not the legacy file-header SVN revision. */
+    let version = "2.0";
     let release = aircraft.get("release").and_then(|v| v.as_str());
 
     let mut fdm_attrs = format!("name=\"{}\" version=\"{}\"", escape_xml(name), escape_xml(version));

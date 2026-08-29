@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::io::{BufRead, BufReader, Read};
 use tauri::Emitter;
 
 /// JSBSim binary path
@@ -66,6 +67,23 @@ const _: fn() = || {
 };
 
 impl JsbsimManager {
+    fn spawn_output_reader<R: Read + Send + 'static>(reader: R, app_handle: tauri::AppHandle, stream: &'static str) {
+        std::thread::Builder::new().name(format!("jsbsim-{}", stream)).spawn(move || {
+            for line in BufReader::new(reader).lines() {
+                match line {
+                    Ok(text) if !text.is_empty() => {
+                        let _ = app_handle.emit("jsbsim-log", json!({ "stream": stream, "line": text }));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        let _ = app_handle.emit("jsbsim-log", json!({ "stream": stream, "line": format!("读取输出失败: {}", e) }));
+                        break;
+                    }
+                }
+            }
+        }).ok();
+    }
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(JsbsimInner {
@@ -107,7 +125,7 @@ impl JsbsimManager {
 
         let output_xml = self.create_output_xml();
 
-        let child = Command::new(JSBSIM_BIN)
+        let mut child = Command::new(JSBSIM_BIN)
             .arg("--root=.")
             .arg(format!("--script={}", script_path.display()))
             .arg(format!("--logdirectivefile={}", output_xml.display()))
@@ -116,6 +134,9 @@ impl JsbsimManager {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to start JSBSim: {}", e))?;
+
+        if let Some(stdout) = child.stdout.take() { Self::spawn_output_reader(stdout, app_handle.clone(), "stdout"); }
+        if let Some(stderr) = child.stderr.take() { Self::spawn_output_reader(stderr, app_handle.clone(), "stderr"); }
 
         {
             let mut inner = self.inner.lock().unwrap();
@@ -140,7 +161,7 @@ impl JsbsimManager {
 
         let output_xml = self.create_output_xml();
 
-        let child = Command::new(JSBSIM_BIN)
+        let mut child = Command::new(JSBSIM_BIN)
             .arg("--root=.")
             .arg(format!("--aircraft={}", model))
             .arg(format!("--logdirectivefile={}", output_xml.display()))
@@ -150,6 +171,9 @@ impl JsbsimManager {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to start JSBSim: {}", e))?;
+
+        if let Some(stdout) = child.stdout.take() { Self::spawn_output_reader(stdout, app_handle.clone(), "stdout"); }
+        if let Some(stderr) = child.stderr.take() { Self::spawn_output_reader(stderr, app_handle.clone(), "stderr"); }
 
         {
             let mut inner = self.inner.lock().unwrap();

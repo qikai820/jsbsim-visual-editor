@@ -64,8 +64,17 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
     onChange({ [which]: value === '' ? undefined : value });
   };
 
+  const selectedType = data.compProps?.type?.value;
   const paramFields = Object.entries(data.compProps || {}).filter(
-    ([k, v]) => !EXCLUDED.has(k) && v && typeof v === 'object' && 'value' in v
+    ([k, v]) => {
+      if (EXCLUDED.has(k) || !v || typeof v !== 'object' || !('value' in v)) return false;
+      // HIL output configuration is protocol-specific: never show the IMU
+      // mapping while GPS is selected, or vice versa.
+      if (selectedType === 'HIL_SENSOR' && k.startsWith('hil_gps_')) return false;
+      if (selectedType === 'HIL_GPS' && k.startsWith('hil_imu_')) return false;
+      if (selectedType !== 'HIL_SENSOR' && selectedType !== 'HIL_GPS' && k.startsWith('hil_')) return false;
+      return true;
+    }
   );
 
   return (

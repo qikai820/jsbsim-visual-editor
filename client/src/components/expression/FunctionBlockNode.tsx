@@ -40,6 +40,16 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
   const isSignalLeaf = inSignalFlow && (exprNode.kind === 'property' || exprNode.kind === 'function_ref');
   const exprName = (data as any).exprName as string | undefined;
   const isRoot = (data as any).isExprRoot as boolean | undefined;
+  const isVariableArity = blockDef.inputCount === 'variable';
+  // A variable-input operator (×, Σ, …) must grow with its ports.  Keeping a
+  // fixed small body makes four or more handles visually overlap and makes it
+  // look like the operator only has one input.
+  const blockHeight = isVariableArity
+    ? Math.min(168, Math.max(42, 20 + inputCount * 16))
+    : undefined;
+  const symbolSize = isVariableArity
+    ? Math.min(25, 12 + inputCount * 2)
+    : undefined;
 
   // Build compact formula display - only show operator symbol, no names
   const formula = isLeaf
@@ -49,7 +59,11 @@ function FunctionBlockNode({ data, selected }: NodeProps) {
   return (
     <div
       className={`fn-block fn-block-${blockDef.category} ${selected ? 'selected' : ''} ${isRoot ? 'fn-block-root' : ''} fn-block-compact`}
-      style={{ '--block-color': blockDef.color } as React.CSSProperties}
+      style={{
+        '--block-color': blockDef.color,
+        '--fn-block-height': blockHeight ? `${blockHeight}px` : undefined,
+        '--fn-symbol-size': symbolSize ? `${symbolSize}px` : undefined,
+      } as React.CSSProperties}
     >
       {/* Input handles */}
       {Array.from({ length: inputCount }, (_, i) => {

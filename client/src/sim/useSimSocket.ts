@@ -2,11 +2,50 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { sendControl as tauriSendControl, listenTelemetry, listenSimStatus, removeAllListeners, isTauri } from '../utils/tauriApi';
 
 export interface Telemetry {
-  t: number;
+  t?: number;
   frame?: number;
   // JSBSim property tree: flat key-value with slash-separated paths
   // e.g. "/position/h-sl-ft": 10.0, "/attitude/phi-deg": 2.5
-  [propertyPath: string]: number | undefined;
+  task_top?: TaskTopSnapshot;
+  [propertyPath: string]: number | string | Record<string, number> | TaskTopSnapshot | undefined;
+}
+
+export interface TaskTopEntry {
+  pid: number;
+  cpu: number;
+  pri: number;
+  load: number;
+  stack_used: number;
+  stack_size: number;
+  name: string;
+  state: string;
+}
+
+export interface TaskTopSnapshot {
+  tasks: TaskTopEntry[];
+}
+
+/* NuttX sends the complete JSBSim tree in small UDP slices under
+ * `properties`, so a full tree never depends on IP fragmentation.  Flatten
+ * and retain the previous slices here; the property browser can then render
+ * every path as soon as its slice arrives. */
+function mergeTelemetry(previous: Telemetry | null, frame: Telemetry): Telemetry {
+  const previousModel = typeof previous?.model === 'string' ? previous.model : undefined;
+  const frameModel = typeof frame.model === 'string' ? frame.model : undefined;
+  const modelChanged = !!previousModel && !!frameModel && previousModel !== frameModel;
+  const next: Telemetry = modelChanged ? {} : { ...(previous || {}) };
+  const properties = frame.properties;
+
+  for (const [key, value] of Object.entries(frame)) {
+    if (key !== 'properties') next[key] = value;
+  }
+  if (properties && typeof properties === 'object' && !Array.isArray(properties)) {
+    for (const [path, value] of Object.entries(properties)) {
+      if (typeof value === 'number') next[path] = value;
+    }
+  }
+  if (typeof frame.timestamp === 'number') next.t = frame.timestamp;
+  return next;
 }
 
 // Detect Tauri runtime (same check as tauriApi.ts)
@@ -23,7 +62,7 @@ export function useSimSocket() {
       let cancelled = false;
       (async () => {
         const unlistenTel = await listenTelemetry((data: Telemetry) => {
-          if (!cancelled) setTelemetry(data);
+          if (!cancelled) setTelemetry(previous => mergeTelemetry(previous, data));
         });
         const unlistenStatus = await listenSimStatus((payload: any) => {
           if (!cancelled) setConnected(!!payload.connected);
@@ -34,7 +73,7 @@ export function useSimSocket() {
           const status = await getSimStatus();
           if (!cancelled) {
             setConnected(status.connected);
-            if (status.latest) setTelemetry(status.latest);
+            if (status.latest) setTelemetry(previous => mergeTelemetry(previous, status.latest));
           }
         } catch { /* ignore */ }
 
@@ -67,7 +106,7 @@ export function useSimSocket() {
       ws.onmessage = (ev) => {
         try {
           const m = JSON.parse(ev.data);
-          if (m.type === 'telemetry') setTelemetry(m.data);
+          if (m.type === 'telemetry') setTelemetry(previous => mergeTelemetry(previous, m.data));
           else if (m.type === 'status') setConnected(!!m.connected);
         } catch {
           /* ignore */

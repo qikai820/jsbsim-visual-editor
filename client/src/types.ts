@@ -4,7 +4,7 @@ export type ComponentType =
   | 'fuselage' | 'wing' | 'htail' | 'vtail'
   | 'engine' | 'propeller'
   | 'landing_gear' | 'fuel_tank' | 'point_mass'
-  | 'inertia' | 'aero_coefficients' | 'system' | 'flight_control' | 'output';
+  | 'inertia' | 'aero_coefficients' | 'system' | 'flight_control' | 'input' | 'output';
 
 export type SubFileType = 'engine' | 'thruster' | 'system';
 

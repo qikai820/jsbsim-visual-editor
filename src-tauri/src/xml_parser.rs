@@ -126,9 +126,10 @@ fn parse_file_header(fdm_config: &XmlElement, aircraft: &mut Value) {
         if let Some(name_elem) = find_child(fh, "name") {
             aircraft["name"] = json!(get_text(name_elem));
         }
-        if let Some(ver_elem) = find_child(fh, "version") {
-            aircraft["version"] = json!(get_text(ver_elem));
-        }
+        /* fileheader/version is the historical source-file revision (for
+         * example "$Revision: 1.91 $").  It is not the JSBSim aircraft
+         * configuration version.  Keep the root fdm_config version, which
+         * must remain 2.0 for the current loader. */
         if let Some(desc_elem) = find_child(fh, "description") {
             let desc = get_text(desc_elem);
             if let Some(pos) = desc.rfind("- ") {

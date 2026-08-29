@@ -31,10 +31,27 @@ pub struct SimClient {
 }
 
 struct SimClientInner {
+    /// Most recent UDP payload, including auxiliary frames such as task_top.
     latest: Option<Value>,
+    /// Most recent complete visual telemetry frame.  Only these packets carry
+    /// the JSBSim lifecycle state; auxiliary packets must not overwrite it.
+    latest_sim_status: Option<Value>,
+    /// The last lifecycle command issued by this editor.  It remains
+    /// authoritative until another lifecycle command is issued; telemetry is
+    /// observational and may arrive delayed or out of order over UDP.
+    commanded_lifecycle_state: Option<String>,
     connected: bool,
     last_packet_time: Instant,
     packets: u64,
+}
+
+fn resolve_lifecycle_state(requested: Option<&str>, latest: Option<&Value>) -> Option<String> {
+    requested.map(str::to_owned).or_else(|| {
+        latest
+            .and_then(|frame| frame.get("state"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
 }
 
 // Compile-time assertion: SimClient must be Clone + Send + Sync for Tauri.
@@ -74,10 +91,13 @@ impl SimClient {
         // works even if the recv socket hasn't been bound yet.
         let send_socket =
             UdpSocket::bind("0.0.0.0:0").expect("SimClient: ephemeral send bind failed");
+        let send_socket = Arc::new(send_socket);
 
         let inner = Arc::new(Mutex::new(SimClientInner {
-            latest: None,
-            connected: false,
+                latest: None,
+                latest_sim_status: None,
+                commanded_lifecycle_state: None,
+                connected: false,
             last_packet_time: Instant::now(),
             packets: 0,
         }));
@@ -97,6 +117,9 @@ impl SimClient {
                                     if let Ok(val) = serde_json::from_str::<Value>(text) {
                                         if val.is_object() {
                                             let mut state = inner.lock().unwrap();
+                                            if val.get("state").and_then(Value::as_str).is_some() {
+                                                state.latest_sim_status = Some(val.clone());
+                                            }
                                             state.latest = Some(val);
                                             state.connected = true;
                                             state.last_packet_time = Instant::now();
@@ -128,9 +151,24 @@ impl SimClient {
                 .expect("spawn recv thread");
         }
 
+        // Register this editor as the telemetry consumer.  The NuttX bridge
+        // learns our current IP from these packets and does not transmit to a
+        // closed UDP port before the editor is present.
+        {
+            let sock = Arc::clone(&send_socket);
+            std::thread::Builder::new()
+                .name("sim-client-heartbeat".into())
+                .spawn(move || loop {
+                    let packet = [b'V', b'C', b'M', b'D', 7u8];
+                    let _ = sock.send_to(&packet, ctrl_addr);
+                    std::thread::sleep(Duration::from_secs(1));
+                })
+                .expect("spawn heartbeat thread");
+        }
+
         Self {
             inner,
-            send_socket: Arc::new(send_socket),
+            send_socket,
             ctrl_addr,
         }
     }
@@ -143,6 +181,26 @@ impl SimClient {
     /// Clone of the most recently received telemetry frame, or `None`.
     pub fn latest(&self) -> Option<Value> {
         self.inner.lock().unwrap().latest.clone()
+    }
+
+    /// Latest packet which explicitly reports `running` / `paused` /
+    /// `stopped`.  Do not derive lifecycle state from task-statistics or
+    /// other auxiliary UDP frames.
+    pub fn latest_sim_status(&self) -> Option<Value> {
+        self.inner.lock().unwrap().latest_sim_status.clone()
+    }
+
+    pub fn request_lifecycle_state(&self, requested: &str) {
+        self.inner.lock().unwrap().commanded_lifecycle_state =
+            Some(requested.to_owned());
+    }
+
+    pub fn lifecycle_state(&self) -> Option<String> {
+        let state = self.inner.lock().unwrap();
+        resolve_lifecycle_state(
+            state.commanded_lifecycle_state.as_deref(),
+            state.latest_sim_status.as_ref(),
+        )
     }
 
     /// Total number of telemetry packets received since startup.
@@ -194,5 +252,45 @@ impl SimClient {
         packet[5..5 + count].copy_from_slice(&bytes[..count]);
         self.send_socket.send_to(&packet, self.ctrl_addr)?;
         Ok(())
+    }
+
+    /// Request a runscript reload. Payload is `script|aircraft`; both values
+    /// are basenames validated again by the NuttX bridge.
+    pub fn send_load_script(&self, script: &str, model: &str) -> std::io::Result<()> {
+        let mut packet = [0u8; 160];
+        packet[0..4].copy_from_slice(b"VCMD");
+        packet[4] = 8; // VCMD_LOAD_SCRIPT
+        let script = script.rsplit('/').next().unwrap_or(script);
+        let model = model.rsplit('/').next().unwrap_or(model)
+            .trim_end_matches(".xml");
+        let payload = format!("{}|{}", script, model);
+        let bytes = payload.as_bytes();
+        let count = bytes.len().min(packet.len() - 5);
+        packet[5..5 + count].copy_from_slice(&bytes[..count]);
+        self.send_socket.send_to(&packet, self.ctrl_addr)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requested_stop_masks_delayed_running_telemetry() {
+        let delayed_frame = serde_json::json!({ "state": "running" });
+        assert_eq!(
+            resolve_lifecycle_state(Some("stopped"), Some(&delayed_frame)),
+            Some("stopped".to_owned())
+        );
+    }
+
+    #[test]
+    fn acknowledged_state_uses_latest_board_telemetry() {
+        let acknowledged_frame = serde_json::json!({ "state": "stopped" });
+        assert_eq!(
+            resolve_lifecycle_state(None, Some(&acknowledged_frame)),
+            Some("stopped".to_owned())
+        );
     }
 }

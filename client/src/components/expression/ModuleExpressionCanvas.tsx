@@ -12,7 +12,7 @@ import {
 } from '../../utils/expressionConverter';
 import {
   buildSignalGraph, graphToChannels, SINGLE_INPUT_TYPES, COMPONENT_META,
-  assignSignalEdgeOffsets, collectPropertyNodes,
+  assignSignalEdgeRouting, collectPropertyNodes,
 } from '../../utils/signalGraph';
 import SignalEdge from './SignalEdge';
 import { SignalEdgeActionsContext } from './signalEdgeActions';
@@ -24,6 +24,7 @@ import ExpressionPalette from './ExpressionPalette';
 import { BlockPropertyPanel } from './BlockPropertyPanel';
 import ComponentPropertyPanel from './ComponentPropertyPanel';
 import ExpressionEditor from './ExpressionEditor';
+import LutTablePreview from './LutTablePreview';
 
 const nodeTypes = {
   functionBlock: FunctionBlockNode,
@@ -250,8 +251,8 @@ function recomputeGraph(nodes: any[], prevEdges: any[] = []): { nodes: any[]; ed
       if (b) e.data = { ...(e.data || {}), bendpoints: b };
     }
   }
-  // Fan out wires sharing a handle so they don't overlap (visual only).
-  assignSignalEdgeOffsets(edges);
+  // Recreate common fan-out trunks after edits/reloads as well as auto-layout.
+  assignSignalEdgeRouting(edges, finalNodes);
   return { nodes: finalNodes, edges };
 }
 
@@ -288,6 +289,14 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         for (const e of g.edges) {
           const b = savedBps[e.id];
           if (b) e.data = { ...(e.data || {}), bendpoints: b };
+        }
+      }
+      const savedRoutes = (initialLayout as any).__routes as Record<string, number> | undefined;
+      if (savedRoutes) {
+        for (const e of g.edges) {
+          if (savedRoutes[e.id] !== undefined) {
+            e.data = { ...(e.data || {}), routeX: savedRoutes[e.id] };
+          }
         }
       }
     }
@@ -331,6 +340,12 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       if (bp && bp.length) bps[e.id] = bp;
     }
     if (Object.keys(bps).length) (layout as any).__bendpoints = bps;
+    const routes: Record<string, number> = {};
+    for (const e of edgesRef.current) {
+      const routeX = e.data?.routeX;
+      if (typeof routeX === 'number') routes[e.id] = routeX;
+    }
+    if (Object.keys(routes).length) (layout as any).__routes = routes;
     onLayoutChangeRef.current(layout);
   }, []);
 
@@ -348,7 +363,20 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   // Write waypoints to edges state only (no recompute), so a drag isn't blown
   // away by recomputeGraph. persistLayout bundles them into the layout JSON.
   const updateEdgeBendpoints = useCallback((edgeId: string, bps: Bendpoint[]) => {
-    setEdges(prev => prev.map(e => (e.id === edgeId ? { ...e, data: { ...(e.data || {}), bendpoints: bps } } : e)));
+    setEdges(prev => {
+      const next = prev.map(e => (e.id === edgeId ? { ...e, data: { ...(e.data || {}), bendpoints: bps } } : e));
+      edgesRef.current = next;
+      return next;
+    });
+  }, []);
+  const updateFanoutRoute = useCallback((source: string, sourceHandle: string | null | undefined, routeX: number) => {
+    setEdges(prev => {
+      const next = prev.map(e => (e.source === source && e.sourceHandle === sourceHandle)
+        ? { ...e, data: { ...(e.data || {}), routeX, routeLocked: true } }
+        : e);
+      edgesRef.current = next;
+      return next;
+    });
   }, []);
   const persistBendpoints = useCallback(() => {
     persistLayout();
@@ -613,9 +641,15 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     setSelectedNodeId(node.id);
   }, [toggleExpand]);
 
-  // Double-click a function/fcs_function block to open its expression editor.
+  // Double-click a LUT to inspect its breakpoint grid; other functions open
+  // the formula editor as before.
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
     const d = node.data;
+    if (d?.kind === 'component' && d.itemType === 'aero_table') {
+      setSelectedNodeId(node.id);
+      setLutPreviewId(node.id);
+      return;
+    }
     if (d?.kind === 'component' && (d.itemType === 'function' || d.itemType === 'fcs_function')) {
       setSelectedNodeId(node.id);
       setEditingExprId(node.id);
@@ -636,7 +670,9 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // ── Function expression editing (signal mode) ──
   const [editingExprId, setEditingExprId] = useState<string | null>(null);
+  const [lutPreviewId, setLutPreviewId] = useState<string | null>(null);
   const editingNode = nodes.find(n => n.id === editingExprId);
+  const lutPreviewNode = nodes.find(n => n.id === lutPreviewId);
   const handleExprSave = useCallback((expr: ExprNode) => {
     if (editingExprId) updateComponent(editingExprId, { expression: expr });
     setEditingExprId(null);
@@ -792,7 +828,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           ref={rfWrapper}
           onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
         >
-          <SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, persistBendpoints }}>
+          <SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, updateFanoutRoute, persistBendpoints }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -885,6 +921,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           )}
         </div>
       </div>
+      )}
+      {lutPreviewNode && (
+        <LutTablePreview
+          title={String((lutPreviewNode.data as any).name || (lutPreviewNode.data as any).outputSignal || '插值表')}
+          expression={(lutPreviewNode.data as any).expression as ExprNode}
+          onClose={() => setLutPreviewId(null)}
+        />
       )}
     </>
   );

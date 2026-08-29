@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
 const http = require('http');
 const WebSocket = require('ws');
 const { generateXml, generateSubFileXml } = require('./xmlGenerator');
@@ -22,10 +23,15 @@ app.use(express.static(path.join(__dirname, '../dist/client')));
 
 // ── JSBSim file search paths ──────────────────────────────────────────────
 const JSBSIM_ROOT = path.resolve(__dirname, '../../jsbsim');
+// Prefer the runtime-loaded RAM tree used by the bridge.  The local tree is
+// only a development fallback when the target has not been mounted.
+const JSBSIM_RUNTIME_ROOT = process.env.JSBSIM_RUNTIME_ROOT || '/mnt/jsbsim';
+const JSBSIM_DATA_ROOT = fs.existsSync(JSBSIM_RUNTIME_ROOT)
+  ? JSBSIM_RUNTIME_ROOT : JSBSIM_ROOT;
 const JSBSIM_SEARCH_DIRS = [
-  path.join(JSBSIM_ROOT, 'systems'),
-  path.join(JSBSIM_ROOT, 'engine'),
-  path.join(JSBSIM_ROOT, 'aircraft'),
+  path.join(JSBSIM_DATA_ROOT, 'systems'),
+  path.join(JSBSIM_DATA_ROOT, 'engine'),
+  path.join(JSBSIM_DATA_ROOT, 'aircraft'),
 ];
 
 // Recursively find all XML files under a directory
@@ -155,6 +161,40 @@ app.get('/api/jsbsim-files', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Read the runtime JSBSim system directory from the NuttX target via FTP.
+// The target keeps the loaded tree in RAM, so the desktop copy is not used.
+app.get('/api/nuttx-system-files', (req, res) => {
+  const host = process.env.NUTTX_HOST || '192.168.101.81';
+  const user = process.env.NUTTX_FTP_USER || 'root';
+  const password = process.env.NUTTX_FTP_PASSWORD || 'abc123';
+  // FTP HOME is /mnt/sdcard, and the target directory is
+  // /mnt/sdcard/jsbsim/systems, so use the FTP-relative path.
+  const url = `ftp://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}/jsbsim/systems/`;
+  execFile('curl', ['--noproxy', '*', '--silent', '--show-error', '--fail', '--list-only', url],
+    { timeout: 5000 }, (error, stdout, stderr) => {
+      if (error) {
+        res.status(502).json({ error: `无法读取 NuttX systems: ${stderr || error.message}` });
+        return;
+      }
+      const files = stdout.split(/\r?\n/).map(name => name.trim())
+        .filter(name => name.endsWith('.xml'))
+        .map(name => ({ path: `systems/${name}`, size: 0 }));
+      res.json({ files, total: files.length, source: `nuttx://${host}/mnt/jsbsim/systems` });
+    });
+});
+
+app.get('/api/nuttx-engine-files', (req, res) => {
+  const host = process.env.NUTTX_FTP_HOST || '192.168.101.81';
+  const user = process.env.NUTTX_FTP_USER || 'root';
+  const password = process.env.NUTTX_FTP_PASSWORD || 'abc123';
+  const url = `ftp://${host}/jsbsim/engine/`;
+  execFile('curl', ['--noproxy', '*', '--silent', '--show-error', '--disable-epsv', '--user', `${user}:${password}`, '--max-time', '8', '--list-only', url], (error, stdout, stderr) => {
+    if (error) return res.status(502).json({ error: stderr || error.message, files: [] });
+    const files = stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean).filter(s => s.toLowerCase().endsWith('.xml'));
+    res.json({ files, source: 'nuttx-ftp' });
+  });
 });
 
 // POST /api/generate-subfile - Generate sub-file XML (engine, thruster, system)

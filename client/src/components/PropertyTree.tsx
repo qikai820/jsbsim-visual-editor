@@ -92,11 +92,9 @@ function TreeNodeView({
   return (
     <div>
       <div
-        className="ptree-row"
+        className={`ptree-row${changed ? ' is-changed' : ''}`}
         style={{
           paddingLeft: depth * 16 + 4,
-          background: changed ? 'var(--accent-light)' : 'transparent',
-          transition: 'background 0.3s',
         }}
       >
         {children.length > 0 && (
@@ -110,33 +108,23 @@ function TreeNodeView({
         )}
         {children.length === 0 && <span style={{ width: 16, display: 'inline-block' }} />}
 
-        <span className="ptree-name" style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}>
+        <span className="ptree-name">
           {node.name}
         </span>
 
         {node.isLeaf && currentValue !== undefined && (
           <>
-            <span className="ptree-value" style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--success)', minWidth: 80, textAlign: 'right' }}>
+            <span className="ptree-value">
               {formatValueWithUnit(currentValue, node.path, unitSystem).value}
             </span>
             {formatValueWithUnit(currentValue, node.path, unitSystem).unit && (
-              <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 2 }}>
+              <span className="ptree-unit">
                 {formatValueWithUnit(currentValue, node.path, unitSystem).unit}
               </span>
             )}
             <button
-              className="ptree-pin"
               onClick={() => isPinned ? onUnpin(node.path) : onPin(node.path)}
-              style={{
-                marginLeft: 8,
-                padding: '0 6px',
-                fontSize: 10,
-                background: isPinned ? 'var(--accent)' : 'var(--bg-tertiary)',
-                color: isPinned ? '#fff' : 'var(--text-muted)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-              }}
+              className={`ptree-pin${isPinned ? ' is-pinned' : ''}`}
               title={isPinned ? '取消固定' : '固定到仪表盘'}
             >
               {isPinned ? '★' : '☆'}
@@ -187,26 +175,17 @@ export default function PropertyTree({ telemetry, pinnedPaths, onPin, onUnpin, u
   }, [tree, filter]);
 
   return (
-    <div className="property-tree" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-secondary)' }}>
-      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+    <div className="property-tree">
+      <div className="ptree-searchbar">
         <input
           type="text"
           placeholder="🔍 搜索属性..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '6px 10px',
-            background: 'var(--bg-tertiary)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            color: 'var(--text-primary)',
-            fontSize: 12,
-            fontFamily: 'monospace',
-          }}
+          className="ptree-search"
         />
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
+      <div className="ptree-body">
         {Array.from(filteredTree.children.values())
           .sort((a, b) => a.name.localeCompare(b.name))
           .map(child => (

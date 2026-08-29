@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AircraftNodeData } from '../../types';
 import { getComponentDef } from '../../utils/componentDefs';
+import AviationIcon from '../AviationIcon';
 
 // Extract display value from param (handles both plain number and {value, unit} format)
 function displayVal(p: any): string {
@@ -23,6 +24,13 @@ function AircraftNode({ data, selected }: NodeProps) {
 
   const isModule = nodeData.componentType === 'system' || nodeData.componentType === 'flight_control';
   const hasContent = isModule && nodeData.params?.channels && nodeData.params.channels !== '[]';
+  const nodeInputs = nodeData.componentType === 'output'
+    ? (nodeData.params?.type === 'HIL_GPS'
+      ? [{ id: 'gps', label: 'GPS' }]
+      : nodeData.params?.type === 'HIL_SENSOR'
+        ? [{ id: 'imu', label: 'IMU' }, { id: 'mag', label: '磁罗盘' }, { id: 'barometer', label: '气压传感器' }]
+        : [])
+    : def.inputs;
 
   const paramEntries = Object.entries(def.params).slice(0, 4);
 
@@ -33,7 +41,7 @@ function AircraftNode({ data, selected }: NodeProps) {
       title={isModule ? '双击进入模块信号流画布' : undefined}
     >
       {/* Input handles */}
-      {def.inputs.map((input, i) => (
+      {nodeInputs.map((input, i) => (
         <Handle
           key={`in-${input.id}`}
           type="target"
@@ -46,7 +54,7 @@ function AircraftNode({ data, selected }: NodeProps) {
 
       {/* Header */}
       <div className="node-header" style={{ background: def.color }}>
-        <span className="node-icon">{def.icon}</span>
+        <span className="node-icon"><AviationIcon type={nodeData.componentType} size={16} /></span>
         <span className="node-label">{nodeData.label}</span>
         {isModule && (
           <span className={`node-drill-badge ${hasContent ? '' : 'node-drill-badge-empty'}`} title="双击进入">

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSimSocket } from '../sim/useSimSocket';
 import PropertyTree from './PropertyTree';
 import Dashboard from './Dashboard';
+import FlightHud from './FlightHud';
 
 const PINNED_STORAGE_KEY = 'jsbsim-pinned-properties';
 const UNIT_STORAGE_KEY = 'jsbsim-unit-system';
@@ -29,6 +30,7 @@ export default function LiveView({ onClose }: LiveViewProps) {
       return 'imperial';
     }
   });
+  const [propertyBrowserCollapsed, setPropertyBrowserCollapsed] = useState(true);
 
   // Floating window state
   const [position, setPosition] = useState({ x: 100, y: 80 });
@@ -68,35 +70,53 @@ export default function LiveView({ onClose }: LiveViewProps) {
     setUnitSystem(prev => prev === 'imperial' ? 'metric' : 'imperial');
   };
 
+  // Keep the gesture alive even when the pointer leaves the floating window.
+  // Listening on window also avoids losing the last few pixels of a fast drag.
+  useEffect(() => {
+    if (!isDragging && !isResizing) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (isDragging) {
+        const dx = e.clientX - dragStart.current.x;
+        const dy = e.clientY - dragStart.current.y;
+        setPosition({ x: dragStart.current.posX + dx, y: dragStart.current.posY + dy });
+      } else {
+        const dx = e.clientX - resizeStart.current.x;
+        const dy = e.clientY - resizeStart.current.y;
+        setSize({
+          width: Math.max(600, resizeStart.current.width + dx),
+          height: Math.max(400, resizeStart.current.height + dy),
+        });
+      }
+    };
+    const stopGesture = () => {
+      setIsDragging(false);
+      setIsResizing(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopGesture);
+    window.addEventListener('pointercancel', stopGesture);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopGesture);
+      window.removeEventListener('pointercancel', stopGesture);
+    };
+  }, [isDragging, isResizing]);
+
   // Drag handlers
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handlePointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('.live-window-controls')) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     setIsDragging(true);
     dragStart.current = { x: e.clientX, y: e.clientY, posX: position.x, posY: position.y };
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      const dx = e.clientX - dragStart.current.x;
-      const dy = e.clientY - dragStart.current.y;
-      setPosition({ x: dragStart.current.posX + dx, y: dragStart.current.posY + dy });
-    } else if (isResizing) {
-      const dx = e.clientX - resizeStart.current.x;
-      const dy = e.clientY - resizeStart.current.y;
-      setSize({
-        width: Math.max(600, resizeStart.current.width + dx),
-        height: Math.max(400, resizeStart.current.height + dy),
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    setIsResizing(false);
-  };
-
-  const handleResizeStart = (e: React.MouseEvent) => {
+  const handleResizeStart = (e: React.PointerEvent) => {
     e.stopPropagation();
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     setIsResizing(true);
     resizeStart.current = { x: e.clientX, y: e.clientY, width: size.width, height: size.height };
   };
@@ -118,14 +138,11 @@ export default function LiveView({ onClose }: LiveViewProps) {
         boxShadow: '0 20px 60px rgba(0,0,0,0.15), 0 0 0 1px var(--border)',
         overflow: 'hidden',
       }}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
     >
       {/* Title bar - draggable */}
       <div
         className="live-titlebar"
-        onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -182,14 +199,18 @@ export default function LiveView({ onClose }: LiveViewProps) {
         </div>
       </div>
 
+      <FlightHud telemetry={telemetry} connected={connected} />
+
       {/* Content area */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Left panel: Property tree */}
-        <div style={{ width: '45%', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
-            属性浏览器
+        <div className="live-property-panel" style={{ width: propertyBrowserCollapsed ? 42 : '45%', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
+          <div className="live-property-header" style={{ padding: propertyBrowserCollapsed ? '8px 4px' : '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+            <button type="button" onClick={() => setPropertyBrowserCollapsed(value => !value)} title={propertyBrowserCollapsed ? '展开属性浏览器' : '折叠属性浏览器'} style={{ border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, padding: 0 }}>
+              {propertyBrowserCollapsed ? '▶' : '◀'}{!propertyBrowserCollapsed && ' 属性浏览器'}
+            </button>
           </div>
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: propertyBrowserCollapsed ? 'none' : 'block' }}>
             <PropertyTree
               telemetry={telemetry}
               pinnedPaths={pinnedPaths}
@@ -212,13 +233,34 @@ export default function LiveView({ onClose }: LiveViewProps) {
               onUnpin={handleUnpin}
               unitSystem={unitSystem}
             />
+            <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px 12px', flexShrink: 0 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600, marginBottom: 8 }}>
+                NuttX 任务统计 · Top 12 · 1 Hz
+              </div>
+              {telemetry?.task_top?.tasks?.length ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                  <thead style={{ color: 'var(--text-muted)', textAlign: 'left' }}>
+                    <tr><th>任务</th><th>PID</th><th>CPU</th><th>负载</th><th>栈</th><th>状态</th></tr>
+                  </thead>
+                  <tbody>
+                    {telemetry.task_top.tasks.map(task => (
+                      <tr key={task.pid} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '4px 2px', fontWeight: 600 }}>{task.name}</td>
+                        <td>{task.pid}</td><td>{task.cpu}</td><td style={{ color: task.load >= 80 ? '#ef4444' : 'var(--accent)' }}>{task.load.toFixed(1)}%</td>
+                        <td>{task.stack_used}/{task.stack_size}</td><td>{task.state}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>等待 NuttX top 遥测…</div>}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Resize handle */}
       <div
-        onMouseDown={handleResizeStart}
+          onPointerDown={handleResizeStart}
         style={{
           position: 'absolute',
           right: 0,

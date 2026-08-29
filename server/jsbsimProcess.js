@@ -191,12 +191,26 @@ function startScript(scriptPath) {
 function startModel(modelName) {
   stop();
 
+  // The model picker returns paths such as `aircraft/737/737.xml`, while
+  // JSBSim's --aircraft option expects the aircraft directory/name only.
+  // Passing the path makes JSBSim fail during initialization when switching
+  // models.
+  const rawModel = String(modelName || '').replace(/\\/g, '/');
+  const modelFile = path.posix.basename(rawModel).replace(/\.xml$/i, '');
+  const modelDir = path.posix.basename(path.posix.dirname(rawModel));
+  const aircraft = modelDir && modelDir !== '.' ? modelDir : modelFile;
+  if (!aircraft || aircraft === '.') throw new Error('Invalid aircraft model');
+  const aircraftXml = path.join(JSBSIM_ROOT, 'aircraft', aircraft, `${aircraft}.xml`);
+  if (!fs.existsSync(aircraftXml)) {
+    throw new Error(`Aircraft model not found: ${aircraft}`);
+  }
+
   const outputXml = createOutputXml();
   startUdpListener();
 
   const child = spawn(JSBSIM_BIN, [
     '--root=.',
-    `--aircraft=${modelName}`,
+    `--aircraft=${aircraft}`,
     `--logdirectivefile=${outputXml}`,
     '--end=600',
   ], {
@@ -207,9 +221,9 @@ function startModel(modelName) {
   state.process = child;
   state.running = true;
   state.paused = false;
-  state.model = modelName;
+  state.model = aircraft;
   state.script = null;
-  state.lastModel = modelName;
+  state.lastModel = aircraft;
   state.lastScript = null;
 
   child.on('exit', (code) => {
@@ -229,8 +243,8 @@ function startModel(modelName) {
     if (msg) console.error('[jsbsim]', msg);
   });
 
-  if (onStatusChange) onStatusChange({ running: true, model: modelName });
-  return { running: true, model: modelName };
+  if (onStatusChange) onStatusChange({ running: true, model: aircraft });
+  return { running: true, model: aircraft };
 }
 
 function pause() {

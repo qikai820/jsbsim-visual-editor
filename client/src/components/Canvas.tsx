@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react';
 import {
-  ReactFlow, Background, Controls, MiniMap, SelectionMode,
+  ReactFlow, Background, Controls, ControlButton, MiniMap, SelectionMode,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -20,10 +20,10 @@ interface CanvasProps {
 }
 
 // Node types that own an internal signal-flow "module canvas".
-const MODULE_TYPES = new Set(['system', 'flight_control']);
+const MODULE_TYPES = new Set(['system', 'flight_control', 'aero_coefficients']);
 
 export default function Canvas({ dragType }: CanvasProps) {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode, updateNodeParams, setFocusedNodeId } = useFlowStore();
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode, updateNodeParams, setFocusedNodeId, restoreLayout } = useFlowStore();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance<any, any> | null>(null);
 
@@ -34,17 +34,20 @@ export default function Canvas({ dragType }: CanvasProps) {
 
   const onDrop = useCallback((event: React.DragEvent) => {
     event.preventDefault();
-    if (!dragType) return;
+    const droppedType = (event.dataTransfer.getData('application/x-jsbsim-component') || dragType) as ComponentType | '';
+    if (!droppedType) return;
 
-    const bounds = reactFlowWrapper.current?.getBoundingClientRect();
-    if (!bounds || !rfInstance.current) return;
+    if (!reactFlowWrapper.current || !rfInstance.current) return;
 
+    // screenToFlowPosition expects viewport/client coordinates.  Subtracting
+    // the wrapper bounds here applies the canvas offset a second time, which
+    // makes dropped nodes appear away from the mouse release point.
     const position = rfInstance.current.screenToFlowPosition({
-      x: event.clientX - bounds.left,
-      y: event.clientY - bounds.top,
+      x: event.clientX,
+      y: event.clientY,
     });
 
-    addNode(dragType, position);
+    addNode(droppedType, position);
   }, [dragType, addNode]);
 
   const onNodeClick = useCallback((_: any, node: any) => {
@@ -55,7 +58,7 @@ export default function Canvas({ dragType }: CanvasProps) {
     setSelectedNode(null);
   }, [setSelectedNode]);
 
-  // Double-click a module (system / flight_control) to drill into its internal
+  // Double-click a module (system / flight_control / aero_coefficients) to drill into its internal
   // signal-flow canvas. Ensure channels/layout params exist so the embedded
   // ModuleExpressionCanvas can mount cleanly on a fresh module node.
   const onNodeDoubleClick = useCallback((_: any, node: any) => {
@@ -63,7 +66,7 @@ export default function Canvas({ dragType }: CanvasProps) {
     if (!MODULE_TYPES.has(t)) return;
     const params = node.data?.params || {};
     const patch: Record<string, any> = {};
-    if (!('channels' in params) || !params.channels) patch.channels = '[]';
+    if (t !== 'aero_coefficients' && (!('channels' in params) || !params.channels)) patch.channels = '[]';
     if (!('layout' in params) || !params.layout) patch.layout = '{}';
     if (Object.keys(patch).length) updateNodeParams(node.id, patch);
     setFocusedNodeId(node.id);
@@ -96,7 +99,9 @@ export default function Canvas({ dragType }: CanvasProps) {
         onPaneContextMenu={(e) => e.preventDefault()}
       >
         <Background />
-        <Controls />
+        <Controls showZoom showFitView showInteractive>
+          <ControlButton onClick={restoreLayout} title="恢复紧凑布局" aria-label="恢复紧凑布局">↺</ControlButton>
+        </Controls>
         <MiniMap />
       </ReactFlow>
     </div>

@@ -27,20 +27,26 @@ const TYPE_INFO: Record<string, { icon: string; label: string; color: string }> 
 interface Props {
   onClose: () => void;
   onLoad: (data: any) => void;
+  onSelectForSimulation?: (aircraftId: string) => void;
 }
 
-export default function AircraftLibrary({ onClose, onLoad }: Props) {
+export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation }: Props) {
   const [library, setLibrary] = useState<AircraftEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selected, setSelected] = useState<AircraftEntry | null>(null);
   const [loadingAircraft, setLoadingAircraft] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     getAircraftLibrary()
-      .then(data => { setLibrary(data); setLoading(false); })
-      .catch(err => { console.error(err); setLoading(false); });
+      .then(data => { setLibrary(data); setLoadError(''); setLoading(false); })
+      .catch(err => {
+        console.error(err);
+        setLoadError(err?.message || String(err) || '无法读取 NuttX 模型库');
+        setLoading(false);
+      });
   }, []);
 
   const filtered = library.filter(a => {
@@ -105,7 +111,9 @@ export default function AircraftLibrary({ onClose, onLoad }: Props) {
             {loading ? (
               <div className="library-loading">加载中...</div>
             ) : filtered.length === 0 ? (
-              <div className="library-loading">没有找到匹配的飞机</div>
+              <div className="library-loading">
+                {loadError ? `NuttX 模型库加载失败：${loadError}` : '没有找到匹配的飞机'}
+              </div>
             ) : (
               filtered.map(a => {
                 const typeInfo = TYPE_INFO[a.type] || TYPE_INFO.fixed_wing;
@@ -164,6 +172,16 @@ export default function AircraftLibrary({ onClose, onLoad }: Props) {
               >
                 {loadingAircraft ? '⏳ 加载中...' : '📥 加载此模型'}
               </button>
+              {onSelectForSimulation && (
+                <button
+                  className="library-select-sim-btn"
+                  onClick={() => { onSelectForSimulation(selected.id); onClose(); }}
+                  disabled={loadingAircraft}
+                  title="选择后回到工具栏，点击“开始”运行该 NuttX 模型"
+                >
+                  ▶ 选择为待运行模型
+                </button>
+              )}
             </div>
           )}
         </div>

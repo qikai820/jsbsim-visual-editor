@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
 import { getUnitOptions, convertUnit, formatValue } from '../utils/unitConverter';
@@ -8,6 +8,7 @@ import AeroEditor from './AeroEditor';
 import TableChart from './expression/TableChart';
 import ExpressionEditor from './expression/ExpressionEditor';
 import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
+import { ftpListSystems, ftpListEngineCatalog } from '../utils/tauriApi';
 
 // Normalize param value: could be a plain number or { value, unit }
 function getNumVal(p: any): number {
@@ -30,6 +31,26 @@ export default function PropertyPanel() {
     | { title: string; mode: 'signal'; channels: any[]; topLevelProps: string[]; onChannelsChange: (channels: any[]) => void }
     | null
   >(null);
+  const [systemFiles, setSystemFiles] = useState<string[]>([]);
+  const [engineFiles, setEngineFiles] = useState<string[]>([]);
+  const [propellerFiles, setPropellerFiles] = useState<string[]>([]);
+
+  useEffect(() => {
+    ftpListSystems()
+      .then(files => setSystemFiles(files
+        .filter(file => file.toLowerCase().endsWith('.xml'))
+        .map(file => file.replace(/\.xml$/i, ''))
+        .sort()))
+      .catch(() => setSystemFiles([]));
+  }, []);
+  useEffect(() => {
+    ftpListEngineCatalog().then(({ engines, propellers }) => {
+      const clean = (files: string[]) => files.filter(file => file.toLowerCase().endsWith('.xml'))
+        .map(file => file.replace(/\.xml$/i, '')).sort();
+      setEngineFiles(clean(engines));
+      setPropellerFiles(clean(propellers));
+    }).catch(() => { setEngineFiles([]); setPropellerFiles([]); });
+  }, []);
 
   if (editingSubFileId) return <SubFileEditor />;
 
@@ -191,6 +212,9 @@ export default function PropertyPanel() {
           />
         </div>
         <div className="prop-divider" />
+        <button className="ae-open-expr-btn" onClick={() => setFocusedNodeId(node.id)}>
+          📈 打开气动系数数据流
+        </button>
         <AeroEditor />
       </div>
     );
@@ -382,6 +406,20 @@ export default function PropertyPanel() {
       <div className="prop-divider" />
       {Object.entries(def.params)
         .filter(([key]) => {
+          const selectedType = node.data.params?.type;
+          if (node.data.componentType === 'output') {
+            if (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS') {
+              const common = new Set(['name', 'type', 'port', 'rate']);
+              const allowed = selectedType === 'HIL_SENSOR'
+                ? (key.startsWith('hil_imu_') || key.startsWith('hil_pressure_') ||
+                   key === 'hil_temperature' || key === 'hil_fields_updated' || key === 'hil_sensor_id')
+                : key.startsWith('hil_gps_');
+              if (!common.has(key) && !allowed) return false;
+            }
+            if (selectedType === 'HIL_SENSOR' && key.startsWith('hil_gps_')) return false;
+            if (selectedType === 'HIL_GPS' && key.startsWith('hil_imu_')) return false;
+            if (selectedType !== 'HIL_SENSOR' && selectedType !== 'HIL_GPS' && key.startsWith('hil_')) return false;
+          }
           // For engine/propeller: skip location/orient if no actual value
           if (node.data.componentType === 'engine' || node.data.componentType === 'propeller') {
             if ((key === 'location' || key === 'orient') && !node.data.params[key]) return false;
@@ -389,7 +427,47 @@ export default function PropertyPanel() {
           }
           return true;
         })
-        .map(([key, paramDef]) => renderField(key, paramDef))}
+        .map(([key, paramDef]) => {
+          if (node.data.componentType === 'system' && key === 'file') {
+            return (
+              <div className="field-row" key={key}>
+                <label>{paramDef.label}</label>
+                <select value={node.data.params[key] || ''}
+                  onChange={e => updateNodeParams(node.id, { [key]: e.target.value })}>
+                  <option value="">手动输入或选择系统文件</option>
+                  {systemFiles.map(file => <option key={file} value={file}>{file}</option>)}
+                </select>
+              </div>
+            );
+          }
+          if (node.data.componentType === 'engine' && key === 'file') {
+            const currentFile = String(node.data.params[key] || '').trim();
+            return (
+              <div className="field-row" key={key}>
+                <label>{paramDef.label}</label>
+                <select value={node.data.params[key] || ''} onChange={e => updateNodeParams(node.id, { [key]: e.target.value })}>
+                  <option value="">手动输入或选择发动机文件</option>
+                  {currentFile && !engineFiles.includes(currentFile) && <option value={currentFile}>{currentFile}（当前值）</option>}
+                  {engineFiles.map(file => <option key={file} value={file}>{file}</option>)}
+                </select>
+              </div>
+            );
+          }
+          if (node.data.componentType === 'propeller' && key === 'file') {
+            const currentFile = String(node.data.params[key] || '').trim();
+            return (
+              <div className="field-row" key={key}>
+                <label>{paramDef.label}</label>
+                <select value={node.data.params[key] || ''} onChange={e => updateNodeParams(node.id, { [key]: e.target.value })}>
+                  <option value="">手动输入或选择螺旋桨文件</option>
+                  {currentFile && !propellerFiles.includes(currentFile) && <option value={currentFile}>{currentFile}（当前值）</option>}
+                  {propellerFiles.map(file => <option key={file} value={file}>{file}</option>)}
+                </select>
+              </div>
+            );
+          }
+          return renderField(key, paramDef);
+        })}
 
       {/* Show editable content for system / flight_control nodes */}
       {(node.data.componentType === 'system' || node.data.componentType === 'flight_control') && node.data.params.channels && (() => {

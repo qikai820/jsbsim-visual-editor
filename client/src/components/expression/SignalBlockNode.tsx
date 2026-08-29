@@ -72,7 +72,8 @@ function SignalBlockNode({ data, selected }: NodeProps) {
   const d = data as SignalBlockData;
   const meta = d.meta || { label: d.itemType, icon: '•', color: '#64748b' };
   const color = meta.color;
-  const isFunction = d.itemType === 'function' || d.itemType === 'fcs_function';
+  const isTable = d.itemType === 'aero_table';
+  const isFunction = d.itemType === 'function' || d.itemType === 'fcs_function' || isTable;
 
   // Simulink-style: show only the top-level operator symbol (no formula string).
   const exprIcon = isFunction && d.expression ? functionTopSymbol(d.expression) : undefined;
@@ -91,6 +92,26 @@ function SignalBlockNode({ data, selected }: NodeProps) {
   const mathSym = MATH_SYMBOL[d.itemType];
   const isSummer = d.itemType === 'summer';
   const isPID = d.itemType === 'pid';
+  const SIMULINK_SYMBOL: Record<string, string> = {
+    integrator: '1/s',
+    lag_filter: '1/(τs+1)',
+    lead_lag_filter: '(a₁s+a₀)/(b₁s+b₀)',
+    second_order_filter: 'H(s)',
+    washout_filter: 's/(s+ω)',
+    switch: '≷',
+    actuator: 'A(s)',
+    aerosurface_scale: 'Scale',
+    angle: '∠',
+    kinematic: 'K',
+    deadband: 'Dead zone',
+    sensor: 'Sensor',
+    gyro: 'ω',
+    accelerometer: 'a',
+    magnetometer: 'B',
+    bias: '+ b',
+    constant: 'C',
+  };
+  const simulinkSymbol = SIMULINK_SYMBOL[d.itemType] || meta.icon || d.itemType;
 
   // Gain → Simulink triangle.
   if (isGain) {
@@ -104,39 +125,25 @@ function SignalBlockNode({ data, selected }: NodeProps) {
           <span className="sig-gain-val">{gainVal}</span>
         </div>
         {inputList.map((s, i) => (
-          <Handle key={i} type="target" position={Position.Left} id={`in-${i}`} className="sig-input-handle sig-gain-in" style={{ background: color }} />
+          <Handle key={i} type="target" position={Position.Left} id={`in-${i}`}
+            className="sig-input-handle sig-port-arrow sig-port-input sig-gain-in"
+            style={{ top: `${((i + 1) / (inputList.length + 1)) * 100}%` }} />
         ))}
-        <div style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)' }}>
-          <Handle type="source" position={Position.Right} id="out" className="sig-output-handle sig-gain-out" style={{ background: color }} />
-          {d.hasMultipleOutputs && (
-            <div style={{
-              position: 'absolute',
-              right: -3,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: '#000',
-              border: '1.5px solid #fff',
-              pointerEvents: 'none',
-              zIndex: 10,
-            }} />
-          )}
-        </div>
+        <Handle type="source" position={Position.Right} id="out"
+          className="sig-output-handle sig-port-arrow sig-port-output sig-gain-out" />
       </div>
     );
   }
 
   return (
     <div
-      className={`sig-block ${isFunction ? 'sig-block-fn' : ''} ${selected ? 'selected' : ''} sig-block-compact`}
+      className={`sig-block ${isFunction ? 'sig-block-fn' : ''} ${isTable ? 'sig-block-table' : ''} ${selected ? 'selected' : ''} sig-block-compact`}
       style={{ '--block-color': color } as React.CSSProperties}
     >
       {/* Compact formula display for functions */}
       {isFunction && (
         <div className="sig-compact-formula" title={d.name || d.outputSignal}>
-          <span className="sig-block-fn-symbol">{exprIcon || 'ƒ'}</span>
+          <span className="sig-block-fn-symbol">{isTable ? 'LUT' : (exprIcon || 'ƒ')}</span>
         </div>
       )}
 
@@ -149,15 +156,15 @@ function SignalBlockNode({ data, selected }: NodeProps) {
 
       {/* PID block: show PID label with non-zero params */}
       {isPID && (
-        <div className="sig-compact-formula" title="PID 控制器">
-          <span className="sig-block-fn-symbol">{paramSummary('pid', d.compProps) || 'PID'}</span>
+        <div className="sig-compact-formula" title={paramSummary('pid', d.compProps) || 'PID 控制器'}>
+          <span className="sig-block-fn-symbol">PID(s)</span>
         </div>
       )}
 
       {/* Other blocks: show operator symbol only (no name, no params) */}
       {!isFunction && !mathSym && !isSummer && !isPID && (
-        <div className="sig-compact-formula">
-          <span className="sig-block-fn-symbol">•</span>
+        <div className="sig-compact-formula" title={meta.label || d.itemType}>
+          <span className="sig-block-fn-symbol">{simulinkSymbol}</span>
         </div>
       )}
 
@@ -168,47 +175,24 @@ function SignalBlockNode({ data, selected }: NodeProps) {
         </div>
       )}
 
-      {/* Input handles */}
+      {/* Ports sit directly on the block boundary. Inputs are distributed
+          symmetrically around the vertical centre, independent of body text. */}
+      {inputList.map((_s: string, i: number) => (
+        <Handle key={`port-${i}`} type="target" position={Position.Left} id={`in-${i}`}
+          className="sig-input-handle sig-port-arrow sig-port-input"
+          style={{ top: `${((i + 1) / (inputList.length + 1)) * 100}%` }} />
+      ))}
+
       <div className="sig-block-inputs sig-block-inputs-bare">
         {inputList.map((s: string, i: number) => (
           <div className="sig-input-row" key={i}>
-            <Handle
-              type="target"
-              position={Position.Left}
-              id={`in-${i}`}
-              className="sig-input-handle"
-              style={{ background: color }}
-            />
             {isSummer && <span className="sig-sum-sign">+</span>}
           </div>
         ))}
       </div>
 
-      {/* Output handle with optional fan-out dot indicator */}
-      <div style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)' }}>
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="out"
-          className="sig-output-handle"
-          style={{ background: color }}
-        />
-        {d.hasMultipleOutputs && (
-          <div style={{
-            position: 'absolute',
-            right: -3,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: '#000',
-            border: '1.5px solid #fff',
-            pointerEvents: 'none',
-            zIndex: 10,
-          }} />
-        )}
-      </div>
+      <Handle type="source" position={Position.Right} id="out"
+        className="sig-output-handle sig-port-arrow sig-port-output" />
     </div>
   );
 }

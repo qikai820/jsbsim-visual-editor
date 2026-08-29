@@ -8,9 +8,12 @@ import FileManager from './components/FileManager';
 import ModuleExpressionCanvas from './components/expression/ModuleExpressionCanvas';
 import Airplane3DViewer from './components/Airplane3DViewer';
 import LiveView from './components/LiveView';
+import FlightHud from './components/FlightHud';
+import { useSimSocket } from './sim/useSimSocket';
 import { useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
+import { listenJsbsimLog } from './utils/tauriApi';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -26,6 +29,50 @@ function checkWebGL(): boolean {
     const maxTexSize = glCtx.getParameter(glCtx.MAX_TEXTURE_SIZE);
     return maxTexSize > 0 && maxTexSize < 100000;
   } catch { return false; }
+}
+
+// Aerodynamic functions use the same expression language as FCS functions.
+// Adapt them to channels so the signal-flow canvas can visualise dependencies
+// between coefficients and external aerodynamic properties.
+function aeroCoefficientsToChannels(coefficients: any[]): any[] {
+  const containsTable = (expr: any): boolean => {
+    if (!expr || typeof expr !== 'object') return false;
+    if (expr.kind === 'table') return true;
+    return Object.values(expr).some(value => Array.isArray(value)
+      ? value.some(containsTable)
+      : value && typeof value === 'object' && containsTable(value));
+  };
+  const byAxis = new Map<string, any[]>();
+  for (const coefficient of coefficients) {
+    const axis = String(coefficient?.axis || 'LIFT').toUpperCase();
+    if (!byAxis.has(axis)) byAxis.set(axis, []);
+    byAxis.get(axis)!.push({
+      type: containsTable(coefficient?.expression) ? 'aero_table' : 'function',
+      name: coefficient?.name || `coefficient-${byAxis.get(axis)!.length + 1}`,
+      expression: coefficient?.expression || { kind: 'value', value: 0 },
+    });
+  }
+  return [...byAxis.entries()].map(([name, items]) => ({ name, items }));
+}
+
+function channelsToAeroCoefficients(channels: any[], previous: any[]): any[] {
+  const metadata = new Map(previous.map(c => [String(c?.name || ''), c]));
+  const coefficients: any[] = [];
+  for (const channel of channels || []) {
+    const axis = String(channel?.name || 'LIFT').toUpperCase();
+    for (const item of channel?.items || []) {
+      const name = String(item?.name || '');
+      if (!name) continue;
+      const old = metadata.get(name);
+      coefficients.push({
+        name,
+        axis,
+        description: old?.description || '',
+        expression: item?.expression || old?.expression || { kind: 'value', value: 0 },
+      });
+    }
+  }
+  return coefficients;
 }
 
 // Global error boundary
@@ -105,11 +152,153 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
 function AppContent() {
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
+  const [logReservedHeight, setLogReservedHeight] = useState(82);
   const [dragType, setDragType] = useState<ComponentType | null>(null);
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  const [paletteWidth, setPaletteWidth] = useState(250);
+  const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLive, setShowLive] = useState(false);
   const [webglFail, setWebglFail] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logWindowRef = useRef<HTMLDivElement | null>(null);
+  const followLogTailRef = useRef(true);
+  const { telemetry, connected } = useSimSocket();
+  const [logPos, setLogPos] = useState({ x: 0, y: 0 });
+  const logDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
+  const [draggingLog, setDraggingLog] = useState(false);
+  const [hudPos, setHudPos] = useState({ x: 0, y: 0 });
+  const [draggingHud, setDraggingHud] = useState(false);
+  const hudDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
+  const undoStack = useRef<any[]>([]);
+  const redoStack = useRef<any[]>([]);
+  const historyCurrent = useRef<any>(null);
+  const historyBurst = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyingHistory = useRef(false);
+  const copiedNode = useRef<any>(null);
+
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      if (!paletteResize.current) return;
+      setPaletteWidth(Math.max(180, Math.min(420, paletteResize.current.width + e.clientX - paletteResize.current.x)));
+    };
+    const up = () => { paletteResize.current = null; };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  }, []);
+
+  const snapshotProject = useCallback(() => {
+    const state = useFlowStore.getState();
+    return { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles };
+  }, []);
+
+  useEffect(() => {
+    historyCurrent.current = snapshotProject();
+    return useFlowStore.subscribe(state => {
+      const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles };
+      if (applyingHistory.current || JSON.stringify(next) === JSON.stringify(historyCurrent.current)) return;
+      if (!historyBurst.current && historyCurrent.current) undoStack.current.push(historyCurrent.current);
+      redoStack.current = [];
+      historyCurrent.current = next;
+      if (historyBurst.current) clearTimeout(historyBurst.current);
+      historyBurst.current = setTimeout(() => { historyBurst.current = null; }, 250);
+    });
+  }, [snapshotProject]);
+
+  const applySnapshot = useCallback((snapshot: any) => {
+    applyingHistory.current = true;
+    useFlowStore.setState({ ...snapshot, selectedNodeId: null, focusedNodeId: null });
+    historyCurrent.current = snapshot;
+    queueMicrotask(() => { applyingHistory.current = false; });
+  }, []);
+  const handleUndo = useCallback(() => {
+    const previous = undoStack.current.pop();
+    if (!previous) return;
+    redoStack.current.push(snapshotProject());
+    applySnapshot(previous);
+  }, [applySnapshot, snapshotProject]);
+  const handleRedo = useCallback(() => {
+    const next = redoStack.current.pop();
+    if (!next) return;
+    undoStack.current.push(snapshotProject());
+    applySnapshot(next);
+  }, [applySnapshot, snapshotProject]);
+  const handleCopy = useCallback(() => {
+    const state = useFlowStore.getState();
+    copiedNode.current = state.nodes.find(node => node.id === state.selectedNodeId) || null;
+  }, []);
+  const handlePaste = useCallback(() => {
+    if (!copiedNode.current) return;
+    const source = copiedNode.current;
+    const id = `node-copy-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const clone = { ...source, id, selected: false, position: { x: source.position.x + 35, y: source.position.y + 35 }, data: JSON.parse(JSON.stringify(source.data)) };
+    useFlowStore.setState(state => ({ nodes: [...state.nodes, clone], selectedNodeId: id }));
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z' && event.shiftKey) { event.preventDefault(); handleRedo(); }
+      else if (key === 'z') { event.preventDefault(); handleUndo(); }
+      else if (key === 'y') { event.preventDefault(); handleRedo(); }
+      else if (key === 'c') { event.preventDefault(); handleCopy(); }
+      else if (key === 'v') { event.preventDefault(); handlePaste(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleCopy, handlePaste, handleRedo, handleUndo]);
+  useEffect(() => {
+    if (!draggingLog) return;
+    const move = (e: PointerEvent) => setLogPos({ x: logDrag.current.left + e.clientX - logDrag.current.x, y: logDrag.current.top + e.clientY - logDrag.current.y });
+    const up = () => {
+      setLogPos(pos => ({ x: Math.abs(pos.x) < 18 ? 0 : pos.x, y: Math.abs(pos.y) < 18 ? 0 : pos.y }));
+      setDraggingLog(false);
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  }, [draggingLog]);
+  useEffect(() => {
+    if (!draggingHud) return;
+    const move = (e: PointerEvent) => setHudPos({ x: hudDrag.current.left + e.clientX - hudDrag.current.x, y: hudDrag.current.top + e.clientY - hudDrag.current.y });
+    const up = () => {
+      setHudPos(pos => ({ x: Math.abs(pos.x) < 18 ? 0 : pos.x, y: Math.abs(pos.y) < 18 ? 0 : pos.y }));
+      setDraggingHud(false);
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  }, [draggingHud]);
+
+  useEffect(() => {
+    if (!showJsbsimLog || !logWindowRef.current) return;
+    const update = () => setLogReservedHeight(Math.max(72, Math.min(window.innerHeight - 270, logWindowRef.current?.getBoundingClientRect().height || 40) + 40));
+    const observer = new ResizeObserver(update);
+    observer.observe(logWindowRef.current);
+    update();
+    return () => observer.disconnect();
+  }, [showJsbsimLog, jsbsimLogs.length]);
+
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void) | undefined;
+    listenJsbsimLog((payload: any) => {
+      if (!active || !payload?.line) return;
+      setJsbsimLogs(lines => [...lines, `[JSBSim/${payload.stream || 'output'}] ${payload.line}`].slice(-500));
+      }).then(fn => {
+        if (active) dispose = fn;
+        else fn();
+      });
+    return () => { active = false; dispose?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (showJsbsimLog && followLogTailRef.current && logWindowRef.current) {
+      logWindowRef.current.scrollTop = logWindowRef.current.scrollHeight;
+    }
+  }, [jsbsimLogs, showJsbsimLog]);
 
   // Auto-restore from localStorage on mount
   const CACHE_VERSION = 2;
@@ -170,16 +359,27 @@ function AppContent() {
   const updateNodeParams = useFlowStore((s) => s.updateNodeParams);
   const focusedModule =
     focusedNode &&
-    (focusedNode.data.componentType === 'system' || focusedNode.data.componentType === 'flight_control') &&
-    focusedNode.data.params?.channels
+    (focusedNode.data.componentType === 'system' ||
+      focusedNode.data.componentType === 'flight_control' ||
+      focusedNode.data.componentType === 'aero_coefficients')
       ? focusedNode
       : null;
+  const focusedAero = focusedModule?.data.componentType === 'aero_coefficients';
   let focusedChannels: any[] = [];
+  let focusedCoefficients: any[] = [];
   let focusedLayout: Record<string, { x: number; y: number }> | undefined;
   if (focusedModule) {
     try {
-      const parsed = JSON.parse(focusedModule.data.params.channels);
-      if (Array.isArray(parsed)) focusedChannels = parsed;
+      if (focusedAero) {
+        const parsed = JSON.parse(focusedModule.data.params.coefficients || '[]');
+        if (Array.isArray(parsed)) {
+          focusedCoefficients = parsed;
+          focusedChannels = aeroCoefficientsToChannels(parsed);
+        }
+      } else {
+        const parsed = JSON.parse(focusedModule.data.params.channels);
+        if (Array.isArray(parsed)) focusedChannels = parsed;
+      }
     } catch { /* ignore malformed */ }
     try {
       if (focusedModule.data.params.layout) {
@@ -192,6 +392,7 @@ function AppContent() {
   return (
     <div className="app">
       <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)}
+        onUndo={handleUndo} onRedo={handleRedo} onCopy={handleCopy} onPaste={handlePaste}
         jsbsimLogs={jsbsimLogs}
         onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
@@ -200,34 +401,51 @@ function AppContent() {
           <ModuleExpressionCanvas
             embedded
             mode="signal"
-            title={`${focusedModule.data.componentType === 'flight_control' ? '飞控' : '系统'} 信号流`}
+            title={focusedAero ? '气动系数数据流' : `${focusedModule.data.componentType === 'flight_control' ? '飞控' : '系统'} 信号流`}
             channels={focusedChannels}
-            topLevelProps={(focusedModule.data.params.properties || '')
+            topLevelProps={focusedAero ? [] : (focusedModule.data.params.properties || '')
               .split(',')
               .map((s: string) => s.trim())
               .filter(Boolean)}
             modelId={focusedModule.id}
             initialLayout={focusedLayout}
-            onChannelsChange={(chs) => updateNodeParams(focusedModule.id, { channels: JSON.stringify(chs) })}
+            onChannelsChange={(chs) => updateNodeParams(focusedModule.id, focusedAero
+              ? { coefficients: JSON.stringify(channelsToAeroCoefficients(chs, focusedCoefficients)) }
+              : { channels: JSON.stringify(chs) })}
             onLayoutChange={(layout) => updateNodeParams(focusedModule.id, { layout: JSON.stringify(layout) })}
             onBack={() => setFocusedNodeId(null)}
           />
         ) : (
           <>
-            <Palette onDragStart={handleDragStart} />
+            <Palette onDragStart={handleDragStart} collapsed={paletteCollapsed} onToggle={() => setPaletteCollapsed(value => !value)} width={paletteWidth}
+              onResizeStart={e => { e.preventDefault(); paletteResize.current = { x: e.clientX, width: paletteWidth }; }} />
             <Canvas dragType={dragType} onDragStart={handleDragStart} />
-            <div className="right-sidebar">
-              {showJsbsimLog ? (
-                <div className="jsbsim-log-sidebar">
-                  <div className="jsbsim-log-sidebar-head"><span>🖥️ JSBSim 信息</span><button onClick={() => setShowJsbsimLog(false)}>×</button></div>
-                  <div className="sim-log-window jsbsim-log-sidebar-window">
-                    {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
-                  </div>
-                </div>
-              ) : <><PropertyPanel /><FileManager /></>}
+            <div className={`right-sidebar${showJsbsimLog ? ' has-detached-log' : ''}`} style={showJsbsimLog ? { paddingTop: logReservedHeight } : undefined}>
+              <PropertyPanel /><FileManager />
             </div>
           </>
         )}
+      </div>
+
+      {/* Keep the log independent from the property sidebar.  It docks below
+       * the HUD by default but remains draggable like the HUD itself. */}
+      {showJsbsimLog && (
+        <div className="jsbsim-log-sidebar jsbsim-log-detached" style={logPos.x || logPos.y ? { transform: `translate(${logPos.x}px, ${logPos.y}px)` } : undefined}>
+          <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)}>×</button></div></div>
+          <div ref={logWindowRef} className="sim-log-window jsbsim-log-sidebar-window" onScroll={event => {
+            const element = event.currentTarget;
+            followLogTailRef.current =
+              element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+          }}>
+            {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
+          </div>
+        </div>
+      )}
+
+      {/* HUD is an independent window and remains visible when the log is closed. */}
+      <div className="jsbsim-hud-window" style={{ transform: `translate(${hudPos.x}px, ${hudPos.y}px)` }}>
+        <div className="jsbsim-hud-window-head" onPointerDown={e => { hudDrag.current = { x: e.clientX, y: e.clientY, left: hudPos.x, top: hudPos.y }; setDraggingHud(true); }}><span>HUD · FLIGHT DISPLAY</span><span>↕ 拖动</span></div>
+        <FlightHud telemetry={telemetry} connected={connected} />
       </div>
 
       {/* WebGL not available dialog */}

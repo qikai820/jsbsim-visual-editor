@@ -27,6 +27,7 @@ interface FlowState {
   setAircraft: (aircraft: { name: string; version: string; release: string }) => void;
   loadProject: (data: { nodes: Node<AircraftNodeData>[]; edges: Edge[]; aircraft: any; subFiles?: SubFile[] }) => void;
   clearAll: () => void;
+  restoreLayout: () => void;
 
   addSubFile: (fileType: SubFileType, fileName: string) => void;
   removeSubFile: (id: string) => void;
@@ -36,6 +37,88 @@ interface FlowState {
 
 let nodeCounter = 0;
 let subFileCounter = 0;
+
+// Convert aircraft's physical coordinates into a compact display layout while
+// retaining their relative arrangement.  A minimum grid spacing prevents the
+// scaled coordinates from making cards overlap.
+function compactDisplayNodes(nodes: Node<AircraftNodeData>[]): Node<AircraftNodeData>[] {
+  if (nodes.length < 2) return nodes;
+  const toInches = (value: unknown, unit: string) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return null;
+    switch (unit.toUpperCase()) {
+      case 'M': case 'MTR': return number * 39.3701;
+      case 'CM': return number * 0.393701;
+      case 'FT': return number * 12;
+      default: return number;
+    }
+  };
+  const located: { node: Node<AircraftNodeData>; physicalX: number; physicalY: number }[] = [];
+  const unlocated: Node<AircraftNodeData>[] = [];
+  for (const node of nodes) {
+    const location = node.data.params?.location || node.data.params?.cg;
+    const unit = String(location?.unit || 'IN');
+    const physicalX = toInches(location?.x, unit);
+    const physicalY = toInches(location?.y, unit);
+    if (physicalX !== null && physicalY !== null) located.push({ node, physicalX, physicalY });
+    else unlocated.push(node);
+  }
+  if (located.length === 0) return nodes;
+
+  const physicalXs = located.map(item => item.physicalX);
+  const physicalYs = located.map(item => item.physicalY);
+  const minPhysicalX = Math.min(...physicalXs), maxPhysicalX = Math.max(...physicalXs);
+  const minPhysicalY = Math.min(...physicalYs), maxPhysicalY = Math.max(...physicalYs);
+  const spanForward = Math.max(1, maxPhysicalX - minPhysicalX);
+  const spanLateral = Math.max(1, maxPhysicalY - minPhysicalY);
+  // One scale is applied to both axes: large aircraft shrink, small aircraft
+  // grow only enough to remain legible, and X/Y proportions stay truthful.
+  const scale = Math.min(820 / spanLateral, 560 / spanForward);
+  const sorted = located.map(item => ({
+    node: item.node,
+    x: 80 + (item.physicalY - minPhysicalY) * scale,
+    // A propeller/thruster is mounted at the same physical point as its
+    // engine.  Draw its card just ahead of the engine so the shared x/y
+    // remains apparent without stacking both cards on top of each other.
+    y: 60 + (maxPhysicalX - item.physicalX) * scale
+      - (item.node.data.componentType === 'propeller' ? 145 : 0),
+  })).sort((a, b) => a.y - b.y || a.x - b.x);
+  // Keep the uniformly scaled X/Y placement.  Only cards whose rectangles
+  // actually overlap are nudged to the nearest free point around their
+  // physical location; this avoids converting the aircraft into a row/grid.
+  const placed: typeof sorted = [];
+  const overlaps = (x: number, y: number) => placed.some(item =>
+    Math.abs(x - item.x) < 230 && Math.abs(y - item.y) < 125);
+  for (const current of sorted) {
+    const baseX = current.x, baseY = current.y;
+    if (overlaps(baseX, baseY)) {
+      for (let step = 1; step <= 48; step++) {
+        const ring = Math.ceil(step / 8);
+        const angle = (step % 8) * Math.PI / 4;
+        const candidateX = Math.max(20, baseX + Math.cos(angle) * ring * 70);
+        const candidateY = Math.max(20, baseY + Math.sin(angle) * ring * 55);
+        if (!overlaps(candidateX, candidateY)) {
+          current.x = candidateX;
+          current.y = candidateY;
+          break;
+        }
+      }
+    }
+    placed.push(current);
+  }
+  const positions = new Map(sorted.map(item => [item.node.id, { x: item.x, y: item.y }]));
+  const aircraftRight = Math.max(...sorted.map(item => item.x)) + 300;
+  unlocated.forEach((node, index) => {
+    positions.set(node.id, {
+      x: aircraftRight + (index % 2) * 260,
+      y: 60 + Math.floor(index / 2) * 140,
+    });
+  });
+  return nodes.map(n => ({
+    ...n,
+    position: positions.get(n.id)!,
+  }));
+}
 
 export const useFlowStore = create<FlowState>((set, get) => ({
   nodes: [],
@@ -55,7 +138,44 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   onConnect: (connection) => {
-    set({ edges: addEdge({ ...connection, type: 'smoothstep', animated: true }, get().edges) });
+    const state = get();
+    const source = state.nodes.find(n => n.id === connection.source);
+    const target = state.nodes.find(n => n.id === connection.target);
+    const nextEdges = addEdge({ ...connection, type: 'smoothstep', animated: true }, state.edges);
+
+    // A sensor-to-HIL connection is also a configuration action.  Copy the
+    // standard sensor-module property paths into the selected protocol.
+    if (source && target?.data.componentType === 'output') {
+      const sourceName = `${source.data.label || ''} ${source.data.params?.file || ''}`.toLowerCase();
+      const targetType = target.data.params?.type;
+      const patch: Record<string, string> = {};
+      if (targetType === 'HIL_SENSOR' && sourceName.includes('imu')) {
+        Object.assign(patch, {
+          hil_imu_accel_x: 'sensor/imu/accelX_mps2',
+          hil_imu_accel_y: 'sensor/imu/accelY_mps2',
+          hil_imu_accel_z: 'sensor/imu/accelZ_mps2',
+          hil_imu_gyro_x: 'sensor/imu/gyroX_rps',
+          hil_imu_gyro_y: 'sensor/imu/gyroY_rps',
+          hil_imu_gyro_z: 'sensor/imu/gyroZ_rps',
+        });
+      } else if (targetType === 'HIL_GPS' && sourceName.includes('gps')) {
+        Object.assign(patch, {
+          hil_gps_lat: 'sensor/gps/lat_rad',
+          hil_gps_lon: 'sensor/gps/long_rad',
+          hil_gps_alt: 'sensor/gps/alt_m',
+          hil_gps_vn: 'sensor/gps/vNorth_mps',
+          hil_gps_ve: 'sensor/gps/vEast_mps',
+          hil_gps_vd: 'sensor/gps/vDown_mps',
+        });
+      }
+      if (Object.keys(patch).length > 0) {
+        set({ edges: nextEdges, nodes: state.nodes.map(n => n.id === target.id
+          ? { ...n, data: { ...n.data, params: { ...n.data.params, ...patch } } }
+          : n) });
+        return;
+      }
+    }
+    set({ edges: nextEdges });
   },
 
   updateEdgeData: (id, patch) => {
@@ -100,6 +220,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     });
   },
 
+  restoreLayout: () => {
+    set({ nodes: compactDisplayNodes(get().nodes) });
+  },
+
   setSelectedNode: (id) => set({ selectedNodeId: id }),
 
   setFocusedNodeId: (id) => set({ focusedNodeId: id }),
@@ -108,7 +232,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   loadProject: (data) => {
     set({
-      nodes: data.nodes,
+      nodes: compactDisplayNodes(data.nodes),
       edges: data.edges,
       aircraft: data.aircraft || { name: 'Loaded Aircraft', version: '2.0', release: 'PRODUCTION' },
       subFiles: data.subFiles || [],

@@ -10,6 +10,7 @@
 //     (component name). We reconstruct those edges by signal name.
 
 import type { ExprNode } from '../types';
+import dagre from 'dagre';
 import { BLOCK_DEFS } from './expressionConverter';
 import { exprToFormula } from './exprToFormula';
 import { orderRanksByBarycenter } from './layoutUtils';
@@ -29,6 +30,139 @@ export interface SignalGraph {
   edges: any[];
 }
 
+function signalNodeSize(node: any): { width: number; height: number } {
+  if (node.data?.kind === 'signal') return { width: 126, height: 30 };
+  const type = node.data?.itemType;
+  const inputs = Math.max(1, node.data?.inputs?.length || 0);
+  if (type === 'pure_gain' || type === 'scheduled_gain') return { width: 62, height: 46 };
+  if (type === 'summer') return { width: 72, height: Math.max(62, 34 + inputs * 22) };
+  if (type === 'pid') return { width: 88, height: 60 };
+  return { width: 94, height: Math.max(54, 30 + inputs * 18) };
+}
+
+/** Global compact layout with hard rectangular node separation. */
+function applyDagreSignalLayout(
+  nodes: any[], edges: any[], canvas?: { w: number; h: number },
+): void {
+  const graph = new dagre.graphlib.Graph({ multigraph: true, compound: false });
+  graph.setGraph({
+    rankdir: 'LR',
+    ranker: 'network-simplex',
+    acyclicer: 'greedy',
+    align: 'UL',
+    // When a real canvas is available, start slightly denser. The subsequent
+    // fit pass below expands a small graph or centres a large graph as needed.
+    nodesep: canvas ? 26 : 34,
+    edgesep: 14,
+    ranksep: canvas ? 82 : 118,
+    marginx: canvas ? 26 : 70,
+    marginy: canvas ? 26 : 60,
+  });
+  graph.setDefaultEdgeLabel(() => ({}));
+  for (const node of nodes) graph.setNode(node.id, signalNodeSize(node));
+  // A high edge weight makes the network-simplex ranker prefer compact ranks
+  // and short paths while the ordering pass still minimises crossings.
+  for (const edge of edges) {
+    graph.setEdge(edge.source, edge.target, { edgeId: edge.id, weight: 12, minlen: 1 }, edge.id);
+  }
+  dagre.layout(graph);
+
+  // Local wire-length refinement. Dagre gives the globally valid ranks/order;
+  // within each rank, pull a block toward the median of all its neighbours.
+  // The forward + backward packing passes preserve order and a hard rectangle
+  // gap, so this can only shorten links without creating module overlap.
+  const layout = new Map<string, { x: number; y: number; w: number; h: number; rank: number }>();
+  const byRank = new Map<number, string[]>();
+  for (const node of nodes) {
+    const p = graph.node(node.id);
+    const size = signalNodeSize(node);
+    const rank = Number((p as any).rank ?? Math.round(p.x / 10));
+    layout.set(node.id, { x: p.x, y: p.y, w: size.width, h: size.height, rank });
+    if (!byRank.has(rank)) byRank.set(rank, []);
+    byRank.get(rank)!.push(node.id);
+  }
+  const neighbours = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!neighbours.has(edge.source)) neighbours.set(edge.source, []);
+    if (!neighbours.has(edge.target)) neighbours.set(edge.target, []);
+    neighbours.get(edge.source)!.push(edge.target);
+    neighbours.get(edge.target)!.push(edge.source);
+  }
+  const ranks = [...byRank.keys()].sort((a, b) => a - b);
+  const GAP_Y = 30;
+  for (let pass = 0; pass < 6; pass++) {
+    const rankOrder = pass % 2 ? [...ranks].reverse() : ranks;
+    for (const rank of rankOrder) {
+      const ids = byRank.get(rank)!;
+      ids.sort((a, b) => layout.get(a)!.y - layout.get(b)!.y || a.localeCompare(b));
+      const desired = new Map<string, number>();
+      for (const id of ids) {
+        const ys = (neighbours.get(id) || [])
+          .map(n => layout.get(n)?.y)
+          .filter((v): v is number => v !== undefined)
+          .sort((a, b) => a - b);
+        desired.set(id, ys.length ? ys[Math.floor(ys.length / 2)] : layout.get(id)!.y);
+      }
+      // Forward packing gives every rectangle its required lower bound.
+      for (let i = 0; i < ids.length; i++) {
+        const current = layout.get(ids[i])!;
+        const previous = i ? layout.get(ids[i - 1])! : undefined;
+        const minY = previous ? previous.y + previous.h / 2 + GAP_Y + current.h / 2 : -Infinity;
+        current.y = Math.max(desired.get(ids[i])!, minY);
+      }
+      // Backward packing removes excess whitespace while retaining the gap.
+      for (let i = ids.length - 2; i >= 0; i--) {
+        const current = layout.get(ids[i])!;
+        const next = layout.get(ids[i + 1])!;
+        const maxY = next.y - next.h / 2 - GAP_Y - current.h / 2;
+        current.y = Math.min(current.y, maxY);
+      }
+    }
+  }
+  for (const node of nodes) {
+    const p = layout.get(node.id)!;
+    node.position = { x: p.x - p.w / 2, y: p.y - p.h / 2 };
+    node.data = { ...(node.data || {}), layoutWidth: p.w, layoutHeight: p.h };
+  }
+
+  // Fit distribution: expand only the whitespace (never the module bodies)
+  // when the graph is smaller than the current canvas, then centre it. For a
+  // graph larger than the canvas, retain the compact layout and anchor it with
+  // a small margin so the minimum possible area remains visible.
+  if (canvas && canvas.w > 0 && canvas.h > 0 && nodes.length) {
+    const bounds = () => {
+      const left = Math.min(...nodes.map(n => n.position.x));
+      const top = Math.min(...nodes.map(n => n.position.y));
+      const right = Math.max(...nodes.map(n => n.position.x + n.data.layoutWidth));
+      const bottom = Math.max(...nodes.map(n => n.position.y + n.data.layoutHeight));
+      return { left, top, right, bottom, w: right - left, h: bottom - top };
+    };
+    let b = bounds();
+    const margin = 42;
+    const availableW = Math.max(1, canvas.w - margin * 2);
+    const availableH = Math.max(1, canvas.h - margin * 2);
+    const minW = Math.max(...nodes.map(n => n.data.layoutWidth));
+    const minH = Math.max(...nodes.map(n => n.data.layoutHeight));
+    const spanX = Math.max(1, Math.max(...nodes.map(n => n.position.x)) - Math.min(...nodes.map(n => n.position.x)));
+    const spanY = Math.max(1, Math.max(...nodes.map(n => n.position.y)) - Math.min(...nodes.map(n => n.position.y)));
+    const scaleX = b.w < availableW ? Math.min(1.8, Math.max(1, (availableW - minW) / spanX)) : 1;
+    const scaleY = b.h < availableH ? Math.min(1.8, Math.max(1, (availableH - minH) / spanY)) : 1;
+    if (scaleX > 1 || scaleY > 1) {
+      for (const node of nodes) {
+        node.position.x = b.left + (node.position.x - b.left) * scaleX;
+        node.position.y = b.top + (node.position.y - b.top) * scaleY;
+      }
+      b = bounds();
+    }
+    const dx = b.w <= availableW ? (canvas.w - b.w) / 2 - b.left : margin - b.left;
+    const dy = b.h <= availableH ? (canvas.h - b.h) / 2 - b.top : margin - b.top;
+    for (const node of nodes) {
+      node.position.x += dx;
+      node.position.y += dy;
+    }
+  }
+}
+
 // ── Component metadata (label / icon / color) ───────────────────────────────
 // Covers every component defined in JSBSimCommon.xsd <channel>. Entries are
 // keyed by the raw XML element name emitted by xmlParser (e.g. "lag_filter",
@@ -38,6 +172,7 @@ export const COMPONENT_META: Record<string, { label: string; icon: string; color
   // ── Math / arithmetic (mirror func_group operators) ──
   function:    { label: '函数 function', icon: 'ƒ', color: '#3b82f6' },
   fcs_function:{ label: '函数 fcs_function', icon: 'ƒ', color: '#2563eb' },
+  aero_table:  { label: '插值表 LUT', icon: 'LUT', color: '#0ea5e9' },
   summer:      { label: '求和 summer', icon: 'Σ', color: '#f97316' },
   pure_gain:   { label: '增益 pure_gain', icon: 'G', color: '#10b981' },
   pid:         { label: 'PID 控制器', icon: 'PID', color: '#10b981' },
@@ -142,6 +277,16 @@ export function collectPropertyNodes(expr: any, acc: any[] = []): any[] {
     acc.push(expr);
     return acc;
   }
+  // JSBSim tables keep independent variables as table attributes, rather than
+  // nested <property> nodes. Expose them to the graph as editable inputs.
+  if (expr.kind === 'table') {
+    for (const key of ['var1', 'var2', 'var3']) {
+      if (typeof expr[key] === 'string' && expr[key].trim()) {
+        acc.push({ name: expr[key], __tableRef: expr, __tableKey: key });
+      }
+    }
+    return acc;
+  }
   const branches = [
     expr.children, expr.left, expr.right, expr.base, expr.exponent,
     expr.child, expr.y, expr.x, expr.cond, expr.then, expr.else,
@@ -155,7 +300,7 @@ export function collectPropertyNodes(expr: any, acc: any[] = []): any[] {
 }
 
 export function extractInputSignals(item: ChannelItem): string[] {
-  if ((item.type === 'function' || item.type === 'fcs_function') && item.expression) {
+  if ((item.type === 'function' || item.type === 'fcs_function' || item.type === 'aero_table') && item.expression) {
     return collectPropertyNodes(item.expression).map(n => n.name).filter(Boolean);
   }
   // Multi-input components (e.g. summer) carry an ordered `inputs` array.
@@ -190,7 +335,10 @@ function setFunctionInputs(expr: any, inputs: string[]): any {
   const nodes = collectPropertyNodes(expr);
   let k = 0;
   for (const nd of nodes) {
-    if (k < inputs.length) nd.name = inputs[k] || nd.name;
+    if (k < inputs.length) {
+      if (nd.__tableRef && nd.__tableKey) nd.__tableRef[nd.__tableKey] = inputs[k] || nd.name;
+      else nd.name = inputs[k] || nd.name;
+    }
     k++;
   }
   return expr;
@@ -281,7 +429,7 @@ export function buildSignalGraph(
     const inputs = consumerInputs.get(e.id)!;
     const gains = computeGains(e.item);
     const meta = COMPONENT_META[e.item.type] || { label: e.item.type, icon: '•', color: '#64748b' };
-    const isFn = e.item.type === 'function' || e.item.type === 'fcs_function';
+    const isFn = e.item.type === 'function' || e.item.type === 'fcs_function' || e.item.type === 'aero_table';
     const expr = isFn ? e.item.expression : undefined;
     // Normalize compProps: a PID always carries kp/ki/kd (JSBSim defaults
     // Ki/Kd to 0) so they are visible on the block and editable in the panel.
@@ -355,91 +503,31 @@ export function buildSignalGraph(
     }
   }
 
-  // ── Data-flow-driven layout ──
-  // 1) Group modules by channel
-  // 2) Topological-sort channels by signal dependencies (data flow direction)
-  // 3) Place each channel as a column, left→right
-  // 4) Within each column, order modules by barycenter of connections
-  const NODE_W = 56;
-  const NODE_H = 40;
-  const COL_GAP = 200;   // horizontal gap between channel columns
-  const ROW_GAP = 50;    // vertical gap between modules in same column
+  // ── Data-flow-driven layered layout ──
+  // Use the global ranks and barycenter order calculated above. The old
+  // channel-column layout discarded both and made large channels very tall.
+  const NODE_W = 92;
+  const NODE_H = 54;
+  const COL_STEP = NODE_W + 150; // leave room for orthogonal routing tracks
+  const ROW_STEP = NODE_H + 34;
+  const START_X = 150;
+  const START_Y = 80;
+  const rankValues = [...byRank.keys()].sort((a, b) => a - b);
+  const visualRank = new Map<number, number>();
+  rankValues.forEach((r, i) => visualRank.set(r, i));
+  const maxRows = Math.max(1, ...[...byRank.values()].map(ids => ids.length));
+  const fullHeight = (maxRows - 1) * ROW_STEP;
 
-  // Group items by channel index
-  const byChannel = new Map<number, typeof items>();
-  for (const e of items) {
-    if (!byChannel.has(e.ch)) byChannel.set(e.ch, []);
-    byChannel.get(e.ch)!.push(e);
-  }
-
-  // Determine channel order by data flow: channel A → channel B if A produces
-  // a signal consumed by B.  Topological sort.
-  const chIds = [...byChannel.keys()].sort((a, b) => a - b);
-  const chConsumers = new Map<number, Set<number>>(); // ch → set of downstream ch
-  for (const e of items) {
-    const outSig = extractOutputSignal(e.item);
-    if (!outSig) continue;
-    for (const cid of (consumersOf.get(outSig) || [])) {
-      const consumer = items.find(x => x.id === cid);
-      if (consumer && consumer.ch !== e.ch) {
-        if (!chConsumers.has(e.ch)) chConsumers.set(e.ch, new Set());
-        chConsumers.get(e.ch)!.add(consumer.ch);
-      }
-    }
-  }
-  // Topological sort of channels
-  const chInDeg = new Map<number, number>();
-  for (const c of chIds) chInDeg.set(c, 0);
-  for (const [, downs] of chConsumers) {
-    for (const d of downs) chInDeg.set(d, (chInDeg.get(d) ?? 0) + 1);
-  }
-  const sortedChs: number[] = [];
-  const queue = chIds.filter(c => (chInDeg.get(c) ?? 0) === 0);
-  while (queue.length > 0) {
-    const c = queue.shift()!;
-    sortedChs.push(c);
-    for (const d of (chConsumers.get(c) || [])) {
-      chInDeg.set(d, (chInDeg.get(d) ?? 0) - 1);
-      if (chInDeg.get(d) === 0) queue.push(d);
-    }
-  }
-  // Add any remaining channels (cycles or disconnected)
-  for (const c of chIds) if (!sortedChs.includes(c)) sortedChs.push(c);
-
-  // Assign x position per channel column
-  const chX = new Map<number, number>();
-  sortedChs.forEach((c, i) => { chX.set(c, 80 + i * (NODE_W + COL_GAP)); });
-
-  // Within each channel, order modules by barycenter of their upstream connections
-  const compY = new Map<string, number>(); // temporary y for ordering
-  for (const chIdx of sortedChs) {
-    const group = byChannel.get(chIdx)!;
-    // Initial order: by original index
-    group.sort((a, b) => a.id.localeCompare(b.id));
-
-    // Barycenter sweep (2 passes)
-    for (let pass = 0; pass < 3; pass++) {
-      for (const e of group) {
-        const ups = (consumerInputs.get(e.id) || [])
-          .map(s => producerOf.get(s))
-          .filter((p): p is string => !!p && p !== e.id && compY.has(p));
-        if (ups.length > 0) {
-          const avg = ups.reduce((s, p) => s + (compY.get(p) ?? 0), 0) / ups.length;
-          compY.set(e.id, avg);
-        }
-      }
-      group.sort((a, b) => (compY.get(a.id) ?? 0) - (compY.get(b.id) ?? 0));
-    }
-
-    // Assign final positions
-    const x = chX.get(chIdx)!;
-    group.forEach((e, i) => {
-      const n = nodes.find(nd => nd.id === e.id);
-      if (n) {
-        const y = 80 + i * (NODE_H + ROW_GAP);
-        n.position = { x, y };
-        compY.set(e.id, y);
-      }
+  for (const r of rankValues) {
+    const ids = byRank.get(r)!;
+    const columnHeight = (ids.length - 1) * ROW_STEP;
+    const y0 = START_Y + (fullHeight - columnHeight) / 2;
+    ids.forEach((id, row) => {
+      const n = nodes.find(nd => nd.id === id);
+      if (n) n.position = {
+        x: START_X + (visualRank.get(r) ?? 0) * COL_STEP,
+        y: y0 + row * ROW_STEP,
+      };
     });
   }
 
@@ -451,20 +539,33 @@ export function buildSignalGraph(
   const compMaxX = compXs.length ? Math.max(...compXs) : 80;
   const compMinY = compYs.length ? Math.min(...compYs) : 80;
   const compMaxY = compYs.length ? Math.max(...compYs) : 80;
-  const epGap = 100;
-  // Sources: place in a compact column to the left of the components.
-  const SOURCE_ROW = 40;
-  let si = 0;
-  for (const [s, nid] of sourceIds) {
-    const n = nodes.find(x => x.id === nid)!;
-    n.position = { x: compMinX - epGap, y: compMinY + si * SOURCE_ROW };
-    si++;
+  const epGap = 130;
+  // Place sources near the median of their consumers, then resolve collisions.
+  const SOURCE_ROW = 34;
+  const sourceEntries = [...sourceIds.entries()].map(([signal, id]) => {
+    const ys = (consumersOf.get(signal) || [])
+      .map(cid => nodes.find(n => n.id === cid)?.position.y)
+      .filter((v): v is number => v !== undefined)
+      .sort((a, b) => a - b);
+    return { signal, id, idealY: ys.length ? ys[Math.floor(ys.length / 2)] : compMinY };
+  }).sort((a, b) => a.idealY - b.idealY || a.signal.localeCompare(b.signal));
+  let previousSourceY = compMinY - SOURCE_ROW;
+  for (const entry of sourceEntries) {
+    const n = nodes.find(x => x.id === entry.id)!;
+    const y = Math.max(entry.idealY, previousSourceY + SOURCE_ROW);
+    n.position = { x: compMinX - epGap, y };
+    previousSourceY = y;
   }
-  let ki = 0;
-  for (const [sig, nid] of sinkIds) {
-    const n = nodes.find(x => x.id === nid)!;
-    n.position = { x: compMaxX + epGap, y: compMinY + ki * SOURCE_ROW };
-    ki++;
+  const sinkEntries = [...sinkIds.entries()].map(([signal, id]) => ({
+    signal, id,
+    idealY: nodes.find(n => n.id === producerOf.get(signal))?.position.y ?? compMinY,
+  })).sort((a, b) => a.idealY - b.idealY || a.signal.localeCompare(b.signal));
+  let previousSinkY = compMinY - SOURCE_ROW;
+  for (const entry of sinkEntries) {
+    const n = nodes.find(x => x.id === entry.id)!;
+    const y = Math.max(entry.idealY, previousSinkY + SOURCE_ROW);
+    n.position = { x: compMaxX + epGap, y };
+    previousSinkY = y;
   }
 
   // Edges (wired by signal name)
@@ -501,11 +602,16 @@ export function buildSignalGraph(
     });
   }
 
+  // Dagre jointly optimises rank assignment, in-rank order and whitespace.
+  // Run it after all endpoint nodes and edges exist, replacing the provisional
+  // positions above with a compact, collision-free global layout.
+  applyDagreSignalLayout(nodes, edges, opts.canvas);
+
   // ── Separate overlapping signal lines ──
   // Fan edges out from shared source/target handles by a small vertical offset
   // (visual only; the wiring/signal mapping is unchanged). Reduces the cases
   // where two wires run on top of each other.
-  assignSignalEdgeOffsets(edges);
+  assignSignalEdgeRouting(edges, nodes, COL_STEP);
 
   return { nodes, edges };
 }
@@ -529,7 +635,7 @@ export function assignSignalEdgeOffsets(edges: any[], spread = 0): any[] {
   const fan = (list: any[]) => {
     const mid = (list.length - 1) / 2;
     list.forEach((e, i) => {
-      const off = (i - mid) * spread;
+      const off = Math.max(-12, Math.min(12, (i - mid) * spread));
       e.data = e.data || {};
       e.data.srcOffset = off;
     });
@@ -537,13 +643,82 @@ export function assignSignalEdgeOffsets(edges: any[], spread = 0): any[] {
   const fanTgt = (list: any[]) => {
     const mid = (list.length - 1) / 2;
     list.forEach((e, i) => {
-      const off = (i - mid) * spread;
+      const off = Math.max(-12, Math.min(12, (i - mid) * spread));
       e.data = e.data || {};
       e.data.tgtOffset = off;
     });
   };
   for (const l of bySrc.values()) fan(l);
   for (const l of byTgt.values()) fanTgt(l);
+  return edges;
+}
+
+/**
+ * Simulink-style fan-out routing. All edges leave a component through exactly
+ * one output point and share the initial horizontal trunk. Their vertical
+ * tracks are separated only inside the free corridor between node columns.
+ */
+export function assignSignalEdgeRouting(edges: any[], nodes: any[], colStep = 242): any[] {
+  const nodeById = new Map(nodes.map(n => [n.id, n]));
+  const bySource = new Map<string, any[]>();
+  for (const edge of edges) {
+    const key = `${edge.source}:${edge.sourceHandle || 'out'}`;
+    if (!bySource.has(key)) bySource.set(key, []);
+    bySource.get(key)!.push(edge);
+  }
+
+  type SourceGroup = {
+    list: any[]; sx: number; sy: number; direction: 1 | -1;
+    boundaryX: number; targetMedianY: number; corridor: string;
+  };
+  const corridors = new Map<string, SourceGroup[]>();
+  for (const list of bySource.values()) {
+    const source = nodeById.get(list[0].source);
+    const sx = source?.position.x ?? 0;
+    const sy = source?.position.y ?? 0;
+    const targets = list.map(e => nodeById.get(e.target)).filter(Boolean);
+    const targetXs = targets.map(n => n.position.x as number);
+    const rightward = targetXs.filter(x => x >= sx).length >= targetXs.length / 2;
+    const direction: 1 | -1 = rightward ? 1 : -1;
+    const inDirection = targetXs.filter(x => direction * (x - sx) > 0);
+    const boundaryX = inDirection.length
+      ? (direction > 0 ? Math.min(...inDirection) : Math.max(...inDirection))
+      : sx + direction * colStep;
+    const targetYs = targets.map(n => n.position.y as number).sort((a, b) => a - b);
+    const targetMedianY = targetYs.length ? targetYs[Math.floor(targetYs.length / 2)] : sy;
+    // Groups with the same source column, direction and first destination
+    // column compete for tracks in the same physical routing corridor.
+    const corridor = `${Math.round(sx)}:${direction}:${Math.round(boundaryX)}`;
+    const group = { list, sx, sy, direction, boundaryX, targetMedianY, corridor };
+    if (!corridors.has(corridor)) corridors.set(corridor, []);
+    corridors.get(corridor)!.push(group);
+  }
+
+  for (const groups of corridors.values()) {
+    groups.sort((a, b) => a.sy - b.sy || a.targetMedianY - b.targetMedianY ||
+      a.list[0].source.localeCompare(b.list[0].source));
+    groups.forEach((group, index) => {
+      const locked = group.list.find(e => e.data?.routeLocked && typeof e.data?.routeX === 'number');
+      const gap = Math.max(70, Math.abs(group.boundaryX - group.sx));
+      // Keep clear of both node bodies. Every source gets a unique track;
+      // only edges belonging to that same source are allowed to share it.
+      const near = Math.min(74, Math.max(34, gap * 0.28));
+      const far = Math.max(near, gap - 34);
+      const fraction = (index + 1) / (groups.length + 1);
+      const distance = near + (far - near) * fraction;
+      const routeX = locked ? locked.data.routeX : group.sx + group.direction * distance;
+      group.list.forEach((edge) => {
+      edge.data = {
+        ...(edge.data || {}),
+        routeX,
+        routeOffset: 0,
+        // Never fan the source handle itself: one module has one output port.
+        srcOffset: 0,
+        tgtOffset: 0,
+      };
+      });
+    });
+  }
   return edges;
 }
 
@@ -587,7 +762,7 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
     }
 
     let item: any;
-    if (d.itemType === 'function' || d.itemType === 'fcs_function') {
+    if (d.itemType === 'function' || d.itemType === 'fcs_function' || d.itemType === 'aero_table') {
       const expr = cloneExpr(d.expression);
       setFunctionInputs(expr, inputs);
       item = { type: d.itemType, name: d.name || '', expression: expr };
