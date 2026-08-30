@@ -41,6 +41,12 @@ const UAVCAN_DSDL_TYPES: Record<string, string> = {
   AIRSPEED: 'uavcan.si.sample.velocity.Scalar.1.0',
 };
 
+const HIL_ACTUATOR_CONTROL_COUNT = 16;
+const HIL_ACTUATOR_DEFAULT_PROPERTIES = Array.from(
+  { length: HIL_ACTUATOR_CONTROL_COUNT },
+  (_, index) => `fcs/throttle-cmd-norm[${index}]`,
+);
+
 function parseDsdlFields(source: unknown): string[] {
   if (typeof source !== 'string' || !source.trim()) return [];
   const fields: string[] = [];
@@ -294,6 +300,14 @@ export default function PropertyPanel() {
   }
 
   const handleChange = (key: string, value: any) => {
+    if (node.data.componentType === 'input' && key === 'type') {
+      const params: Record<string, any> = { type: value };
+      if (value === 'HIL_ACTUATOR_CONTROLS' && !String(node.data.params.properties || '').trim()) {
+        params.properties = HIL_ACTUATOR_DEFAULT_PROPERTIES.join(',');
+      }
+      updateNodeParams(node.id, params);
+      return;
+    }
     if (node.data.componentType === 'uavcan' && key === 'sensor_type') {
       const mapping = UAVCAN_SENSOR_MAPPINGS[value];
       updateNodeParams(node.id, {
@@ -512,6 +526,40 @@ export default function PropertyPanel() {
           return true;
         })
         .map(([key, paramDef]) => {
+          if (node.data.componentType === 'input' && key === 'properties' &&
+              node.data.params.type === 'HIL_ACTUATOR_CONTROLS') {
+            const configured = String(node.data.params.properties || '')
+              .split(',')
+              .map(value => value.trim());
+            const values = Array.from(
+              { length: HIL_ACTUATOR_CONTROL_COUNT },
+              (_, index) => configured[index] || HIL_ACTUATOR_DEFAULT_PROPERTIES[index],
+            );
+            const updateOutput = (index: number, value: string) => {
+              const next = [...values];
+              next[index] = value;
+              updateNodeParams(node.id, { properties: next.join(',') });
+            };
+            return (
+              <div className="field-row hil-actuator-properties" key={key}>
+                <label>{paramDef.label}（16 路）</label>
+                {values.map((value, index) => (
+                  <div className="field-row" key={`${key}-${index}`}>
+                    <label>controls[{index}]</label>
+                    <input
+                      type="text"
+                      value={value}
+                      placeholder={`JSBSim 输出属性 ${index + 1}`}
+                      onChange={event => updateOutput(index, event.target.value)}
+                    />
+                  </div>
+                ))}
+                <small className="dsdl-loaded-state">
+                  MAVLink HIL_ACTUATOR_CONTROLS 的 controls[0..15] 按顺序映射到 JSBSim 属性
+                </small>
+              </div>
+            );
+          }
           if (node.data.componentType === 'uavcan' && key === 'properties') {
             const sensorType = String(node.data.params.sensor_type || 'CUSTOM');
             const preset = UAVCAN_SENSOR_MAPPINGS[sensorType];

@@ -1384,21 +1384,22 @@ pub fn parse_subfile_xml(xml: &str, file_type: &str) -> Result<serde_json::Value
 
     // System
     if file_type == "system" || (file_type.is_empty() && root.tag == "system") {
-        let mut result = serde_json::json!({
+        // Use the aircraft system parser here as well.  The former shortcut
+        // only retained top-level properties and silently discarded sensor,
+        // accelerometer, magnetometer, channel and function definitions.
+        let wrapper = format!(
+            "<?xml version=\"1.0\"?><fdm_config name=\"Subfile\" version=\"2.0\">{xml}</fdm_config>"
+        );
+        let graph = crate::xml_parser::parse_xml(&wrapper, &std::collections::HashMap::new())?;
+        let system = graph["nodes"].as_array()
+            .and_then(|nodes| nodes.iter().find(|node| node["data"]["componentType"] == "system"))
+            .ok_or_else(|| "No system element found in sub-file".to_string())?;
+        return Ok(serde_json::json!({
             "type": "system",
-            "name": get_attr(&root, "name").unwrap_or(""),
-            "params": {}
-        });
-        let params = result.get_mut("params").unwrap();
-        let properties: Vec<String> = find_children(&root, "property")
-            .iter()
-            .map(|p| get_text(p))
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !properties.is_empty() {
-            params["properties"] = serde_json::json!(properties.join(","));
-        }
-        return Ok(result);
+            "name": system["data"]["params"]["name"].as_str()
+                .or_else(|| system["data"]["label"].as_str()).unwrap_or(""),
+            "params": system["data"]["params"].clone()
+        }));
     }
 
     // Generic: try to extract params from whatever root element we have
@@ -1441,5 +1442,57 @@ fn extract_element_params_generic(el: &XmlElement, merged: &mut serde_json::Valu
     }
     if !tables_raw.is_empty() {
         merged["_tables"] = serde_json::json!(tables_raw);
+    }
+}
+
+#[cfg(test)]
+mod sensor_roundtrip_tests {
+    use super::*;
+
+    fn normalized_text(text: &str) -> String {
+        let trimmed = text.trim();
+        if trimmed.is_empty() { return String::new(); }
+        trimmed.split_whitespace().map(|token| {
+            token.parse::<f64>().map(|value| format!("{value:.12}")).unwrap_or_else(|_| token.to_string())
+        }).collect::<Vec<_>>().join(" ")
+    }
+
+    fn signatures(element: &XmlElement, parent: &str, output: &mut Vec<String>) {
+        let mut attrs: Vec<_> = element.attrs.iter().collect();
+        attrs.sort_by_key(|(key, _)| *key);
+        output.push(format!("{parent}/{}|{:?}|{}", element.tag, attrs, normalized_text(&element.text)));
+        for child in &element.children {
+            signatures(child, &element.tag, output);
+        }
+    }
+
+    #[test]
+    fn px4_sensor_system_files_are_lossless() {
+        let fixtures = [
+            ("imu", include_str!("../../../f450/systems/px4_default_imu_sensor.xml")),
+            ("baro", include_str!("../../../f450/systems/px4_default_baro_sensor.xml")),
+            ("gps", include_str!("../../../f450/systems/px4_default_gps_sensor.xml")),
+            ("mag", include_str!("../../../f450/systems/mag_sensor.xml")),
+            ("default-mag", include_str!("../../../f450/systems/px4_default_mag_sensor.xml")),
+            ("airspeed", include_str!("../../../f450/systems/px4_default_airspeed_sensor.xml")),
+            ("sdcard-imu", include_str!("../../../sdcard/jsbsim/systems/SensorImu.xml")),
+            ("sdcard-baro", include_str!("../../../sdcard/jsbsim/systems/SensorBaro.xml")),
+            ("sdcard-gps", include_str!("../../../sdcard/jsbsim/systems/SensorGps.xml")),
+        ];
+        for (name, xml) in fixtures {
+            let parsed = parse_subfile_xml(xml, "system").unwrap_or_else(|error| panic!("{name}: {error}"));
+            let generated = crate::xml_generator::generate_subfile_xml(
+                "system", parsed["name"].as_str().unwrap_or(""), &parsed["params"]
+            ).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let original = parse_xml_tree(xml).unwrap();
+            let restored = parse_xml_tree(&generated).unwrap_or_else(|error| panic!("{name}: {error}\n{generated}"));
+            let mut before = Vec::new();
+            let mut after = Vec::new();
+            signatures(&original, "", &mut before);
+            signatures(&restored, "", &mut after);
+            before.sort();
+            after.sort();
+            assert_eq!(before, after, "sensor system round-trip differs: {name}\n{generated}");
+        }
     }
 }

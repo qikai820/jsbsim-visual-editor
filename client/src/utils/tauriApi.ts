@@ -8,6 +8,18 @@
 // Detect Tauri runtime
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+const REMOTE_UPLOAD_KEY = 'jsbsim-remote-upload-enabled';
+
+// Writing to the NuttX SD card is opt-in. Until the user enables it in the
+// local settings the editor treats the simulator model data as read-only.
+export function isRemoteUploadEnabled(): boolean {
+  return localStorage.getItem(REMOTE_UPLOAD_KEY) === 'true';
+}
+
+export function setRemoteUploadEnabled(enabled: boolean): void {
+  localStorage.setItem(REMOTE_UPLOAD_KEY, String(enabled));
+}
+
 // Lazy-load Tauri APIs (only available inside Tauri)
 let tauriInvoke: any = null;
 let tauriListen: any = null;
@@ -105,13 +117,15 @@ export async function getJsbsimFiles(): Promise<any> {
 }
 
 export async function generateSubfile(fileType: string, name: string, params: any): Promise<string> {
-  const result = await call('generate_subfile', { type: fileType, name, params });
+  const request = { type: fileType, name, params };
+  const result = await call('generate_subfile', isTauri ? { req: request } : request);
   if (result.error) throw new Error(result.error);
   return result.xml;
 }
 
 export async function parseSubfile(xml: string, fileType: string): Promise<any> {
-  const result = await call('parse_subfile', { xml, fileType });
+  const request = { xml, fileType };
+  const result = await call('parse_subfile', isTauri ? { req: request } : request);
   if (result.error) throw new Error(result.error);
   return result;
 }

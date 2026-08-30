@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpUploadModel, ftpUploadFile, ftpListSystems, ftpListEngines } from '../utils/tauriApi';
-
-// Safety lock: while validating NuttX reload behavior, never write model XML
-// back to the SD card. Downloads remain enabled so the editor can inspect the
-// current NuttX model, but uploads require an explicit code change later.
-const REMOTE_MODEL_UPLOAD_ENABLED = false;
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpUploadModel, ftpUploadFile, ftpListSystems, ftpListEngines, isRemoteUploadEnabled } from '../utils/tauriApi';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
@@ -21,6 +16,8 @@ interface ToolbarProps {
   jsbsimLogs?: string[];
   onLog?: (message: string) => void;
   onToggleJsbsimLog?: () => void;
+  onToggleHud?: () => void;
+  hudVisible?: boolean;
   onShowLogCenter?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
@@ -63,9 +60,10 @@ function nodeOwnedPath(node: any): string {
       : withExt;
 }
 
-export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
+export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
   const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
+  const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
   const [showXml, setShowXml] = useState(false);
   const [xmlContent, setXmlContent] = useState('');
   const [importedSubFiles, setImportedSubFiles] = useState<Array<{ name: string; referenced: boolean; category?: string }>>(() => {
@@ -100,6 +98,14 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     if ((event.target as HTMLElement).closest('button, input, select, [role="menu"]')) return;
     void getCurrentWindow().startDragging();
   };
+  // The import summary describes one import action. Anything that replaces the
+  // model in the editor invalidates it, and it is restored from localStorage on
+  // mount, so it has to be dropped explicitly or it keeps resurfacing.
+  const clearImportedSubFiles = () => {
+    setImportedSubFiles([]);
+    localStorage.removeItem('jsbsim-imported-subfiles');
+  };
+
   const rememberProject = (filename: string, path: string) => {
     setRecentProjects(current => {
       const next = [{ filename, path, openedAt: new Date().toISOString() }, ...current.filter(item => item.filename !== filename)].slice(0, 6);
@@ -208,7 +214,17 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
         localStorage.setItem('jsbsim-project', JSON.stringify(data));
         localStorage.setItem('jsbsim-raw-xml', mainXml);
           localStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
-        localStorage.removeItem('jsbsim-remote-baseline');
+        // An imported model defines its own identity. Without rebinding, a
+        // previously loaded simulator model would keep winning at
+        // handleSaveToSimulator() and the import would be uploaded into the
+        // wrong aircraft directory.
+        const importedModel = String(data?.aircraft?.name || '').trim();
+        if (importedModel) {
+          localStorage.setItem('jsbsim-remote-model', importedModel);
+          // Whatever the simulator currently holds was never verified against
+          // this import, so drop the baseline and force a full push.
+          localStorage.removeItem(remoteBaselineKey(importedModel));
+        }
       } catch (e) {
         console.warn('[Import] Failed to save to localStorage:', e);
       }
@@ -220,7 +236,11 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       alert('导入失败: ' + err.message);
     }
     setLoading(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    // Reset the input that actually fired. A <input type="file"> only raises
+    // `change` when its value differs from the previous selection, so leaving
+    // the directory picker populated makes re-importing the same folder a
+    // silent no-op.
+    e.target.value = '';
   };
 
   const handleSave = async () => {
@@ -269,23 +289,46 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     }
     const target = `/mnt/sdcard/jsbsim/aircraft/${model}/${model}.xml`;
     const stateBeforeSave = useFlowStore.getState();
-    const dirtyRecords = (stateBeforeSave.xmlFiles || []).filter(file => file.dirty);
+    // A model without a remote baseline has never been exchanged with the
+    // simulator, so there is nothing to diff against: the whole model counts
+    // as pending instead of just the local edits. This is what makes
+    // "import a folder -> save to simulator" work at all.
+    const hasBaseline = !!localStorage.getItem(remoteBaselineKey(model));
+    const dirtyRecords = hasBaseline
+      ? (stateBeforeSave.xmlFiles || []).filter(file => file.dirty)
+      : (stateBeforeSave.xmlFiles || []).filter(file => file.category !== 'main');
     const trackedFiles = dirtyRecords.map(file => file.path);
     const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles]));
-    const changes = changesList.length ? changesList.map(file => `  • ${file}`).join('\n') : '  • 当前未记录到 XML 修改';
-    const mainDirty = dirtyRecords.some(file => file.category === 'main') ||
-      modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`));
+    const changes = changesList.length
+      ? changesList.map(file => `  • ${file}`).join('\n')
+      : hasBaseline ? '  • 当前未记录到 XML 修改' : `  • 全量上传：${model} 尚无同步基线`;
+    const mainDirty = hasBaseline
+      ? dirtyRecords.some(file => file.category === 'main') ||
+        modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`))
+      : true;
     const externalPaths = new Set(dirtyRecords.filter(file => file.category !== 'main').map(file => {
       const path = file.path.toLowerCase().endsWith('.xml') ? file.path : `${file.path}.xml`;
       if (path.includes('/')) return path;
       return file.category === 'system' ? `systems/${path}` : `engine/${path}`;
     }));
+    if (!hasBaseline) {
+      // The upload loop below only writes paths present in this set, so a full
+      // push has to seed it from the component nodes as well.
+      for (const node of stateBeforeSave.nodes || []) {
+        const path = nodeOwnedPath(node);
+        if (path) externalPaths.add(path);
+      }
+    }
     for (const file of modifiedXmlFiles) {
       if (file.startsWith('systems/') || file.startsWith('engine/')) externalPaths.add(file);
     }
     const writes = [...(mainDirty ? [target] : []), ...Array.from(externalPaths).map(path => `/mnt/sdcard/jsbsim/${path}`)];
     if (!writes.length) {
       alert('当前没有需要写入仿真机的 XML 修改。');
+      return;
+    }
+    if (!isRemoteUploadEnabled()) {
+      alert(isZh ? '仿真机模型上传当前已关闭。请在「本地配置」中开启后再试。' : 'Model upload is disabled. Enable it in Local Settings first.');
       return;
     }
     try {
@@ -297,7 +340,12 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       const conflicts = Array.from(externalPaths).filter(path => existing.has(path.replace(/^\/+/, '').toLowerCase()));
       if (conflicts.length && !confirm(`检测到同名子文件：\n\n${conflicts.map(path => `  • /mnt/sdcard/jsbsim/${path}`).join('\n')}\n\n继续将覆盖这些文件（旧文件会保留为 .bak）。是否确认覆盖？`)) return;
     } catch (error) {
-      if (!confirm(`无法读取仿真机现有子文件列表，不能确定是否存在重名文件。\n\n是否仍然继续上传？`)) return;
+      const detail = error instanceof Error ? error.message : String(error || '未知错误');
+      // Do not continue when the preflight listing failed.  Continuing here
+      // made a network outage look like a harmless name conflict and could
+      // leave the upload half-completed on NuttX.
+      alert(`无法读取仿真机现有子文件列表，已取消上传。\n\n请确认仿真机已连接且 FTP 服务正常。\n${detail}`);
+      return;
     }
     if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n远端旧文件会保留为 .bak。确认继续吗？`)) return;
     setLoading(true);
@@ -315,7 +363,17 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
         if (!path || !externalPaths.has(path) || !['engine', 'propeller', 'system', 'flight_control'].includes(type)) continue;
         const fileType = type === 'system' || type === 'flight_control' ? 'system' : type === 'propeller' ? 'thruster' : 'engine';
         const fileName = path.replace(/^.*\//, '').replace(/\.xml$/i, '');
-        await ftpUploadFile(path, await generateSubfile(fileType, fileName, params));
+        // Rebuilding a subfile from the parsed node parameters is lossy: it
+        // drops channels and escapes child elements (a rebuilt SensorImu.xml
+        // lost every gyro/magnetometer channel and turned <output> into
+        // escaped text).  Uploading rebuilt text therefore degrades files the
+        // user never edited.  Only rebuild when this file was actually
+        // modified; otherwise send the original bytes read from the model.
+        const tracked = (current.xmlFiles || []).find(file => file.path === path);
+        const content = tracked && !tracked.dirty && tracked.currentXml
+          ? tracked.currentXml
+          : await generateSubfile(fileType, fileName, params);
+        await ftpUploadFile(path, content);
       }
       useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
         file.category === 'main' ? { ...file, currentXml: xml, dirty: false } : { ...file, dirty: false }
@@ -333,6 +391,34 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     }
   };
 
+  // Unload the model currently held by the editor and return to a blank
+  // project. The simulator binding (jsbsim-remote-model) is deliberately kept
+  // so the same model can be re-downloaded afterwards.
+  const handleCloseModel = () => {
+    const current = useFlowStore.getState();
+    const dirtyPaths = (current.xmlFiles || []).filter(file => file.dirty).map(file => file.path);
+    const changes = Array.from(new Set([...modifiedXmlFiles, ...dirtyPaths].filter(Boolean)));
+    if (changes.length && !confirm(
+      `当前模型存在未保存的修改：\n\n${changes.map(file => `  • ${file}`).join('\n')}\n\n关闭后会丢失这些修改。确认关闭吗？`
+    )) return;
+    const closedName = current.aircraft?.name || '';
+    clearAll();
+    // clearAll() only drops the canvas; the aircraft identity has to be reset
+    // separately or the next save would still target the closed model.
+    setAircraft({ name: 'New Aircraft', version: '2.0', release: 'PRODUCTION' });
+    clearImportedSubFiles();
+    localStorage.removeItem('jsbsim-project');
+    localStorage.removeItem('jsbsim-raw-xml');
+    localStorage.removeItem('jsbsim-reference-files');
+    Object.keys(localStorage)
+      .filter(key => key.startsWith('jsbsim-remote-baseline:'))
+      .forEach(key => localStorage.removeItem(key));
+    // App owns the dirty-file list; without this the closed model's pending
+    // changes would leak into whatever is imported next.
+    onSaveComplete?.();
+    onLog?.(`[${new Date().toLocaleTimeString()}] 已关闭模型: ${closedName || '未命名'}`);
+  };
+
   const handleLoad = async (requestedFilename?: string) => {
     const model = localStorage.getItem('jsbsim-remote-model') || aircraft.name || 'aircraft';
     const filename = requestedFilename || `${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}.project.json`;
@@ -343,6 +429,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
         }
         const content = data.project || data;
       loadProject({ ...content, preserveLayout: true });
+      clearImportedSubFiles();
       if (data.files?.main?.xml) localStorage.setItem('jsbsim-raw-xml', data.files.main.xml);
       if (data.files?.references) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.files.references));
       if (data.model) localStorage.setItem('jsbsim-remote-model', data.model);
@@ -383,6 +470,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     // The requested remote path is therefore the model identity; do not
     // reject a valid model just because those two names differ.
     loadProject(data);
+    clearImportedSubFiles();
     // Keep a separate baseline for every aircraft. A single global baseline
     // makes switching c172x -> 737 look like a local edit and can upload the
     // previous aircraft into the newly selected aircraft directory.
@@ -395,7 +483,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   };
 
   const syncRemoteModel = async (model: string, force: boolean): Promise<boolean> => {
-    if (!REMOTE_MODEL_UPLOAD_ENABLED) {
+    if (!isRemoteUploadEnabled()) {
       onLog?.(`[${new Date().toLocaleTimeString()}] 已保护模型文件，跳过上传到 NuttX: ${model}`);
       return false;
     }
@@ -451,7 +539,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
 
   const handleSyncRemoteModel = (model: string) => syncRemoteModel(model, false);
   const handleForceSyncRemoteModel = async (model: string) => {
-    if (!REMOTE_MODEL_UPLOAD_ENABLED) {
+    if (!isRemoteUploadEnabled()) {
       onLog?.(`[${new Date().toLocaleTimeString()}] 模型上传保护已启用，未修改 NuttX 文件: ${model}`);
       return;
     }
@@ -506,6 +594,8 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
                   </button>)}
                 </>}
                 <div className="file-menu-separator" />
+                <button role="menuitem" disabled={!hasLoadedModel} onClick={() => { handleCloseModel(); setShowFileMenu(false); }} title={isZh ? '关闭当前已加载的模型，回到空白工程（保留仿真机模型绑定）' : 'Close the loaded model (keeps the simulator binding)'}>✖️ {isZh ? '关闭模型' : 'Close Model'}</button>
+                <div className="file-menu-separator" />
                 <button role="menuitem" onClick={() => { fileInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入 XML 文件（可多选依赖文件）' : 'Import XML files'}>📥 {isZh ? '导入 XML' : 'Import XML'}</button>
                 <button role="menuitem" onClick={() => { directoryInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入整个 XML 目录，自动保留目录结构' : 'Import an XML directory'}>📂 {isZh ? '导入 XML 目录' : 'Import XML folder'}</button>
                 <button role="menuitem" onClick={() => { void handleExportXml(); setShowFileMenu(false); }}>📤 {isZh ? '导出 XML' : 'Export XML'}</button>
@@ -532,6 +622,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
               👁️ {isZh ? '显示' : 'View'} <span className="file-menu-caret">▾</span>
             </button>
             {showDisplayMenu && <div className="file-menu-dropdown" role="menu">
+              <button role="menuitem" onClick={() => { onToggleHud?.(); setShowDisplayMenu(false); }}>🛩️ HUD {hudVisible ? (isZh ? '✓ 已显示' : '✓ Shown') : (isZh ? '已隐藏' : 'Hidden')}</button>
               <button role="menuitem" onClick={() => { onToggleJsbsimLog(); setShowDisplayMenu(false); }}>🖥️ {isZh ? 'JSBSim 信息' : 'JSBSim Console'}{jsbsimLogs.length ? ` (${jsbsimLogs.length})` : ''}</button>
               <button role="menuitem" onClick={() => { onShowLive(); setShowDisplayMenu(false); }}>🔴 {isZh ? '实时' : 'Live'}</button>
               <button role="menuitem" onClick={() => { onShow3D(); setShowDisplayMenu(false); }}>🛩️ 3D</button>
@@ -586,10 +677,10 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       {importedSubFiles.length > 0 && (
         <div className="xml-import-files-overlay" role="dialog" aria-modal="true" aria-label="影响的 XML 子文件" onClick={event => event.stopPropagation()}>
           <div className="xml-import-files-dialog" onClick={event => event.stopPropagation()}>
-            <header><strong>📂 影响的 XML 子文件</strong><button onClick={event => { event.preventDefault(); event.stopPropagation(); setImportedSubFiles([]); localStorage.removeItem('jsbsim-imported-subfiles'); }}>×</button></header>
+            <header><strong>📂 影响的 XML 子文件</strong><button onClick={event => { event.preventDefault(); event.stopPropagation(); clearImportedSubFiles(); }}>×</button></header>
             <small>已保留原目录结构，共 {importedSubFiles.length} 个文件</small>
             <ul>{importedSubFiles.map(file => <li key={file.name}>{file.category === 'initialization' ? '🎯' : file.category === 'model-config' ? '⚙️' : file.referenced ? '🔗' : '📄'} {file.name} <em>{file.category === 'initialization' ? '初始化/重置' : file.category === 'model-config' ? '模型配置' : file.referenced ? '已引用' : '随目录导入'}</em></li>)}</ul>
-            <footer><button onClick={event => { event.preventDefault(); event.stopPropagation(); setImportedSubFiles([]); localStorage.removeItem('jsbsim-imported-subfiles'); }}>确认关闭</button></footer>
+            <footer><button onClick={event => { event.preventDefault(); event.stopPropagation(); clearImportedSubFiles(); }}>确认关闭</button></footer>
           </div>
         </div>
       )}

@@ -175,6 +175,7 @@ function AppContent() {
   const logDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const [draggingLog, setDraggingLog] = useState(false);
   const [hudPos, setHudPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
+  const [hudVisible, setHudVisible] = useState(() => localStorage.getItem('jsbsim-hud-visible') !== 'false');
   const [draggingHud, setDraggingHud] = useState(false);
   const hudDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const undoStack = useRef<any[]>([]);
@@ -187,6 +188,7 @@ function AppContent() {
   useEffect(() => { localStorage.setItem('jsbsim-palette-collapsed', String(paletteCollapsed)); }, [paletteCollapsed]);
   useEffect(() => { localStorage.setItem('jsbsim-palette-width', String(paletteWidth)); }, [paletteWidth]);
   useEffect(() => { localStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
+  useEffect(() => { localStorage.setItem('jsbsim-hud-visible', String(hudVisible)); }, [hudVisible]);
   useEffect(() => { localStorage.setItem('jsbsim-log-position', JSON.stringify(logPos)); }, [logPos]);
   useEffect(() => {
     if (!isTauri) return;
@@ -485,6 +487,8 @@ function AppContent() {
         modifiedXmlFiles={modifiedXmlFiles} onSaveComplete={savedFiles => setModifiedXmlFiles(current => savedFiles ? current.filter(file => !savedFiles.includes(file)) : [])}
         jsbsimLogs={jsbsimLogs}
         onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
+        hudVisible={hudVisible}
+        onToggleHud={() => setHudVisible(value => !value)}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
       {showLogCenter && <LogCenter onClose={() => setShowLogCenter(false)} />}
       {xmlChangeNotice.length > 0 && <div className="xml-change-notice" role="status">
@@ -538,11 +542,18 @@ function AppContent() {
         </div>
       )}
 
-      {/* HUD is an independent window and remains visible when the log is closed. */}
-      <div className="jsbsim-hud-window" style={{ transform: `translate(${hudPos.x}px, ${hudPos.y}px)` }}>
-        <div className="jsbsim-hud-window-head" onPointerDown={e => { hudDrag.current = { x: e.clientX, y: e.clientY, left: hudPos.x, top: hudPos.y }; setDraggingHud(true); }}><span>HUD · FLIGHT DISPLAY</span><span>↕ 拖动</span></div>
-        <FlightHud telemetry={telemetry} connected={connected} />
-      </div>
+      {/* HUD belongs to the main model canvas. Full-screen editors and viewers
+       * deliberately do not render it, so it cannot cover their controls. */}
+      {hudVisible && !focusedModule && !show3D && !showLive && !showLogCenter && (
+        <div className="jsbsim-hud-window" style={{ transform: `translate(${hudPos.x}px, ${hudPos.y}px)` }}>
+          <div className="jsbsim-hud-window-head" onPointerDown={e => {
+            if ((e.target as HTMLElement).closest('button')) return;
+            hudDrag.current = { x: e.clientX, y: e.clientY, left: hudPos.x, top: hudPos.y };
+            setDraggingHud(true);
+          }}><span>HUD · FLIGHT DISPLAY</span><span className="hud-window-actions"><span>↕ 拖动</span><button onClick={() => setHudVisible(false)} title="隐藏 HUD" aria-label="隐藏 HUD">×</button></span></div>
+          <FlightHud telemetry={telemetry} connected={connected} />
+        </div>
+      )}
 
       {/* WebGL not available dialog */}
       {webglFail && (

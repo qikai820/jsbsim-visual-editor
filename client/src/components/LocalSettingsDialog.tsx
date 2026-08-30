@@ -1,10 +1,15 @@
 import { useState } from 'react';
 import { type Language, useLanguage } from '../i18n';
+import { isRemoteUploadEnabled, setRemoteUploadEnabled } from '../utils/tauriApi';
 
 export default function LocalSettingsDialog({ onClose }: { onClose: () => void }) {
   const { language, setLanguage, isZh } = useLanguage();
+  const [remoteUpload, setRemoteUpload] = useState(() => isRemoteUploadEnabled());
   const [timeThreshold, setTimeThreshold] = useState(() => Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
   const [logDirectory, setLogDirectory] = useState(() => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
+  const saveRemoteUpload = (value: boolean) => {
+    setRemoteUpload(value); setRemoteUploadEnabled(value);
+  };
   const saveTimeThreshold = (value: number) => {
     const next = Math.max(1, Math.min(86400, Number.isFinite(value) ? value : 60));
     setTimeThreshold(next); localStorage.setItem('jsbsim-time-sync-threshold-secs', String(next));
@@ -23,6 +28,10 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
             <option value="zh-CN">中文</option>
             <option value="en-US">English</option>
           </select>
+        </div>
+        <div className="local-settings-row">
+          <div><b>{isZh ? '允许写入仿真机模型' : 'Allow writing simulator models'}</b><small>{isZh ? '关闭时「保存到仿真机」只提示不写入；开启后会真实覆盖 NuttX SD 卡上的模型' : 'When off, save-to-simulator only reports. When on, it really overwrites models on the NuttX SD card'}</small></div>
+          <label className="local-settings-toggle"><input type="checkbox" checked={remoteUpload} onChange={event => saveRemoteUpload(event.target.checked)} /><span>{remoteUpload ? (isZh ? '已开启' : 'On') : (isZh ? '已关闭' : 'Off')}</span></label>
         </div>
         <div className="local-settings-row">
           <div><b>{isZh ? '仿真机校时阈值' : 'Simulator clock threshold'}</b><small>{isZh ? '上位机每 15 秒检查；偏差超过阈值才自动同步' : 'Checked every 15 seconds; synchronize only above this difference'}</small></div>

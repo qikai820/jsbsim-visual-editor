@@ -6,7 +6,14 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::time::Duration;
 use serde::Serialize;
+
+// NuttX ftpd and its small TCP pool are easily exhausted by several curl
+// processes connecting at once.  Serialize every FTP transaction in this
+// module and leave a short interval for the server to reclaim the socket.
+static FTP_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize)]
 pub struct LogFileInfo {
@@ -40,6 +47,7 @@ fn safe_component(value: &str) -> Result<&str, String> {
 }
 
 fn curl_output(args: &[&str]) -> Result<Vec<u8>, String> {
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let output = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
                "--disable-epsv", "--connect-timeout", "2", "--max-time", "5"])
@@ -49,7 +57,56 @@ fn curl_output(args: &[&str]) -> Result<Vec<u8>, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
+    std::thread::sleep(Duration::from_millis(80));
     Ok(output.stdout)
+}
+
+fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str) -> Result<(), String> {
+    // NuttX ftpd closes the control connection after a failed DELE/RNFR, even
+    // when curl was told to ignore the quote failure.  Use a unique backup
+    // name so every command in the normal replacement path can succeed.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let unique_backup = format!("{backup}.{stamp}");
+    let output = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
+               "--disable-epsv", "--connect-timeout", "3", "--max-time", "12",
+               "--user", auth,
+               "-Q", &format!("RNFR {target}"),
+               "-Q", &format!("RNTO {unique_backup}"),
+               "-Q", &format!("RNFR {temporary}"),
+               "-Q", &format!("RNTO {target}"),
+               &format!("{}/", endpoint())])
+        .output()
+        .map_err(|e| format!("cannot start curl: {e}"))?;
+    std::thread::sleep(Duration::from_millis(300));
+    if output.status.success() {
+        return Ok(());
+    }
+
+    // A brand-new file has no target to back up.  The failed RNFR makes the
+    // NuttX server close that session, so reconnect only after it has released
+    // the socket and commit the already complete temporary file directly.
+    std::thread::sleep(Duration::from_millis(500));
+    let retry = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
+               "--disable-epsv", "--connect-timeout", "3", "--max-time", "10",
+               "--user", auth,
+               "-Q", &format!("RNFR {temporary}"),
+               "-Q", &format!("RNTO {target}"),
+               &format!("{}/", endpoint())])
+        .output()
+        .map_err(|e| format!("cannot start curl: {e}"))?;
+    std::thread::sleep(Duration::from_millis(300));
+    if retry.status.success() {
+        Ok(())
+    } else {
+        let first = String::from_utf8_lossy(&output.stderr);
+        let second = String::from_utf8_lossy(&retry.stderr);
+        Err(format!("{}; retry: {}", first.trim(), second.trim()))
+    }
 }
 
 fn list_directory(path: &str) -> Result<Vec<String>, String> {
@@ -234,11 +291,7 @@ pub fn download_path(path: &str) -> Result<String, String> {
 /// a relative path such as `systems/foo.xml`; traversal and absolute paths are
 /// rejected before curl is invoked.
 pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
-    let _ = (path, content);
-    return Err("NuttX JSBSim data is read-only; upload is disabled".into());
-
-    #[allow(unreachable_code)]
-    {
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let path = safe_relative_path(path)?.trim_matches('/');
     if path.is_empty() || !path.to_ascii_lowercase().ends_with(".xml") {
         return Err("invalid remote XML path".into());
@@ -256,20 +309,8 @@ pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
     let result = child.wait_with_output().map_err(|e| e.to_string())?;
     if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).trim().to_string()); }
 
-    let run_ftp = |commands: Vec<String>| -> Result<(), String> {
-        let mut command = Command::new("curl");
-        command.args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--max-time", "10", "--user", &auth]);
-        for cmd in commands { command.args(["-Q", &cmd]); }
-        let output = command.arg(&format!("{}/", endpoint())).output().map_err(|e| e.to_string())?;
-        if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
-    };
-    let _ = run_ftp(vec![format!("DELE {}", backup)]);
-    if let Err(error) = run_ftp(vec![format!("RNFR {}", remote), format!("RNTO {}", backup)]) {
-        if !error.to_ascii_lowercase().contains("550") { return Err(format!("cannot backup {path}: {error}")); }
-    }
-    run_ftp(vec![format!("RNFR {}", temporary), format!("RNTO {}", remote)])
+    commit_uploaded_file(&auth, &temporary, &remote, &backup)
         .map_err(|e| format!("cannot commit {path}: {e}"))
-    }
 }
 
 fn safe_config_path(path: &str) -> Result<&str, String> {
@@ -289,6 +330,7 @@ pub fn download_config(path: &str) -> Result<String, String> {
 }
 
 pub fn upload_config(path: &str, content: &str) -> Result<(), String> {
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let path = safe_config_path(path)?;
     serde_json::from_str::<serde_json::Value>(content)
         .map_err(|e| format!("invalid config JSON: {e}"))?;
@@ -306,17 +348,7 @@ pub fn upload_config(path: &str, content: &str) -> Result<(), String> {
     child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
-    let quote = |commands: &[String]| -> Result<(), String> {
-        let mut command = Command::new("curl");
-        command.args(["--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
-                      "--connect-timeout", "3", "--max-time", "10", "--user", &auth]);
-        for item in commands { command.args(["-Q", item]); }
-        let result = command.arg(format!("{}/", endpoint())).output().map_err(|e| e.to_string())?;
-        if result.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&result.stderr).trim().into()) }
-    };
-    let _ = quote(&[format!("DELE {backup}")]);
-    let _ = quote(&[format!("RNFR {remote}"), format!("RNTO {backup}")]);
-    quote(&[format!("RNFR {temporary}"), format!("RNTO {remote}")])
+    commit_uploaded_file(&auth, &temporary, &remote, &backup)
 }
 
 pub fn list_models() -> Result<Vec<String>, String> {
@@ -380,11 +412,7 @@ pub fn download_script(file: &str) -> Result<String, String> {
 }
 
 pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
-    let _ = (model, xml);
-    return Err("NuttX JSBSim data is read-only; model upload is disabled".into());
-
-    #[allow(unreachable_code)]
-    {
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let model = safe_component(model)?;
     let remote_dir = format!("/jsbsim/aircraft/{}", model);
     let target = format!("{}/{}.xml", remote_dir, model);
@@ -410,55 +438,6 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
 
-    // Keep the previous model on the SD card.  The old target may not exist
-    // on first upload, so this FTP rename is intentionally best-effort.
-    let _ = Command::new("curl")
-        .args(["--silent", "--show-error", "--noproxy", "*",
-               "--disable-epsv", "--connect-timeout", "3", "--max-time", "8",
-               "--user", &auth,
-               "-Q", &format!("DELE {}", backup),
-               &format!("{}/", endpoint())])
-        .output();
-
-    let backup_result = Command::new("curl")
-        .args(["--silent", "--show-error", "--noproxy", "*",
-               "--disable-epsv", "--connect-timeout", "3", "--max-time", "8",
-               "--user", &auth,
-               "-Q", &format!("RNFR {}", target),
-               "-Q", &format!("RNTO {}", backup),
-               &format!("{}/", endpoint())])
-        .output();
-    if let Ok(result) = backup_result {
-        if !result.status.success() {
-            // A missing original is normal for a new model.  Do not hide
-            // errors when the target exists but cannot be renamed.
-            let error = String::from_utf8_lossy(&result.stderr);
-            if !error.to_ascii_lowercase().contains("550") {
-                let _ = Command::new("curl")
-                    .args(["--silent", "--show-error", "--noproxy", "*",
-                           "--disable-epsv", "--connect-timeout", "3", "--max-time", "8",
-                           "--user", &auth, "-Q", &format!("DELE {}", temporary),
-                           &format!("{}/", endpoint())])
-                    .output();
-                return Err(format!("cannot backup remote model: {}", error.trim()));
-            }
-        }
-    }
-
-    // Commit the complete temporary file atomically from the FTP namespace.
-    let commit = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
-               "--disable-epsv", "--connect-timeout", "3", "--max-time", "8",
-               "--user", &auth,
-               "-Q", &format!("RNFR {}", temporary),
-               "-Q", &format!("RNTO {}", target),
-               &format!("{}/", endpoint())])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !commit.status.success() {
-        return Err(format!("cannot commit remote model: {}",
-                           String::from_utf8_lossy(&commit.stderr).trim()));
-    }
-    Ok(())
-    }
+    commit_uploaded_file(&auth, &temporary, &target, &backup)
+        .map_err(|e| format!("cannot commit remote model: {e}"))
 }

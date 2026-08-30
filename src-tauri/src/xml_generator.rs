@@ -47,6 +47,40 @@ fn xml_element(name: &str, attrs: &[(&str, &str)], content: Option<&str>, level:
     }
 }
 
+/// Build an XML element whose content is **already serialized markup**.
+///
+/// `xml_element` escapes single-line content, which silently turns nested
+/// markup such as `<output>sensor/imu/accelX</output>` into escaped text the
+/// moment a component is left with exactly one child.  Every caller that
+/// assembles children from other builders therefore has to use this variant
+/// so the nested elements survive.
+fn xml_element_raw(
+    name: &str,
+    attrs: &[(&str, &str)],
+    content: Option<&str>,
+    level: usize,
+) -> String {
+    let ind = indent(level);
+    let mut attr_str = String::new();
+    for (k, v) in attrs {
+        attr_str.push_str(&format!(" {}=\"{}\"", k, escape_xml(v)));
+    }
+    match content {
+        None | Some("") => format!("{}<{}{}/>", ind, name, attr_str),
+        Some(text) if !text.contains('\n') => {
+            format!("{}<{}{}>{}</{}>", ind, name, attr_str, text, name)
+        }
+        Some(text) => {
+            let content_str = if text.ends_with('\n') {
+                text.to_string()
+            } else {
+                format!("{}\n", text)
+            };
+            format!("{}<{}{}>\n{}{}</{}>", ind, name, attr_str, content_str, ind, name)
+        }
+    }
+}
+
 fn xml_simple(name: &str, value: &str, unit: Option<&str>, level: usize) -> String {
     if value.is_empty() {
         return String::new();
@@ -501,10 +535,15 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
                 if let Some(mx) = clip_max {
                     ci.push(xml_element("max", &[], Some(&fmt_num(mx)), level + 2));
                 }
-                inner.push(xml_element("clipto", &[], Some(&ci.join("\n")), level + 1));
+                inner.push(xml_element_raw("clipto", &[], Some(&ci.join("\n")), level + 1));
             }
-            inner.push(xml_element("function", &[], Some(&body), level + 1));
-            return Some(xml_element("fcs_function", &attrs, Some(&inner.join("\n")), level));
+            inner.push(xml_element_raw("function", &[], Some(&body), level + 1));
+            if let Some(output) = it.get("output").and_then(|v| v.as_str()) {
+                if !output.is_empty() {
+                    inner.push(xml_element("output", &[], Some(output), level + 1));
+                }
+            }
+            return Some(xml_element_raw("fcs_function", &attrs, Some(&inner.join("\n")), level));
         }
 
         // Bare <function>
@@ -516,12 +555,12 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
             if let Some(mx) = clip_max {
                 ci.push(xml_element("max", &[], Some(&fmt_num(mx)), level + 2));
             }
-            let clip_xml = xml_element("clipto", &[], Some(&ci.join("\n")), level + 1);
+            let clip_xml = xml_element_raw("clipto", &[], Some(&ci.join("\n")), level + 1);
             format!("{}\n{}", body, clip_xml)
         } else {
             body
         };
-        return Some(xml_element("function", &attrs, Some(&func_content), level));
+        return Some(xml_element_raw("function", &attrs, Some(&func_content), level));
     }
 
     // Other components: emit componentProps as child elements
@@ -562,7 +601,7 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
             if let Some(mx) = clip_max {
                 inner.push(xml_element("max", &[], Some(&fmt_num(mx)), level + 2));
             }
-            lines.push(xml_element("clipto", &[], Some(&inner.join("\n")), level + 1));
+            lines.push(xml_element_raw("clipto", &[], Some(&inner.join("\n")), level + 1));
         }
 
         // Inputs
@@ -618,6 +657,14 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
                     }
                 }
             }
+        } else if let Some(gain_val) = comp.get("gain") {
+            let gain_str = gain_val.get("value").map(val_to_str).unwrap_or_default();
+            if !gain_str.is_empty() {
+                let gain_attrs: Vec<(&str, &str)> = gain_val.get("attrs").and_then(|a| a.as_object())
+                    .map(|object| object.iter().filter_map(|(key, value)| value.as_str().map(|text| (key.as_str(), text))).collect())
+                    .unwrap_or_default();
+                lines.push(xml_element("gain", &gain_attrs, Some(&gain_str), level + 1));
+            }
         }
 
         // Remaining scalar props
@@ -644,7 +691,19 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
             if val.is_empty() && attr_entries.is_empty() {
                 continue;
             }
-            lines.push(xml_element(field, &attr_entries, Some(&val), level + 1));
+            if let Some(children) = field_data.get("children").and_then(|value| value.as_array()) {
+                let nested = children.iter().filter_map(|child| {
+                    let name = child.get("name")?.as_str()?;
+                    let value = child.get("value").map(val_to_str).unwrap_or_default();
+                    let attrs: Vec<(&str, &str)> = child.get("attrs").and_then(|v| v.as_object())
+                        .map(|object| object.iter().filter_map(|(key, value)| value.as_str().map(|text| (key.as_str(), text))).collect())
+                        .unwrap_or_default();
+                    Some(xml_element(name, &attrs, Some(&value), level + 2))
+                }).collect::<Vec<_>>();
+                lines.push(xml_element_raw(field, &attr_entries, Some(&nested.join("\n")), level + 1));
+            } else {
+                lines.push(xml_element(field, &attr_entries, Some(&val), level + 1));
+            }
         }
 
         // Output last
@@ -659,7 +718,8 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
     if lines.is_empty() {
         return None;
     }
-    Some(xml_element(it_type, &attrs, Some(&lines.join("\n")), level))
+    // `lines` holds serialized child elements, not text.
+    Some(xml_element_raw(it_type, &attrs, Some(&lines.join("\n")), level))
 }
 
 fn serialize_channels_xml(params: &Value) -> String {
@@ -686,20 +746,47 @@ fn serialize_channels_xml(params: &Value) -> String {
             .unwrap_or_default();
 
         if !ch_name.is_empty() || !items.is_empty() {
-            let ch_attrs: Vec<(&str, &str)> = if !ch_name.is_empty() {
-                vec![("name", ch_name)]
-            } else {
-                vec![]
-            };
+            let mut owned_attrs: Vec<(String, String)> = ch.get("attrs").and_then(|v| v.as_object())
+                .map(|object| object.iter().map(|(key, value)| (key.clone(), val_to_str(value))).collect())
+                .unwrap_or_default();
+            if !ch_name.is_empty() {
+                owned_attrs.insert(0, ("name".to_string(), ch_name.to_string()));
+            }
+            let ch_attrs: Vec<(&str, &str)> = owned_attrs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())).collect();
             let content = if items.is_empty() {
                 None
             } else {
                 Some(items.join("\n"))
             };
-            blocks.push(xml_element("channel", &ch_attrs, content.as_deref(), 2));
+            // `items` are serialized component elements, not text.
+            blocks.push(xml_element_raw("channel", &ch_attrs, content.as_deref(), 2));
         }
     }
     blocks.join("\n")
+}
+
+fn serialize_top_level_items(params: &Value) -> String {
+    let items: Vec<Value> = params.get("topLevelItems").and_then(|v| v.as_str())
+        .and_then(|text| serde_json::from_str(text).ok()).unwrap_or_default();
+    items.iter().filter_map(|item| serialize_channel_item(item, 1)).collect::<Vec<_>>().join("\n")
+}
+
+fn serialize_system_properties(params: &Value, level: usize) -> Vec<String> {
+    if let Some(definitions) = params.get("propertyDefinitions").and_then(|v| v.as_str())
+        .and_then(|text| serde_json::from_str::<Vec<Value>>(text).ok()) {
+        return definitions.iter().filter_map(|definition| {
+            let name = definition.get("name")?.as_str()?;
+            let attrs: Vec<(&str, &str)> = definition.get("attrs").and_then(|v| v.as_object())
+                .map(|object| object.iter().filter_map(|(key, value)| value.as_str().map(|text| (key.as_str(), text))).collect())
+                .unwrap_or_default();
+            Some(xml_element("property", &attrs, Some(name), level))
+        }).collect();
+    }
+    params.get("properties").and_then(|v| v.as_str()).map(|text| {
+        text.split(',').map(str::trim).filter(|value| !value.is_empty())
+            .map(|value| xml_element("property", &[], Some(value), level)).collect()
+    }).unwrap_or_default()
 }
 
 // ── Node grouping ───────────────────────────────────────────────────────────
@@ -736,7 +823,7 @@ fn build_file_header(aircraft: &Value) -> String {
         let desc = format!("Aircraft configuration - {}", rel);
         lines.push(xml_element("description", &[], Some(&desc), 1));
     }
-    xml_element("fileheader", &[], Some(&lines.join("\n")), 0)
+    xml_element_raw("fileheader", &[], Some(&lines.join("\n")), 0)
 }
 
 fn build_metrics(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
@@ -874,7 +961,7 @@ fn build_metrics(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Str
     } else {
         lines.join("\n")
     };
-    xml_element("metrics", &[], Some(&content), 0)
+    xml_element_raw("metrics", &[], Some(&content), 0)
 }
 
 fn build_mass_balance(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
@@ -956,7 +1043,7 @@ fn build_mass_balance(groups: &std::collections::HashMap<String, Vec<&Value>>) -
                 .and_then(|v| v.as_str())
                 .map(|n| vec![("name", n)])
                 .unwrap_or_default();
-            lines.push(xml_element(
+            lines.push(xml_element_raw(
                 "pointmass",
                 &pm_attrs,
                 Some(&pm_lines.join("\n")),
@@ -970,7 +1057,7 @@ fn build_mass_balance(groups: &std::collections::HashMap<String, Vec<&Value>>) -
     } else {
         lines.join("\n")
     };
-    xml_element("mass_balance", &[], Some(&content), 0)
+    xml_element_raw("mass_balance", &[], Some(&content), 0)
 }
 
 fn build_ground_reactions(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
@@ -1059,7 +1146,7 @@ fn build_ground_reactions(groups: &std::collections::HashMap<String, Vec<&Value>
                     contact_attrs.push(("type", t));
                 }
             }
-            lines.push(xml_element(
+            lines.push(xml_element_raw(
                 "contact",
                 &contact_attrs,
                 Some(&gear_lines.join("\n")),
@@ -1073,7 +1160,7 @@ fn build_ground_reactions(groups: &std::collections::HashMap<String, Vec<&Value>
     } else {
         lines.join("\n")
     };
-    xml_element("ground_reactions", &[], Some(&content), 0)
+    xml_element_raw("ground_reactions", &[], Some(&content), 0)
 }
 
 fn build_external_reactions() -> String {
@@ -1184,17 +1271,17 @@ fn build_propulsion(
                         }
                     }
                     let thr_body = thr_lines.join("\n");
-                    eng_lines.push(xml_element("thruster", &[], Some(&thr_body), 2));
+                    eng_lines.push(xml_element_raw("thruster", &[], Some(&thr_body), 2));
                 } else if let Some(tf) = p.get("thruster_file").and_then(|v| v.as_str()) {
                     if !tf.is_empty() {
-                        eng_lines.push(xml_element(
+                        eng_lines.push(xml_element_raw(
                             "thruster",
                             &[("file", tf)],
                             thr_content.as_deref(),
                             2,
                         ));
                     } else {
-                        eng_lines.push(xml_element(
+                        eng_lines.push(xml_element_raw(
                             "thruster",
                             &[],
                             thr_content.as_deref(),
@@ -1202,7 +1289,7 @@ fn build_propulsion(
                         ));
                     }
                 } else {
-                    eng_lines.push(xml_element(
+                    eng_lines.push(xml_element_raw(
                         "thruster",
                         &[],
                         thr_content.as_deref(),
@@ -1229,7 +1316,12 @@ fn build_propulsion(
                 eng_attrs.push(("file", f));
             }
         }
-        lines.push(xml_element(
+        if let Some(n) = p.get("name").and_then(|v| v.as_str()) {
+            if !n.is_empty() {
+                eng_attrs.push(("name", n));
+            }
+        }
+        lines.push(xml_element_raw(
             "engine",
             &eng_attrs,
             Some(&eng_lines.join("\n")),
@@ -1305,7 +1397,7 @@ fn build_propulsion(
                     prop_lines.push(expr_to_xml(expr, 2));
                 }
             }
-            lines.push(xml_element(
+            lines.push(xml_element_raw(
                 "thruster",
                 &[],
                 Some(&prop_lines.join("\n")),
@@ -1318,7 +1410,7 @@ fn build_propulsion(
                     thr_attrs.push(("file", f));
                 }
             }
-            lines.push(xml_element(
+            lines.push(xml_element_raw(
                 "thruster",
                 &thr_attrs,
                 Some(&prop_lines.join("\n")),
@@ -1356,9 +1448,15 @@ fn build_propulsion(
             ));
         }
 
-        lines.push(xml_element(
+        let mut tank_attrs = vec![("type", "FUEL")];
+        if let Some(name) = p.get("name").and_then(|v| v.as_str()) {
+            if !name.is_empty() {
+                tank_attrs.push(("name", name));
+            }
+        }
+        lines.push(xml_element_raw(
             "tank",
-            &[("type", "FUEL")],
+            &tank_attrs,
             Some(&tank_lines.join("\n")),
             1,
         ));
@@ -1369,7 +1467,7 @@ fn build_propulsion(
     } else {
         lines.join("\n")
     };
-    xml_element("propulsion", &[], Some(&content), 0)
+    xml_element_raw("propulsion", &[], Some(&content), 0)
 }
 
 fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
@@ -1381,15 +1479,7 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
     let mut lines = vec![];
     for sys in system_nodes {
         let p = get_params(sys);
-        let file = p
-            .get("file")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                sys.get("data")
-                    .and_then(|d| d.get("label"))
-                    .and_then(|v| v.as_str())
-            })
-            .unwrap_or("unknown");
+        let file = p.get("file").and_then(|v| v.as_str()).unwrap_or("");
 
         // A file-backed system is represented in the aircraft XML only by
         // its reference. Its channels/properties are serialized into the
@@ -1399,27 +1489,12 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
             continue;
         }
 
-        let properties = p.get("properties");
-        let mut body = String::new();
+        let mut body = serialize_system_properties(p, 2).join("\n");
 
-        if let Some(props) = properties {
-            let prop_list: Vec<String> = if let Some(s) = props.as_str() {
-                s.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            } else if let Some(a) = props.as_array() {
-                a.iter().map(|v| val_to_str(v)).collect()
-            } else {
-                vec![]
-            };
-            let prop_xmls: Vec<String> = prop_list
-                .iter()
-                .map(|prop| xml_element("property", &[], Some(prop), 2))
-                .collect();
-            if !prop_xmls.is_empty() {
-                body = prop_xmls.join("\n");
-            }
+        let top_level = serialize_top_level_items(p);
+        if !top_level.is_empty() {
+            if !body.is_empty() { body.push('\n'); }
+            body.push_str(&top_level);
         }
 
         let ch_xml = serialize_channels_xml(p);
@@ -1431,9 +1506,16 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
         }
 
         if body.trim().is_empty() {
-            lines.push(xml_element("system", &[("file", file)], None, 1));
+            let attrs = if file.is_empty() { vec![] } else { vec![("file", file)] };
+            lines.push(xml_element("system", &attrs, None, 1));
         } else {
-            lines.push(xml_element("system", &[("file", file)], Some(&body), 1));
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let attrs = if file.is_empty() {
+                if name.is_empty() { vec![] } else { vec![("name", name)] }
+            } else {
+                vec![("file", file)]
+            };
+            lines.push(xml_element_raw("system", &attrs, Some(&body), 1));
         }
     }
 
@@ -1506,7 +1588,7 @@ fn build_flight_control(groups: &std::collections::HashMap<String, Vec<&Value>>)
         } else if !name.is_empty() {
             attrs.push(("name", name));
         }
-        lines.push(xml_element("flight_control", &attrs, Some(&body), 1));
+        lines.push(xml_element_raw("flight_control", &attrs, Some(&body), 1));
     }
 
     lines.join("\n\n")
@@ -1594,7 +1676,7 @@ fn build_aerodynamics(groups: &std::collections::HashMap<String, Vec<&Value>>) -
             func_content_parts.push(body_xml);
             let func_content = func_content_parts.join("\n");
 
-            let func_xml = xml_element("function", &[("name", func_name)], Some(&func_content), 2);
+            let func_xml = xml_element_raw("function", &[("name", func_name)], Some(&func_content), 2);
             func_entries.push((axis.to_string(), func_xml));
         }
     }
@@ -1608,7 +1690,7 @@ fn build_aerodynamics(groups: &std::collections::HashMap<String, Vec<&Value>>) -
 
     let mut axis_blocks = vec![];
     for (axis_name, funcs) in &axis_groups {
-        axis_blocks.push(xml_element(
+        axis_blocks.push(xml_element_raw(
             "axis",
             &[("name", &axis_name.to_uppercase())],
             Some(&funcs.join("\n")),
@@ -1621,7 +1703,7 @@ fn build_aerodynamics(groups: &std::collections::HashMap<String, Vec<&Value>>) -
     } else {
         axis_blocks.join("\n")
     };
-    xml_element("aerodynamics", &[], Some(&content), 0)
+    xml_element_raw("aerodynamics", &[], Some(&content), 0)
 }
 
 fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
@@ -1685,16 +1767,18 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                 attrs.push(("name".to_string(), n.to_string()));
             }
         }
-        if let Some(t) = p.get("type").and_then(|v| v.as_str()) {
-            if !t.is_empty() {
-                attrs.push(("type".to_string(), t.to_string()));
-            }
-        }
         let component_type = out
             .get("data")
             .and_then(|d| d.get("componentType"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        if component_type != "uavcan" {
+          if let Some(t) = p.get("type").and_then(|v| v.as_str()) {
+            if !t.is_empty() {
+                attrs.push(("type".to_string(), t.to_string()));
+            }
+          }
+        }
         if component_type == "uavcan" {
             attrs.push(("type".to_string(), "UAVCAN".to_string()));
             for key in ["interface", "node_id", "subject_id", "dsdl_path", "dsdl_type", "sensor_type"] {
@@ -1724,12 +1808,43 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        blocks.push(xml_element(
+        blocks.push(xml_element_raw(
             "output",
             &attr_refs,
             Some(&out_lines.join("\n")),
             0,
         ));
+    }
+    blocks.join("\n\n")
+}
+
+fn build_input(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
+    let input_nodes = groups.get("input").cloned().unwrap_or_default();
+    let mut blocks = Vec::new();
+    for input in input_nodes {
+        let params = get_params(input);
+        let mut attrs: Vec<(String, String)> = Vec::new();
+        for key in ["name", "type", "port", "rate"] {
+            if let Some(value) = params.get(key) {
+                let text = val_to_str(value);
+                if !text.is_empty() {
+                    attrs.push((key.to_string(), text));
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        if let Some(properties) = params.get("properties") {
+            let values: Vec<String> = properties.as_str()
+                .map(|value| value.split(',').map(str::trim).filter(|value| !value.is_empty()).map(str::to_string).collect())
+                .unwrap_or_default();
+            for property in values {
+                lines.push(xml_element("property", &[], Some(&property), 1));
+            }
+        }
+        let attr_refs: Vec<(&str, &str)> = attrs.iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        blocks.push(xml_element_raw("input", &attr_refs, Some(&lines.join("\n")), 0));
     }
     blocks.join("\n\n")
 }
@@ -1789,6 +1904,11 @@ pub fn generate_xml(data: &Value) -> Result<String, String> {
     }
 
     section_content.push(build_aerodynamics(&groups));
+
+    let input_xml = build_input(&groups);
+    if !input_xml.is_empty() {
+        section_content.push(input_xml);
+    }
 
     let output_xml = build_output(&groups);
     if !output_xml.is_empty() {
@@ -1928,33 +2048,10 @@ pub fn generate_subfile_xml(
             }
         }
         "system" => {
-            let mut content = vec![];
-            let properties = params.get("properties");
-            let prop_list: Vec<String> = if let Some(a) = properties.and_then(|v| v.as_array()) {
-                a.iter()
-                    .map(|v| {
-                        if v.is_object() {
-                            v.get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("")
-                                .to_string()
-                        } else {
-                            val_to_str(v)
-                        }
-                    })
-                    .collect()
-            } else if let Some(s) = params.get("properties").and_then(|v| v.as_str()) {
-                s.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            } else {
-                vec![]
-            };
-            for prop in &prop_list {
-                if !prop.is_empty() {
-                    content.push(xml_element("property", &[], Some(prop), 1));
-                }
+            let mut content = serialize_system_properties(params, 1);
+            let top_level = serialize_top_level_items(params);
+            if !top_level.is_empty() {
+                content.push(top_level);
             }
             // System signal-flow edits live in `channels`.  Omitting them
             // produced an almost empty child XML and encouraged callers to
@@ -1968,7 +2065,7 @@ pub fn generate_subfile_xml(
             } else {
                 Some(content.join("\n"))
             };
-            lines.push(xml_element("system", &[("name", name)], body.as_deref(), 0));
+            lines.push(xml_element_raw("system", &[("name", name)], body.as_deref(), 0));
         }
         _ => {
             return Err(format!("Unknown sub-file type: {}", file_type));

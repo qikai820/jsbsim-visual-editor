@@ -147,9 +147,7 @@ fn parse_metrics(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut L
 
     let mut params = json!({});
 
-    for field in &[
-        "wingarea", "wingspan", "chord", "htailarea", "htailarm", "vtailarea", "vtailarm",
-    ] {
+    for field in &["wingarea", "wingspan", "chord", "wing_incidence"] {
         if let Some(elem) = find_child(metrics, field) {
             if let Some(v) = extract_value_with_unit(elem) {
                 params[field] = v;
@@ -210,6 +208,38 @@ fn parse_metrics(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut L
             },
             "position": layout.next_position()
         }));
+    }
+
+    // Tail metrics are separate components in the editor.  Keeping them on
+    // the wing node makes a load -> save -> load cycle silently delete the
+    // htail/vtail nodes from the graph.
+    for (component_type, label, area, arm) in [
+        ("htail", "H-Tail", "htailarea", "htailarm"),
+        ("vtail", "V-Tail", "vtailarea", "vtailarm"),
+    ] {
+        let mut tail_params = json!({});
+        if let Some(elem) = find_child(metrics, area) {
+            if let Some(value) = extract_value_with_unit(elem) {
+                tail_params[area] = value;
+            }
+        }
+        if let Some(elem) = find_child(metrics, arm) {
+            if let Some(value) = extract_value_with_unit(elem) {
+                tail_params[arm] = value;
+            }
+        }
+        if tail_params.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+            nodes.push(json!({
+                "id": layout.next_id(),
+                "type": "aircraftComponent",
+                "data": {
+                    "label": label,
+                    "componentType": component_type,
+                    "params": tail_params
+                },
+                "position": layout.next_position()
+            }));
+        }
     }
 
     // Multiple wingarea entries → extra wing nodes
@@ -401,6 +431,12 @@ fn parse_ground_reactions(
             let text = get_text(elem);
             if let Some(v) = text.parse::<f64>().ok() {
                 params["dynamic_friction"] = json!(v);
+            }
+        }
+        if let Some(elem) = find_child(contact, "rolling_friction") {
+            let text = get_text(elem);
+            if let Ok(v) = text.parse::<f64>() {
+                params["rolling_friction"] = json!(v);
             }
         }
         for field in &["spring_coeff", "damping_coeff", "max_steer"] {
@@ -882,6 +918,11 @@ fn parse_component_section(
                             item["cliptoMax"] = json!(get_text(max_elem));
                         }
                     }
+                    if *fk == "fcs_function" {
+                        if let Some(output) = find_child(f, "output") {
+                            item["output"] = json!(get_text(output));
+                        }
+                    }
 
                     ch_items.push(item);
                 }
@@ -908,10 +949,10 @@ fn parse_component_section(
 
                 let known_fields = [
                     "input", "output", "gain", "test", "default", "trigger",
-                    "lag", "noise", "drift_rate", "bias", "width", "rate_limit",
+                    "lag", "noise", "drift_rate", "bias", "delay", "width", "rate_limit",
                     "traverse", "quantization", "hysteresis", "sensitivity",
                     "constant", "clipto", "min", "max", "c1", "c2", "c3", "c4", "c5", "c6",
-                    "kp", "ki", "kd",
+                    "kp", "ki", "kd", "axis", "location", "orientation",
                 ];
 
                 // Handle clipto
@@ -944,6 +985,15 @@ fn parse_component_section(
                             "value": text,
                             "attrs": field_attrs
                         });
+                        if !field_elem.children.is_empty() {
+                            props[*field]["children"] = json!(field_elem.children.iter()
+                                .filter(|nested| !nested.tag.starts_with('@') && nested.tag != "#text")
+                                .map(|nested| json!({
+                                    "name": nested.tag,
+                                    "value": get_text(nested),
+                                    "attrs": nested.attrs
+                                })).collect::<Vec<_>>());
+                        }
                     }
                 }
 
@@ -1012,6 +1062,8 @@ fn parse_component_section(
             if !ch_name.is_empty() || !ch_items.is_empty() {
                 channel_data.push(json!({
                     "name": ch_name,
+                    "attrs": ch.attrs.iter().filter(|(key, _)| key.as_str() != "name")
+                        .map(|(key, value)| (key.clone(), json!(value))).collect::<serde_json::Map<_, _>>(),
                     "items": ch_items
                 }));
             }
@@ -1021,8 +1073,9 @@ fn parse_component_section(
             params["channels"] = json!(serde_json::to_string(&channel_data).unwrap_or_default());
         }
 
-        // Top-level functions (no enclosing channel)
-        if channel_data.is_empty() {
+        // Top-level functions must remain top-level even when channels also
+        // exist (all PX4 sensor models use both forms).
+        {
             let mut top_func_items: Vec<Value> = Vec::new();
             for fk in &["function", "fcs_function"] {
                 let top_funcs = find_children(sys_def, fk);
@@ -1046,8 +1099,7 @@ fn parse_component_section(
                 }
             }
             if !top_func_items.is_empty() {
-                let ch_data = vec![json!({ "name": "", "items": top_func_items })];
-                params["channels"] = json!(serde_json::to_string(&ch_data).unwrap_or_default());
+                params["topLevelItems"] = json!(serde_json::to_string(&top_func_items).unwrap_or_default());
             }
         }
 
@@ -1066,6 +1118,10 @@ fn parse_component_section(
             if !prop_names.is_empty() {
                 params["properties"] = json!(prop_names.join(","));
             }
+            params["propertyDefinitions"] = json!(serde_json::to_string(&sys_props.iter().map(|property| json!({
+                "name": get_text(property),
+                "attrs": property.attrs
+            })).collect::<Vec<_>>()).unwrap_or_default());
         }
 
         // Tables
@@ -1249,6 +1305,41 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
     }
 }
 
+fn parse_input(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut LayoutState) {
+    for input in find_children(fdm_config, "input") {
+        let mut params = json!({
+            "name": get_attr(input, "name").unwrap_or("0.0.0.0"),
+            "type": get_attr(input, "type").unwrap_or("SOCKET")
+        });
+        if let Some(port) = get_attr(input, "port").and_then(|value| value.parse::<i64>().ok()) {
+            params["port"] = json!(port);
+        }
+        if let Some(rate) = get_attr(input, "rate").and_then(|value| value.parse::<f64>().ok()) {
+            params["rate"] = json!(rate);
+        }
+        let properties: Vec<String> = find_children(input, "property")
+            .iter()
+            .map(|property| get_text(property))
+            .filter(|property| !property.is_empty())
+            .collect();
+        if !properties.is_empty() {
+            params["properties"] = json!(properties.join(","));
+        }
+        let id = layout.next_id();
+        let name = params["name"].as_str().unwrap_or("0.0.0.0");
+        nodes.push(json!({
+            "id": id,
+            "type": "aircraftComponent",
+            "data": {
+                "label": format!("Input: {}", name),
+                "componentType": "input",
+                "params": params
+            },
+            "position": layout.next_position()
+        }));
+    }
+}
+
 // ── Logical edges ──────────────────────────────────────────────────────────
 
 fn create_logical_edges(nodes: &[Value], edges: &mut Vec<Value>) {
@@ -1382,7 +1473,7 @@ fn apply_location_layout(nodes: &mut [Value]) {
 
         let type_order = [
             "wing", "fuselage", "inertia", "landing_gear", "engine", "propeller", "fuel_tank",
-            "point_mass", "system", "output", "aero_coefficients",
+            "point_mass", "system", "input", "output", "aero_coefficients",
         ];
 
         let mut cur_y = 100.0;
@@ -1475,7 +1566,7 @@ fn apply_location_layout(nodes: &mut [Value]) {
 
     let type_order = [
         "wing", "fuselage", "inertia", "landing_gear", "engine", "propeller", "fuel_tank",
-        "point_mass", "system", "output", "aero_coefficients",
+        "point_mass", "system", "input", "output", "aero_coefficients",
     ];
 
     let mut ordered: Vec<usize> = Vec::new();
@@ -1641,6 +1732,7 @@ pub fn parse_xml(xml: &str, file_map: &HashMap<String, String>) -> Result<Value,
         &mut layout,
     );
     parse_aerodynamics(&fdm_config, &mut nodes, &mut edges, &mut layout);
+    parse_input(&fdm_config, &mut nodes, &mut layout);
     parse_output(&fdm_config, &mut nodes, &mut layout);
 
     // Create logical edges
@@ -1710,6 +1802,12 @@ pub fn parse_xml(xml: &str, file_map: &HashMap<String, String>) -> Result<Value,
 mod ownership_tests {
     use super::*;
 
+    fn node<'a>(graph: &'a Value, component_type: &str) -> &'a Value {
+        graph["nodes"].as_array().unwrap().iter()
+            .find(|item| item["data"]["componentType"] == component_type)
+            .unwrap_or_else(|| panic!("missing component {component_type}"))
+    }
+
     #[test]
     fn file_backed_sensor_is_owned_by_systems_xml() {
         let xml = r#"<?xml version="1.0"?>
@@ -1723,5 +1821,78 @@ mod ownership_tests {
         assert_eq!(node["data"]["params"]["referencePath"], "systems/SensorImu.xml");
         assert_eq!(node["data"]["params"]["source"]["path"], "systems/SensorImu.xml");
         assert_eq!(node["data"]["params"]["source"]["category"], "system");
+    }
+
+    #[test]
+    fn every_library_component_survives_edit_save_reload() {
+        let xml = r#"<?xml version="1.0"?>
+<fdm_config name="RoundTrip" version="2.0" release="TEST">
+  <metrics>
+    <wingarea unit="FT2">10</wingarea><wingspan unit="FT">4</wingspan>
+    <chord unit="FT">2</chord><wing_incidence unit="DEG">1</wing_incidence>
+    <htailarea unit="FT2">3</htailarea><htailarm unit="FT">5</htailarm>
+    <vtailarea unit="FT2">2</vtailarea><vtailarm unit="FT">6</vtailarm>
+    <location name="AERORP" unit="IN"><x>1</x><y>2</y><z>3</z></location>
+  </metrics>
+  <mass_balance>
+    <ixx unit="SLUG*FT2">1</ixx><iyy unit="SLUG*FT2">2</iyy><izz unit="SLUG*FT2">3</izz>
+    <emptywt unit="LBS">20</emptywt>
+    <location name="CG" unit="IN"><x>4</x><y>5</y><z>6</z></location>
+    <pointmass name="Payload"><weight unit="LBS">7</weight><location unit="IN"><x>8</x><y>9</y><z>10</z></location></pointmass>
+  </mass_balance>
+  <ground_reactions><contact name="MAIN" type="BOGEY">
+    <location unit="IN"><x>1</x><y>0</y><z>-1</z></location>
+    <static_friction>0.8</static_friction><dynamic_friction>0.5</dynamic_friction><rolling_friction>0.02</rolling_friction>
+  </contact></ground_reactions>
+  <propulsion>
+    <engine name="Motor"><feed>0</feed><thruster name="Prop"><sense>1</sense><p_factor>2</p_factor></thruster></engine>
+    <tank name="Tank 0" type="FUEL"><capacity unit="LBS">12</capacity><contents unit="LBS">11</contents></tank>
+  </propulsion>
+  <system name="Inline System"><property>test/system</property></system>
+  <flight_control name="Inline FCS"><property>test/fcs</property></flight_control>
+  <aerodynamics><axis name="LIFT"><function name="aero/coefficient/CL"><value>0.2</value></function></axis></aerodynamics>
+  <input name="192.0.2.1" type="HIL_ACTUATOR_CONTROLS" port="14560" rate="250"><property>fcs/throttle-cmd-norm[0]</property></input>
+  <output name="PX4" type="HIL_SENSOR" port="14560" rate="250"><property>sensor/imu/x</property></output>
+  <output name="can" type="UAVCAN" interface="can0" node_id="42" subject_id="1000" rate="50"><property>sensor/can/x</property></output>
+</fdm_config>"#;
+
+        let mut graph = parse_xml(xml, &HashMap::new()).expect("initial parse");
+        let expected = [
+            "fuselage", "wing", "htail", "vtail", "engine", "propeller",
+            "landing_gear", "fuel_tank", "point_mass", "inertia",
+            "aero_coefficients", "system", "flight_control", "input", "uavcan", "output",
+        ];
+        for component_type in expected {
+            node(&graph, component_type);
+        }
+
+        // Simulate edits made in the property panel before Save.
+        for item in graph["nodes"].as_array_mut().unwrap() {
+            let kind = item["data"]["componentType"].as_str().unwrap_or("").to_string();
+            let params = &mut item["data"]["params"];
+            match kind.as_str() {
+                "wing" => params["wingarea"] = json!({"value": 12.5, "unit": "FT2"}),
+                "htail" => params["htailarea"] = json!({"value": 3.5, "unit": "FT2"}),
+                "vtail" => params["vtailarm"] = json!({"value": 6.5, "unit": "FT"}),
+                "landing_gear" => params["rolling_friction"] = json!(0.031),
+                "input" => params["port"] = json!(14561),
+                "output" => params["rate"] = json!(251),
+                _ => {}
+            }
+        }
+
+        let saved = crate::xml_generator::generate_xml(&graph).expect("save XML");
+        let reloaded = parse_xml(&saved, &HashMap::new()).expect("reload saved XML");
+        for component_type in expected {
+            node(&reloaded, component_type);
+        }
+        assert_eq!(node(&reloaded, "wing")["data"]["params"]["wingarea"]["value"], 12.5);
+        assert_eq!(node(&reloaded, "htail")["data"]["params"]["htailarea"]["value"], 3.5);
+        assert_eq!(node(&reloaded, "vtail")["data"]["params"]["vtailarm"]["value"], 6.5);
+        assert_eq!(node(&reloaded, "landing_gear")["data"]["params"]["rolling_friction"], 0.031);
+        assert_eq!(node(&reloaded, "input")["data"]["params"]["port"], 14561);
+        assert_eq!(node(&reloaded, "output")["data"]["params"]["rate"], 251.0);
+        assert_eq!(node(&reloaded, "engine")["data"]["params"]["name"], "Motor");
+        assert_eq!(node(&reloaded, "fuel_tank")["data"]["params"]["name"], "Tank 0");
     }
 }
