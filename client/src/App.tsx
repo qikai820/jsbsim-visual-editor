@@ -9,11 +9,12 @@ import ModuleExpressionCanvas from './components/expression/ModuleExpressionCanv
 import Airplane3DViewer from './components/Airplane3DViewer';
 import LiveView from './components/LiveView';
 import FlightHud from './components/FlightHud';
+import LogCenter from './components/LogCenter';
 import { useSimSocket } from './sim/useSimSocket';
 import { resolveNodeOwnedPath, useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
-import { listenJsbsimLog } from './utils/tauriApi';
+import { isTauri, listenJsbsimLog, simSyncTime } from './utils/tauriApi';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -150,6 +151,8 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
 }
 
 function AppContent() {
+  const selectedNodeId = useFlowStore(state => state.selectedNodeId);
+  const editingSubFileId = useFlowStore(state => state.editingSubFileId);
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
   const [xmlChangeNotice, setXmlChangeNotice] = useState<string[]>([]);
@@ -162,6 +165,7 @@ function AppContent() {
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLive, setShowLive] = useState(false);
+  const [showLogCenter, setShowLogCenter] = useState(false);
   const [webglFail, setWebglFail] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logWindowRef = useRef<HTMLDivElement | null>(null);
@@ -184,6 +188,21 @@ function AppContent() {
   useEffect(() => { localStorage.setItem('jsbsim-palette-width', String(paletteWidth)); }, [paletteWidth]);
   useEffect(() => { localStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
   useEffect(() => { localStorage.setItem('jsbsim-log-position', JSON.stringify(logPos)); }, [logPos]);
+  useEffect(() => {
+    if (!isTauri) return;
+    let active = true;
+    const synchronize = () => {
+      const threshold = Math.max(1, Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
+      void simSyncTime(threshold).then(result => {
+        if (active && result.synchronized) {
+          setJsbsimLogs(lines => [...lines, `[${new Date().toLocaleTimeString()}] 已自动同步仿真机时间（偏差 ${result.differenceSeconds}s）`].slice(-200));
+        }
+      }).catch(() => { /* board may not have sent telemetry yet */ });
+    };
+    synchronize();
+    const timer = window.setInterval(synchronize, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   useEffect(() => {
     const restore = (event: Event) => {
       const settings = (event as CustomEvent).detail || {};
@@ -461,11 +480,13 @@ function AppContent() {
   return (
     <div className="app">
       <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)}
+        onShowLogCenter={() => setShowLogCenter(true)}
         onUndo={handleUndo} onRedo={handleRedo} onCopy={handleCopy} onPaste={handlePaste}
         modifiedXmlFiles={modifiedXmlFiles} onSaveComplete={savedFiles => setModifiedXmlFiles(current => savedFiles ? current.filter(file => !savedFiles.includes(file)) : [])}
         jsbsimLogs={jsbsimLogs}
         onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
+      {showLogCenter && <LogCenter onClose={() => setShowLogCenter(false)} />}
       {xmlChangeNotice.length > 0 && <div className="xml-change-notice" role="status">
         <span className="xml-change-notice-icon">✎</span>
         <span><strong>编辑内容已修改</strong><small>影响文件：{xmlChangeNotice.join('、')}</small></span>
@@ -495,9 +516,9 @@ function AppContent() {
             <Palette onDragStart={handleDragStart} collapsed={paletteCollapsed} onToggle={() => setPaletteCollapsed(value => !value)} width={paletteWidth}
               onResizeStart={e => { e.preventDefault(); paletteResize.current = { x: e.clientX, width: paletteWidth }; }} />
             <Canvas dragType={dragType} onDragStart={handleDragStart} />
-            <div className={`right-sidebar${showJsbsimLog ? ' has-detached-log' : ''}`} style={showJsbsimLog ? { paddingTop: logReservedHeight } : undefined}>
+            {(selectedNodeId || editingSubFileId) && <div className={`right-sidebar${showJsbsimLog ? ' has-detached-log' : ''}`} style={showJsbsimLog ? { paddingTop: logReservedHeight } : undefined}>
               <PropertyPanel /><FileManager />
-            </div>
+            </div>}
           </>
         )}
       </div>

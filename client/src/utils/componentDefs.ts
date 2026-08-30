@@ -227,9 +227,9 @@ export const componentDefs: ComponentDef[] = [
     params: {
       name: { label: '名称', type: 'string', default: 'localhost' },
       type: { label: '类型', type: 'select', default: 'SOCKET', options: ['SOCKET', 'QTJSBSIM', 'HIL_ACTUATOR_CONTROLS', 'NONE'] },
-      port: { label: '端口', type: 'number', default: 1139 },
+      port: { label: '端口', type: 'integer', default: 1139 },
       rate: { label: '频率 (Hz)', type: 'number', default: 20 },
-      properties: { label: '自定义属性', type: 'string', default: '' },
+      properties: { label: '输出属性', type: 'string', default: '' },
     },
     inputs: [],
     outputs: [{ id: 'input', label: '输入数据' }],
@@ -265,7 +265,7 @@ export const componentDefs: ComponentDef[] = [
     params: {
       name: { label: '名称', type: 'string', default: 'localhost' },
       type: { label: '类型', type: 'select', default: 'SOCKET', options: ['SOCKET', 'FILE', 'HIL_SENSOR', 'HIL_GPS', 'QTJSBSIM', 'NONE'] },
-      port: { label: '端口', type: 'number', default: 1138 },
+      port: { label: '端口', type: 'integer', default: 1138 },
       rate: { label: '频率 (Hz)', type: 'number', default: 20 },
       simulation: { label: '仿真数据', type: 'select', default: 'OFF', options: ['ON', 'OFF'] },
       atmosphere: { label: '大气数据', type: 'select', default: 'OFF', options: ['ON', 'OFF'] },

@@ -905,12 +905,15 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
                 ? () => setEditingExprId(selectedNode.id) : undefined}
             />
           ) : selectedNode && (selectedNode.data as any)?.kind === 'signal' ? (
-            <div className="expr-props-empty">
+            <div className="expr-props-empty signal-end-editor">
               <p>信号端点</p>
-              <p className="expr-props-hint">
-                {(selectedNode.data as any).signalRole === 'source' ? '输入信号' : '输出信号'}：<br />
-                <code>{String((selectedNode.data as any).signalName)}</code>
-              </p>
+              <label>类型</label>
+              <input value={(selectedNode.data as any).signalRole === 'source' ? '输入信号' : '输出信号'} readOnly />
+              <label>变量名</label>
+              <input value={String((selectedNode.data as any).signalName || '')}
+                onChange={event => updateComponent(selectedNode.id, { signalName: event.target.value })}
+                placeholder="例如 position/h-sl-ft" />
+              <p className="expr-props-hint">修改后会自动更新同名信号连线。</p>
             </div>
           ) : isSignal ? (
             <div className="expr-props-empty">

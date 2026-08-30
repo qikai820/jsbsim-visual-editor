@@ -68,12 +68,15 @@ function normalizeNodeOwnership(node: Node<AircraftNodeData>): Node<AircraftNode
   if (!path) return node;
   const params = node.data.params || {};
   const category = type === 'system' || type === 'flight_control' ? 'system' : 'engine';
+  const fileName = path.split('/').pop()?.replace(/\.xml$/i, '') || '';
   return {
     ...node,
     data: {
       ...node.data,
       params: {
         ...params,
+        file: params.file || fileName,
+        _source_file: params._source_file || fileName,
         referencePath: path,
         source: { fileId: `${category}:${path}`, path, category },
       },

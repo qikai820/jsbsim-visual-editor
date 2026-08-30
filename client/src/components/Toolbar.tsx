@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpUploadModel, ftpUploadFile } from '../utils/tauriApi';
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpUploadModel, ftpUploadFile, ftpListSystems, ftpListEngines } from '../utils/tauriApi';
 
 // Safety lock: while validating NuttX reload behavior, never write model XML
 // back to the SD card. Downloads remain enabled so the editor can inspect the
@@ -9,8 +9,11 @@ const REMOTE_MODEL_UPLOAD_ENABLED = false;
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
+import SimulationConfigDialog from './SimulationConfigDialog';
+import LocalSettingsDialog from './LocalSettingsDialog';
 import { isTauri } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useLanguage } from '../i18n';
 
 interface ToolbarProps {
   onShow3D?: () => void;
@@ -18,6 +21,7 @@ interface ToolbarProps {
   jsbsimLogs?: string[];
   onLog?: (message: string) => void;
   onToggleJsbsimLog?: () => void;
+  onShowLogCenter?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onCopy?: () => void;
@@ -59,22 +63,31 @@ function nodeOwnedPath(node: any): string {
       : withExt;
 }
 
-export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
+export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
+  const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
   const [showXml, setShowXml] = useState(false);
   const [xmlContent, setXmlContent] = useState('');
+  const [importedSubFiles, setImportedSubFiles] = useState<Array<{ name: string; referenced: boolean; category?: string }>>(() => {
+    try { return JSON.parse(localStorage.getItem('jsbsim-imported-subfiles') || '[]'); } catch { return []; }
+  });
   const [loading, setLoading] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showEditMenu, setShowEditMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showSimulationConfig, setShowSimulationConfig] = useState(false);
+  const [showLocalSettings, setShowLocalSettings] = useState(false);
   const [librarySimulationModel, setLibrarySimulationModel] = useState('');
   const [recentProjects, setRecentProjects] = useState<Array<{ filename: string; path: string; openedAt: string }>>(() => JSON.parse(localStorage.getItem('jsbsim-recent-projects') || '[]'));
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const directoryInputRef = useRef<HTMLInputElement>(null);
   const fileMenuRef = useRef<HTMLDivElement>(null);
   const editMenuRef = useRef<HTMLDivElement>(null);
   const displayMenuRef = useRef<HTMLDivElement>(null);
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
   const windowAction = async (action: 'min' | 'max' | 'close') => {
     if (!isTauri) return;
     const window = getCurrentWindow();
@@ -106,6 +119,9 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       if (displayMenuRef.current && !displayMenuRef.current.contains(event.target as Node)) {
         setShowDisplayMenu(false);
       }
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(event.target as Node)) {
+        setShowToolsMenu(false);
+      }
     };
 
     document.addEventListener('mousedown', closeFileMenu);
@@ -134,21 +150,64 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       for (let i = 0; i < fileList.length; i++) {
         const f = fileList[i];
         const text = await f.text();
-        allFiles.push({ name: f.name, xml: text });
+        // Keep the relative path when a directory is selected.  JSBSim XML
+        // references are relative to the data root, so flattening filenames
+        // breaks aircraft/engine/system relationships.
+        allFiles.push({ name: (f as any).webkitRelativePath || f.name, xml: text });
       }
 
-      // First file is the main XML, rest are referenced files
-      const mainXml = allFiles[0].xml;
-      const refFiles = allFiles.slice(1);
+      // Browser directory selection prefixes every entry with the selected
+      // folder name (for example jsbsim/systems/Foo.xml).  JSBSim references
+      // are rooted at aircraft/, engine/, systems/ and scripts/, so remove
+      // only the common browser-added directory prefix.
+      const normalizedFiles = allFiles.map(file => ({ ...file, name: file.name.replace(/\\/g, '/').replace(/^\.\//, '') }));
+      const firstSegments = normalizedFiles.map(file => file.name.split('/')[0]);
+      const commonRoot = firstSegments.length > 1 && firstSegments.every(segment => segment === firstSegments[0]) ? `${firstSegments[0]}/` : '';
+      if (commonRoot) normalizedFiles.forEach(file => { file.name = file.name.slice(commonRoot.length); });
 
+      // Directory enumeration order is not a stable way to identify the
+      // aircraft configuration. Prefer the fdm_config document as main XML.
+      const mainIndex = normalizedFiles.findIndex(file => /<\s*fdm_config\b/i.test(file.xml));
+      const orderedFiles = mainIndex > 0
+        ? [normalizedFiles[mainIndex], ...normalizedFiles.filter((_, index) => index !== mainIndex)]
+        : normalizedFiles;
+
+      // First file is the main XML, rest are referenced files.  Selecting a
+      // directory is supported as well; the complete relative tree is passed
+      // to the parser and retained in the project.
+      const mainXml = orderedFiles[0].xml;
+      const refFiles = orderedFiles.slice(1);
+      const allXml = orderedFiles.map(file => file.xml).join('\n').toLowerCase();
+      const classifyPackageFile = (name: string) => {
+        const lower = name.toLowerCase();
+        if (lower.endsWith('reset.xml') || lower.endsWith('initfile.xml')) return 'initialization';
+        if (lower.endsWith('-set.xml')) return 'model-config';
+        if (lower.includes('/systems/') || lower.startsWith('systems/')) return 'system';
+        if (lower.includes('/engine/') || lower.startsWith('engine/')) return 'engine';
+        return 'companion';
+      };
+      const provisionalFiles = refFiles.map(file => ({ name: file.name, referenced: false, category: classifyPackageFile(file.name) }));
+      setImportedSubFiles(provisionalFiles);
+      localStorage.setItem('jsbsim-imported-subfiles', JSON.stringify(provisionalFiles));
       const data = await parseXml(mainXml, refFiles);
       loadProject(data);
+      const selectedFiles = refFiles.map(file => file.name);
+      const parsedFiles = (data.xmlFiles || []).filter((file: any) => file.category !== 'main').map((file: any) => String(file.path || ''));
+      const packageCategories = new Map<string, string>((data.packageFiles || []).map((file: any) => [String(file.path || ''), String(file.category || 'companion')]));
+      const packagePaths = Array.from(packageCategories.keys()).filter(Boolean);
+      const importedFiles = Array.from(new Set([...selectedFiles, ...parsedFiles, ...packagePaths].filter(Boolean))).map(name => {
+        const normalized = name.replace(/\\/g, '/').toLowerCase();
+        const basename = normalized.split('/').pop() || normalized;
+        return { name, referenced: parsedFiles.includes(name) || allXml.includes(normalized) || allXml.includes(basename), category: packageCategories.get(name) };
+      }).sort((a, b) => Number(b.referenced) - Number(a.referenced) || a.name.localeCompare(b.name));
+      setImportedSubFiles(importedFiles);
+      localStorage.setItem('jsbsim-imported-subfiles', JSON.stringify(importedFiles));
 
       // Persist to localStorage so data survives refresh
       try {
         localStorage.setItem('jsbsim-project', JSON.stringify(data));
         localStorage.setItem('jsbsim-raw-xml', mainXml);
-        localStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
+          localStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
         localStorage.removeItem('jsbsim-remote-baseline');
       } catch (e) {
         console.warn('[Import] Failed to save to localStorage:', e);
@@ -228,6 +287,17 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     if (!writes.length) {
       alert('当前没有需要写入仿真机的 XML 修改。');
       return;
+    }
+    try {
+      const [systems, engines] = await Promise.all([ftpListSystems(), ftpListEngines()]);
+      const existing = new Set([
+        ...systems.map(file => `systems/${String(file).replace(/^systems\//, '').replace(/^\/+/, '')}`),
+        ...engines.map(file => `engine/${String(file).replace(/^engine\//, '').replace(/^\/+/, '')}`),
+      ].map(path => path.toLowerCase()));
+      const conflicts = Array.from(externalPaths).filter(path => existing.has(path.replace(/^\/+/, '').toLowerCase()));
+      if (conflicts.length && !confirm(`检测到同名子文件：\n\n${conflicts.map(path => `  • /mnt/sdcard/jsbsim/${path}`).join('\n')}\n\n继续将覆盖这些文件（旧文件会保留为 .bak）。是否确认覆盖？`)) return;
+    } catch (error) {
+      if (!confirm(`无法读取仿真机现有子文件列表，不能确定是否存在重名文件。\n\n是否仍然继续上传？`)) return;
     }
     if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n远端旧文件会保留为 .bak。确认继续吗？`)) return;
     setLoading(true);
@@ -412,7 +482,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
               aria-haspopup="menu"
               aria-expanded={showFileMenu}
             >
-              📁 文件 <span className="file-menu-caret">▾</span>
+              📁 {isZh ? '文件' : 'File'} <span className="file-menu-caret">▾</span>
             </button>
             {showFileMenu && (
               <div className="file-menu-dropdown" role="menu">
@@ -422,66 +492,80 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
                   localStorage.removeItem('jsbsim-raw-xml');
                   Object.keys(localStorage).filter(k => k.startsWith('jsbsim-remote-baseline:')).forEach(k => localStorage.removeItem(k));
                   setShowFileMenu(false);
-                }}>📄 新建</button>
-                <button role="menuitem" onClick={() => { setShowWizard(true); setShowFileMenu(false); }}>🪄 创建向导</button>
+                }}>📄 {isZh ? '新建' : 'New'}</button>
+                <button role="menuitem" onClick={() => { setShowWizard(true); setShowFileMenu(false); }}>🪄 {isZh ? '创建向导' : 'New Wizard'}</button>
                 <div className="file-menu-separator" />
-                <button role="menuitem" onClick={() => { void handleSave(); setShowFileMenu(false); }}>💾 保存</button>
-                <button role="menuitem" onClick={() => { void handleSaveToSimulator(); setShowFileMenu(false); }}>🛰️ 保存到仿真机</button>
-                <button role="menuitem" onClick={() => { void handleLoad(); setShowFileMenu(false); }}>📂 打开工程</button>
+                <button role="menuitem" onClick={() => { void handleSave(); setShowFileMenu(false); }}>💾 {isZh ? '保存' : 'Save'}</button>
+                <button role="menuitem" onClick={() => { void handleSaveToSimulator(); setShowFileMenu(false); }}>🛰️ {isZh ? '保存到仿真机' : 'Save to Simulator'}</button>
+                <button role="menuitem" onClick={() => { void handleLoad(); setShowFileMenu(false); }}>📂 {isZh ? '打开工程' : 'Open Project'}</button>
                 {recentProjects.length > 0 && <>
                   <div className="file-menu-separator" />
-                  <div className="file-menu-section-title">最近打开的工程</div>
+                  <div className="file-menu-section-title">{isZh ? '最近打开的工程' : 'Recent Projects'}</div>
                   {recentProjects.map(project => <button key={project.filename} role="menuitem" className="recent-project-item" title={project.path} onClick={() => { void handleLoad(project.filename); setShowFileMenu(false); }}>
                     <span>↗ {project.filename}</span><small>{project.path}</small>
                   </button>)}
                 </>}
                 <div className="file-menu-separator" />
-                <button role="menuitem" onClick={() => { fileInputRef.current?.click(); setShowFileMenu(false); }} title="导入 XML 文件（自动解析引用文件）">📥 导入 XML</button>
-                <button role="menuitem" onClick={() => { void handleExportXml(); setShowFileMenu(false); }}>📤 导出 XML</button>
+                <button role="menuitem" onClick={() => { fileInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入 XML 文件（可多选依赖文件）' : 'Import XML files'}>📥 {isZh ? '导入 XML' : 'Import XML'}</button>
+                <button role="menuitem" onClick={() => { directoryInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入整个 XML 目录，自动保留目录结构' : 'Import an XML directory'}>📂 {isZh ? '导入 XML 目录' : 'Import XML folder'}</button>
+                <button role="menuitem" onClick={() => { void handleExportXml(); setShowFileMenu(false); }}>📤 {isZh ? '导出 XML' : 'Export XML'}</button>
               </div>
             )}
           </div>
           <div className="file-menu-anchor" ref={editMenuRef}>
             <button className={`file-menu-trigger ${showEditMenu ? 'active' : ''}`}
               onClick={() => setShowEditMenu(value => !value)} aria-haspopup="menu" aria-expanded={showEditMenu}>
-              ✏️ 编辑 <span className="file-menu-caret">▾</span>
+              ✏️ {isZh ? '编辑' : 'Edit'} <span className="file-menu-caret">▾</span>
             </button>
             {showEditMenu && (
               <div className="file-menu-dropdown" role="menu">
-                <button role="menuitem" onClick={() => { onUndo?.(); setShowEditMenu(false); }}>↶ 撤销 <kbd>Ctrl+Z</kbd></button>
-                <button role="menuitem" onClick={() => { onRedo?.(); setShowEditMenu(false); }}>↷ 恢复 <kbd>Ctrl+Y</kbd></button>
+                <button role="menuitem" onClick={() => { onUndo?.(); setShowEditMenu(false); }}>↶ {isZh ? '撤销' : 'Undo'} <kbd>Ctrl+Z</kbd></button>
+                <button role="menuitem" onClick={() => { onRedo?.(); setShowEditMenu(false); }}>↷ {isZh ? '恢复' : 'Redo'} <kbd>Ctrl+Y</kbd></button>
                 <div className="file-menu-separator" />
-                <button role="menuitem" onClick={() => { onCopy?.(); setShowEditMenu(false); }}>📋 复制 <kbd>Ctrl+C</kbd></button>
-                <button role="menuitem" onClick={() => { onPaste?.(); setShowEditMenu(false); }}>📄 粘贴 <kbd>Ctrl+V</kbd></button>
+                <button role="menuitem" onClick={() => { onCopy?.(); setShowEditMenu(false); }}>📋 {isZh ? '复制' : 'Copy'} <kbd>Ctrl+C</kbd></button>
+                <button role="menuitem" onClick={() => { onPaste?.(); setShowEditMenu(false); }}>📄 {isZh ? '粘贴' : 'Paste'} <kbd>Ctrl+V</kbd></button>
               </div>
             )}
           </div>
           <div className="file-menu-anchor" ref={displayMenuRef}>
             <button className={`file-menu-trigger ${showDisplayMenu ? 'active' : ''}`} onClick={() => setShowDisplayMenu(value => !value)} aria-haspopup="menu" aria-expanded={showDisplayMenu}>
-              👁️ 显示 <span className="file-menu-caret">▾</span>
+              👁️ {isZh ? '显示' : 'View'} <span className="file-menu-caret">▾</span>
             </button>
             {showDisplayMenu && <div className="file-menu-dropdown" role="menu">
-              <button role="menuitem" onClick={() => { onToggleJsbsimLog(); setShowDisplayMenu(false); }}>🖥️ JSBSim 信息{jsbsimLogs.length ? ` (${jsbsimLogs.length})` : ''}</button>
-              <button role="menuitem" onClick={() => { onShowLive(); setShowDisplayMenu(false); }}>🔴 实时</button>
+              <button role="menuitem" onClick={() => { onToggleJsbsimLog(); setShowDisplayMenu(false); }}>🖥️ {isZh ? 'JSBSim 信息' : 'JSBSim Console'}{jsbsimLogs.length ? ` (${jsbsimLogs.length})` : ''}</button>
+              <button role="menuitem" onClick={() => { onShowLive(); setShowDisplayMenu(false); }}>🔴 {isZh ? '实时' : 'Live'}</button>
               <button role="menuitem" onClick={() => { onShow3D(); setShowDisplayMenu(false); }}>🛩️ 3D</button>
             </div>}
           </div>
-          <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 模型库</button>
+          <div className="file-menu-anchor" ref={toolsMenuRef}>
+            <button className={`file-menu-trigger ${showToolsMenu ? 'active' : ''}`} onClick={() => setShowToolsMenu(value => !value)} aria-haspopup="menu" aria-expanded={showToolsMenu}>
+              🧰 {isZh ? '工具' : 'Tools'} <span className="file-menu-caret">▾</span>
+            </button>
+            {showToolsMenu && <div className="file-menu-dropdown" role="menu">
+              <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowToolsMenu(false); }}>📊 {isZh ? '日志中心' : 'Log Center'}</button>
+            </div>}
+          </div>
+          <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 {isZh ? '模型库' : 'Models'}</button>
+          <button onClick={() => setShowSimulationConfig(true)} disabled={loading}>⚙ {isZh ? '仿真配置' : 'Simulation'}</button>
+          <button onClick={() => setShowLocalSettings(true)}>🔧 {isZh ? '本地配置' : 'Local Settings'}</button>
           <SimMenu loading={loading} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}
-            onForceSyncRemoteModel={handleForceSyncRemoteModel}
             selectedModelFromLibrary={librarySimulationModel} />
         </div>
         <div className="toolbar-right">
           {isTauri && <div className="window-controls" onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
-            <button onClick={() => void windowAction('min')} title="最小化" aria-label="最小化"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10" /></svg></button>
-            <button onClick={() => void windowAction('max')} title="最大化/还原" aria-label="最大化或还原"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg></button>
-            <button className="window-close" onClick={() => void windowAction('close')} title="关闭" aria-label="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
+            <button onClick={() => void windowAction('min')} title={isZh ? '最小化' : 'Minimize'} aria-label={isZh ? '最小化' : 'Minimize'}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10" /></svg></button>
+            <button onClick={() => void windowAction('max')} title={isZh ? '最大化/还原' : 'Maximize/Restore'} aria-label={isZh ? '最大化或还原' : 'Maximize or restore'}><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg></button>
+            <button className="window-close" onClick={() => void windowAction('close')} title={isZh ? '关闭' : 'Close'} aria-label={isZh ? '关闭' : 'Close'}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
           </div>}
           <input ref={fileInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} />
+          <input ref={directoryInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} {...({ webkitdirectory: '', directory: '' } as any)} />
         </div>
       </div>
+
+      {showSimulationConfig && <SimulationConfigDialog model={aircraft.name || librarySimulationModel || 'default'} onClose={() => setShowSimulationConfig(false)} />}
+      {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} />}
 
       {showXml && (
         <div className="xml-modal-overlay" onClick={() => setShowXml(false)}>
@@ -495,6 +579,17 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
               </div>
             </div>
             <textarea className="xml-content" readOnly value={xmlContent} />
+          </div>
+        </div>
+      )}
+
+      {importedSubFiles.length > 0 && (
+        <div className="xml-import-files-overlay" role="dialog" aria-modal="true" aria-label="影响的 XML 子文件" onClick={event => event.stopPropagation()}>
+          <div className="xml-import-files-dialog" onClick={event => event.stopPropagation()}>
+            <header><strong>📂 影响的 XML 子文件</strong><button onClick={event => { event.preventDefault(); event.stopPropagation(); setImportedSubFiles([]); localStorage.removeItem('jsbsim-imported-subfiles'); }}>×</button></header>
+            <small>已保留原目录结构，共 {importedSubFiles.length} 个文件</small>
+            <ul>{importedSubFiles.map(file => <li key={file.name}>{file.category === 'initialization' ? '🎯' : file.category === 'model-config' ? '⚙️' : file.referenced ? '🔗' : '📄'} {file.name} <em>{file.category === 'initialization' ? '初始化/重置' : file.category === 'model-config' ? '模型配置' : file.referenced ? '已引用' : '随目录导入'}</em></li>)}</ul>
+            <footer><button onClick={event => { event.preventDefault(); event.stopPropagation(); setImportedSubFiles([]); localStorage.removeItem('jsbsim-imported-subfiles'); }}>确认关闭</button></footer>
           </div>
         </div>
       )}
@@ -530,6 +625,10 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
           onSelectForSimulation={(model) => {
             setLibrarySimulationModel(model);
             onLog?.(`[${new Date().toLocaleTimeString()}] 已从模型库选择待运行模型: ${model}`);
+          }}
+          onSelectScriptForSimulation={(script) => {
+            window.dispatchEvent(new CustomEvent('jsbsim-library-script-selected', { detail: { path: script, openEditor: true } }));
+            onLog?.(`[${new Date().toLocaleTimeString()}] 已从脚本库选择待运行脚本: ${script}`);
           }}
         />
       )}

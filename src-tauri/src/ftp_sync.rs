@@ -6,6 +6,14 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::collections::VecDeque;
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct LogFileInfo {
+    pub name: String,
+    pub size: Option<u64>,
+    pub modified: Option<String>,
+}
 
 fn endpoint() -> String {
     std::env::var("NUTTX_FTP_URL")
@@ -82,6 +90,93 @@ fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
     Ok(String::from_utf8_lossy(&bytes).lines().map(str::trim)
         .filter(|name| !name.is_empty() && safe_component(name.trim_end_matches('/')).is_ok())
         .map(|name| name.trim_end_matches('/').to_string()).collect())
+}
+
+fn log_name_timestamp(name: &str) -> Option<String> {
+    let stem = name.strip_suffix(".mcap")?;
+    let seconds = stem.rsplit('_').next()?.parse::<u64>().ok()?;
+    // The file name is generated from NuttX epoch seconds. Prefix it so the
+    // UI can turn it into a local date without pulling a date crate into the
+    // Tauri backend.
+    Some(format!("epoch:{seconds}"))
+}
+
+fn log_info(name: String) -> LogFileInfo {
+    let url = format!("{}/LOG/{}", endpoint(), name);
+    let auth = credentials();
+    let output = Command::new("curl")
+        .args(["--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
+               "--connect-timeout", "2", "--max-time", "4", "--user", &auth, "--head", &url])
+        .output();
+    let mut size = None;
+    let mut modified = None;
+    if let Ok(output) = output {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let (key, value) = match line.split_once(':') { Some(value) => value, None => continue };
+                if key.eq_ignore_ascii_case("content-length") { size = value.trim().parse().ok(); }
+                if key.eq_ignore_ascii_case("last-modified") { modified = Some(value.trim().to_string()); }
+            }
+        }
+    }
+    LogFileInfo { modified: modified.or_else(|| log_name_timestamp(&name)), name, size }
+}
+
+pub fn list_logs() -> Result<Vec<LogFileInfo>, String> {
+    let mut files = list_ftp_relative("LOG")?;
+    files.retain(|name| name.to_ascii_lowercase().ends_with(".mcap"));
+    files.sort();
+    files.reverse();
+    Ok(files.into_iter().map(log_info).collect())
+}
+
+pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<String, String> {
+    let file = safe_component(file)?;
+    if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
+    let home = std::env::var("HOME").map_err(|_| "HOME is not available")?;
+    let requested = configured_directory.unwrap_or("~/Downloads/JSBSim-Logs");
+    let requested = requested.strip_prefix("~/").map(|tail| format!("{home}/{tail}"))
+        .unwrap_or_else(|| requested.to_string());
+    let directory = std::path::PathBuf::from(requested);
+    if !directory.is_absolute() || !directory.starts_with(&home) {
+        return Err("log download directory must be an absolute path inside the current user's home directory".into());
+    }
+    std::fs::create_dir_all(&directory).map_err(|e| format!("cannot create download directory: {e}"))?;
+    let target = directory.join(file);
+    let partial = directory.join(format!(".{file}.part"));
+    let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
+    let status = Command::new("curl").args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--user", &auth, "--output"])
+        .arg(&partial).arg(&url).status().map_err(|e| format!("cannot start curl: {e}"))?;
+    if !status.success() { let _ = std::fs::remove_file(&partial); return Err("FTP log download failed".into()); }
+    let bytes = std::fs::read(&partial).map_err(|e| format!("cannot inspect downloaded log: {e}"))?;
+    const MCAP_MAGIC: [u8; 8] = [0x89, b'M', b'C', b'A', b'P', b'0', b'\r', b'\n'];
+    if bytes.len() < MCAP_MAGIC.len() || bytes[..MCAP_MAGIC.len()] != MCAP_MAGIC {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("downloaded log is empty or incomplete ({} bytes); wait for the simulation to finish and refresh", bytes.len()));
+    }
+    std::fs::rename(&partial, &target).map_err(|e| format!("cannot finalize downloaded log: {e}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+pub fn delete_log(file: &str) -> Result<(), String> {
+    let file = safe_component(file)?;
+    if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
+    /* curl sends --quote commands before navigating to the URL path.  The
+     * old `DELE <file>` therefore ran in the FTP home directory rather than
+     * LOG/, which NuttX reports as command-handler error -2 (ENOENT). */
+    let url = format!("{}/", endpoint());
+    let auth = credentials();
+    let command = format!("DELE /LOG/{file}");
+    let output = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
+               "--disable-epsv", "--connect-timeout", "3", "--max-time", "8",
+               "--user", &auth, "-Q", &command, &url])
+        .output().map_err(|e| format!("cannot start curl: {e}"))?;
+    if output.status.success() { Ok(()) }
+    else {
+        Err(format!("FTP log delete failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()))
+    }
 }
 
 pub fn list_dsdl_files() -> Result<Vec<String>, String> {
@@ -175,6 +270,53 @@ pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
     run_ftp(vec![format!("RNFR {}", temporary), format!("RNTO {}", remote)])
         .map_err(|e| format!("cannot commit {path}: {e}"))
     }
+}
+
+fn safe_config_path(path: &str) -> Result<&str, String> {
+    let path = safe_relative_path(path)?.trim_matches('/');
+    let valid = path == "config/global.json" ||
+        (path.starts_with("config/models/") && path.ends_with(".json") &&
+         safe_component(path.trim_start_matches("config/models/").trim_end_matches(".json")).is_ok());
+    if valid { Ok(path) } else { Err("invalid simulation config path".into()) }
+}
+
+pub fn download_config(path: &str) -> Result<String, String> {
+    let path = safe_config_path(path)?;
+    let url = format!("{}/jsbsim/{}", endpoint(), path);
+    let auth = credentials();
+    String::from_utf8(curl_output(&["--user", &auth, &url])?)
+        .map_err(|e| format!("remote config is not UTF-8: {e}"))
+}
+
+pub fn upload_config(path: &str, content: &str) -> Result<(), String> {
+    let path = safe_config_path(path)?;
+    serde_json::from_str::<serde_json::Value>(content)
+        .map_err(|e| format!("invalid config JSON: {e}"))?;
+    let remote = format!("/jsbsim/{path}");
+    let temporary = format!("{remote}.upload");
+    let backup = format!("{remote}.bak");
+    let auth = credentials();
+    let temp_url = format!("{}{}", endpoint(), temporary);
+    let mut child = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
+               "--connect-timeout", "3", "--max-time", "15", "--user", &auth,
+               "--ftp-create-dirs", "--upload-file", "-", &temp_url])
+        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .map_err(|e| format!("cannot start curl: {e}"))?;
+    child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
+    let quote = |commands: &[String]| -> Result<(), String> {
+        let mut command = Command::new("curl");
+        command.args(["--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
+                      "--connect-timeout", "3", "--max-time", "10", "--user", &auth]);
+        for item in commands { command.args(["-Q", item]); }
+        let result = command.arg(format!("{}/", endpoint())).output().map_err(|e| e.to_string())?;
+        if result.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&result.stderr).trim().into()) }
+    };
+    let _ = quote(&[format!("DELE {backup}")]);
+    let _ = quote(&[format!("RNFR {remote}"), format!("RNTO {backup}")]);
+    quote(&[format!("RNFR {temporary}"), format!("RNTO {remote}")])
 }
 
 pub fn list_models() -> Result<Vec<String>, String> {

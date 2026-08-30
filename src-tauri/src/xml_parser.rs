@@ -1204,7 +1204,7 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
                 }
             }
         }
-        if let Some(port) = get_attr(out, "port").and_then(|s| s.parse::<f64>().ok()) {
+        if let Some(port) = get_attr(out, "port").and_then(|s| s.parse::<i64>().ok()) {
             params["port"] = json!(port);
         }
         if let Some(rate) = get_attr(out, "rate").and_then(|s| s.parse::<f64>().ok()) {
@@ -1538,6 +1538,12 @@ fn resolve_section_files(
                                         merged.attrs.insert(k.clone(), v.clone());
                                     }
                                 }
+                                // Keep the source reference on the expanded
+                                // section. parse_component_section() uses it
+                                // to assign the node to systems/<file>.xml;
+                                // without this, the signal flow is parsed but
+                                // later treated as part of the main model.
+                                merged.attrs.insert("file".to_string(), file.to_string());
                                 new_children.push(merged);
                                 continue;
                             }

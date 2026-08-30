@@ -344,19 +344,22 @@ export default function PropertyPanel() {
     const raw = node.data.params[key] ?? paramDef.default;
 
     switch (paramDef.type) {
-      case 'number': {
+      case 'number':
+      case 'integer': {
         const numVal = getNumVal(raw);
         const currentUnit = getUnitStr(raw, paramDef.unit || '');
         const unitOptions = currentUnit ? getUnitOptions(currentUnit) : [];
+        const isInteger = paramDef.type === 'integer';
         return (
           <div key={key} className="field-row">
             <label>{paramDef.label}</label>
             <div className="field-input-row">
               <input
                 type="number"
-                value={formatValue(numVal)}
-                step="any"
-                onChange={e => handleNumChange(key, parseFloat(e.target.value) || 0, currentUnit)}
+                value={isInteger ? String(Math.round(numVal)) : formatValue(numVal)}
+                step={isInteger ? 1 : 'any'}
+                min={isInteger ? 0 : undefined}
+                onChange={e => handleNumChange(key, isInteger ? parseInt(e.target.value, 10) || 0 : parseFloat(e.target.value) || 0, currentUnit)}
               />
               {unitOptions.length > 1 ? (
                 <select
@@ -576,15 +579,23 @@ export default function PropertyPanel() {
               </div>
             );
           }
-          if (node.data.componentType === 'system' && key === 'file') {
+          if ((node.data.componentType === 'system' || node.data.componentType === 'flight_control') && key === 'file') {
+            const ownedPath = String(node.data.params.referencePath || node.data.params._source_file || node.data.params.file || '').replace(/\\/g, '/');
+            const currentFile = ownedPath.replace(/^systems\//i, '').replace(/\.xml$/i, '');
             return (
               <div className="field-row" key={key}>
                 <label>{paramDef.label}</label>
-                <select value={node.data.params[key] || ''}
-                  onChange={e => updateNodeParams(node.id, { [key]: e.target.value })}>
+                <select value={currentFile}
+                  onChange={e => {
+                    const file = e.target.value.replace(/\.xml$/i, '');
+                    const path = file ? `systems/${file}.xml` : '';
+                    updateNodeParams(node.id, { file, _source_file: file, referencePath: path, source: path ? { fileId: `system:${path}`, path, category: 'system' } : undefined });
+                  }}>
                   <option value="">手动输入或选择系统文件</option>
+                  {currentFile && !systemFiles.includes(currentFile) && <option value={currentFile}>{currentFile}（已识别）</option>}
                   {systemFiles.map(file => <option key={file} value={file}>{file}</option>)}
                 </select>
+                {ownedPath && <small className="dsdl-loaded-state">已识别系统文件：{ownedPath}</small>}
               </div>
             );
           }

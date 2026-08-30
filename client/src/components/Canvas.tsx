@@ -58,6 +58,21 @@ export default function Canvas({ dragType }: CanvasProps) {
     setSelectedNode(null);
   }, [setSelectedNode]);
 
+  const onMoveEnd = useCallback((_: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
+    const instance = rfInstance.current;
+    if (!instance) return;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    // Quantise the transform to quarter device pixels. Arbitrary fractional
+    // CSS transforms make all node text intermittently look soft after zoom.
+    const zoomStep = 0.25 / dpr;
+    const zoom = Math.min(2, Math.max(0.2, Math.round(viewport.zoom / zoomStep) * zoomStep));
+    const x = Math.round(viewport.x * dpr) / dpr;
+    const y = Math.round(viewport.y * dpr) / dpr;
+    if (Math.abs(zoom - viewport.zoom) > 0.001 || Math.abs(x - viewport.x) > 0.01 || Math.abs(y - viewport.y) > 0.01) {
+      void instance.setViewport({ x, y, zoom }, { duration: 0 });
+    }
+  }, []);
+
   // Double-click a module (system / flight_control / aero_coefficients) to drill into its internal
   // signal-flow canvas. Ensure channels/layout params exist so the embedded
   // ModuleExpressionCanvas can mount cleanly on a fresh module node.
@@ -88,6 +103,7 @@ export default function Canvas({ dragType }: CanvasProps) {
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={onPaneClick}
+        onMoveEnd={onMoveEnd}
         fitView
         deleteKeyCode="Delete"
         snapToGrid

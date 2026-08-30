@@ -10,13 +10,13 @@ import {
   simListModels,
   ftpDownloadScript,
 } from '../utils/tauriApi';
+import ScriptEditorDialog from './ScriptEditorDialog';
 
 interface SimMenuProps {
   loading?: boolean;
   onLog?: (message: string) => void;
   onOpenRemoteModel?: (model: string) => Promise<void>;
   onSyncRemoteModel?: (model: string) => Promise<boolean>;
-  onForceSyncRemoteModel?: (model: string) => Promise<void>;
   selectedModelFromLibrary?: string;
 }
 
@@ -32,10 +32,58 @@ interface AircraftModel {
   path: string;
 }
 
+function readVariableCache(key: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatCondition(condition: string): string {
+  return condition
+    .replace(/\bAND\b/gi, '∧')
+    .replace(/\bOR\b/gi, '∨')
+    .replace(/\bNOT\b/gi, '¬')
+    .replace(/\b(nq|ne)\b/gi, '≠')
+    .replace(/\b(le)\b/gi, '≤')
+    .replace(/\b(ge)\b/gi, '≥')
+    .replace(/\blt\b/gi, '<')
+    .replace(/\bgt\b/gi, '>')
+    .replace(/\beq\b/gi, '=')
+    .replace(/\bproduct\b/gi, '×')
+    .replace(/\bdifference\b/gi, '−')
+    .replace(/\bquotient\b/gi, '÷')
+    .replace(/\bsum\b/gi, 'Σ')
+    .replace(/\b(avg|average)\b/gi, '平均')
+    .replace(/\bpow\b/gi, '幂')
+    .replace(/\bsqrt\b/gi, '√')
+    .replace(/\b(abs)\b/gi, '|·|')
+    .replace(/\b(mod)\b/gi, ' mod ')
+    .replace(/\b(pi)\b/gi, 'π')
+    .replace(/\b(ifthen)\b/gi, '条件选择')
+    .replace(/\b(switch)\b/gi, '分支选择')
+    .replace(/\s*&&\s*/g, ' ∧ ')
+    .replace(/\s*\|\|\s*/g, ' ∨ ')
+    .replace(/!=/g, ' ≠ ')
+    .replace(/>=/g, ' ≥ ')
+    .replace(/<=/g, ' ≤ ')
+    .replace(/==/g, ' = ')
+    .replace(/(^|\s)!\s*/g, '$1¬ ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitCondition(condition: string): [string, string, string] {
+  const match = condition.match(/^\s*(.*?)\s*(<=|>=|!=|==|<|>|=|\ble\b|\bge\b|\blt\b|\bgt\b|\beq\b|\bnq\b)\s*(.*?)\s*$/i);
+  return match ? [match[1], match[2], match[3]] : [condition, '==', ''];
+}
+
 type Submenu = 'model' | 'script' | null;
 type SimPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'restarting' | 'pausing' | 'paused' | 'resuming' | 'loading';
 
-export default function SimMenu({ loading: parentLoading = false, onLog, onOpenRemoteModel, onSyncRemoteModel, onForceSyncRemoteModel, selectedModelFromLibrary = '' }: SimMenuProps) {
+export default function SimMenu({ loading: parentLoading = false, onLog, onOpenRemoteModel, onSyncRemoteModel, selectedModelFromLibrary = '' }: SimMenuProps) {
   const [open, setOpen] = useState(false);
   const [submenu, setSubmenu] = useState<Submenu>(null);
   const [running, setRunning] = useState(false);
@@ -44,6 +92,10 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [cpuLoad, setCpuLoad] = useState<number | null>(null);
   const [cpuCores, setCpuCores] = useState<number[]>([]);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
+  const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
+  const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number }[]>([]);
+  const [fdmPopupOpen, setFdmPopupOpen] = useState(false);
+  const [fdmWindow, setFdmWindow] = useState<10 | 20 | 30>(10);
   const [cpuHistory, setCpuHistory] = useState<number[][]>([]);
   const [cpuPopupOpen, setCpuPopupOpen] = useState(false);
   const [remoteState, setRemoteState] = useState('disconnected');
@@ -61,10 +113,22 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<SimPhase>('idle');
-  const [scriptEditor, setScriptEditor] = useState<{ name: string; aircraft: string; initialize: string; start: string; end: string; dt: string; events: { name: string; condition: string; actions: number; notify: number }[] }>({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
+  const [scriptEditor, setScriptEditor] = useState<{ name: string; aircraft: string; initialize: string; start: string; end: string; dt: string; events: { name: string; condition: string; sets: { name: string; value: string }[]; notifies: string[] }[] }>({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
   const [scriptEditorExpanded, setScriptEditorExpanded] = useState(false);
+  const [globalVariables, setGlobalVariables] = useState<string[]>(() => Array.from(new Set([
+    ...readVariableCache('jsbsim-global-variables'),
+    ...readVariableCache('jsbsim-available-variables'),
+  ])));
 
   const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const update = (event: Event) => {
+      const paths = (event as CustomEvent<string[]>).detail || [];
+      setGlobalVariables(Array.from(new Set([...paths, ...readVariableCache('jsbsim-global-variables')])));
+    };
+    window.addEventListener('jsbsim-variables-updated', update);
+    return () => window.removeEventListener('jsbsim-variables-updated', update);
+  }, []);
   /* Once this UI has issued a lifecycle command, its successful result is
    * authoritative.  The NuttX bridge reports asynchronously over UDP and a
    * status poll must never alternate the Start/Stop button with stale frames. */
@@ -108,6 +172,13 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         free: Number(remoteMemory.free) || 0,
         percent: Number(remoteMemory.percent) || 0,
       } : null);
+      const remoteFdmRunMs = Number(status.fdmRunMs);
+      if (Number.isFinite(remoteFdmRunMs) && remoteFdmRunMs >= 0) {
+        setFdmRunMs(remoteFdmRunMs);
+        const now = Date.now();
+        setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs }]
+          .filter(sample => now - sample.at <= 30000));
+      }
       if (cores.length) {
         setCpuHistory(history => [...history, cores].slice(-100));
       }
@@ -251,7 +322,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       if (documentXml.querySelector('parsererror')) throw new Error(`脚本 XML 解析失败: ${file}`);
       const aircraft = documentXml.querySelector('use')?.getAttribute('aircraft')?.trim();
       if (!aircraft) throw new Error(`脚本 ${file} 未声明 <use aircraft="...">`);
-      if (!models.some(model => model.path === aircraft)) {
+      if (models.length > 0 && !models.some(model => model.path === aircraft)) {
         throw new Error(`脚本关联模型 ${aircraft} 不在 NuttX 模型库中`);
       }
       setScriptEditor({
@@ -264,8 +335,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         events: Array.from(documentXml.querySelectorAll('event')).map(event => ({
           name: event.getAttribute('name') || '未命名事件',
           condition: event.querySelector('condition')?.textContent?.trim().replace(/\s+/g, ' ') || '无条件',
-          actions: event.querySelectorAll('set').length,
-          notify: event.querySelectorAll('notify').length,
+          sets: Array.from(event.querySelectorAll('set')).map(set => ({ name: set.getAttribute('name') || '', value: set.getAttribute('value') || '' })),
+          notifies: Array.from(event.querySelectorAll('notify')).map(notify => notify.textContent?.trim().replace(/\s+/g, ' ') || notify.getAttribute('name') || '通知'),
         })),
       });
       setScriptEditorExpanded(false);
@@ -284,6 +355,20 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     }
       setLoading(false);
   }, [models, onOpenRemoteModel, running, paused, appendLog]);
+
+  useEffect(() => {
+    const selectScript = (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: string; openEditor?: boolean }>).detail;
+      const path = String(typeof detail === 'string' ? detail : detail?.path || '').trim();
+      if (path) {
+        void handleRunScript(path).then(() => {
+          if (detail && typeof detail !== 'string' && detail.openEditor) setScriptEditorExpanded(true);
+        });
+      }
+    };
+    window.addEventListener('jsbsim-library-script-selected', selectScript);
+    return () => window.removeEventListener('jsbsim-library-script-selected', selectScript);
+  }, [handleRunScript]);
 
   const handleSelectModel = useCallback(async (path: string) => {
     setSubmenu(null);
@@ -342,23 +427,6 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setLoading(false);
   }, [preparedTarget]);
 
-  const handleForceSync = useCallback(async () => {
-    if (!selectedModel || !onForceSyncRemoteModel) return;
-    setLoading(true);
-    setPhase('loading');
-    setError('');
-    try {
-      appendLog(`强制上传模型到 NuttX: ${selectedModel}`);
-      await onForceSyncRemoteModel(selectedModel);
-      appendLog(`模型已强制更新到 NuttX: ${selectedModel}`);
-    } catch (err: any) {
-      setError(err.message || '模型上传失败');
-      appendLog(`模型上传失败: ${err.message || '未知错误'}`);
-    }
-    setPhase(running ? (paused ? 'paused' : 'running') : 'idle');
-    setLoading(false);
-  }, [selectedModel, onForceSyncRemoteModel, appendLog, running, paused]);
-
   const handleRestart = useCallback(async () => {
     setLoading(true);
     setPhase('restarting');
@@ -404,9 +472,32 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setSubmenu(prev => (prev === key ? null : key));
   };
 
+  useEffect(() => {
+    if (!submenu) return;
+    const id = window.setTimeout(() => {
+      const selected = wrapRef.current?.querySelector<HTMLElement>(
+        `[data-submenu="${submenu}"][data-selected="true"]`,
+      );
+      selected?.scrollIntoView({ block: 'nearest' });
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [submenu, selectedTest, selectedModel]);
+
   const statusText = external
     ? (!connected ? '等待连接' : remoteState === 'waiting' ? '已连接 · 等待开始' : phaseText[phase])
     : phaseText[phase];
+  const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
+  const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.value)) * 1.1;
+  const fdmValues = fdmVisibleHistory.map(sample => sample.value);
+  const fdmAverage = fdmValues.length ? fdmValues.reduce((sum, value) => sum + value, 0) / fdmValues.length : 0;
+  const fdmMaximum = fdmValues.length ? Math.max(...fdmValues) : 0;
+  const fdmMinimum = fdmValues.length ? Math.min(...fdmValues) : 0;
+  const fdmChartPoints = fdmVisibleHistory.map(sample => {
+    const age = Date.now() - sample.at;
+    const x = 240 - Math.min(fdmWindow * 1000, age) * 240 / (fdmWindow * 1000);
+    const y = 92 - Math.min(92, sample.value * 92 / fdmChartMax);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
 
   const handlePrimaryAction = () => {
     if (running) {
@@ -439,9 +530,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           aria-label="打开仿真菜单"
         >▾</button>
       </div>
-      {(selectedTest || selectedModel || preparedTarget.script || preparedTarget.model) && (
+      {activeName && (
         <span className="sim-selected-target" title={activeName}>
-          {selectedTest ? '📋' : '🛩️'} {displayName}
+          {(selectedTest || preparedTarget.script || currentScript) ? '📋' : '🛩️'} {displayName}
         </span>
       )}
       <span className={`sim-connection-chip ${connected ? 'online' : 'offline'}`} title="仿真机连接状态">
@@ -457,6 +548,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             RAM {memory.percent.toFixed(1)}%
           </span>
         )}
+        {external && fdmRunMs != null && (
+          <span className="sim-connection-fdm" role="button" tabIndex={0} title="单击查看 FDM 运行时间曲线" onClick={() => setFdmPopupOpen(open => !open)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setFdmPopupOpen(open => !open); }}>
+            FDM {fdmRunMs.toFixed(3)} ms <small>⌁</small>
+          </span>
+        )}
       </span>
       {cpuPopupOpen && cpuCores.length > 0 && (
         <div className="sim-cpu-popup">
@@ -470,6 +566,24 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           </svg>
           <div className="sim-cpu-legend">
             {cpuCores.map((value, core) => <span key={core} className={`core-${core}`}>CPU{core} <b>{value.toFixed(1)}%</b></span>)}
+          </div>
+        </div>
+      )}
+      {fdmPopupOpen && fdmRunMs != null && (
+        <div className="sim-fdm-popup">
+          <div className="sim-cpu-popup-head"><b>FDM 单步运行时间</b><span>{fdmRunMs.toFixed(3)} ms</span></div>
+          <div className="sim-fdm-window-picker">
+            {([10, 20, 30] as const).map(seconds => <button key={seconds} className={fdmWindow === seconds ? 'active' : ''} onClick={() => setFdmWindow(seconds)}>{seconds}s</button>)}
+          </div>
+          <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
+            {[.25, .5, .75].map(value => <line key={value} x1="0" x2="240" y1={92 - value * 92} y2={92 - value * 92} className="sim-cpu-grid" />)}
+            <polyline points={fdmChartPoints} className="sim-fdm-line" />
+          </svg>
+          <div className="sim-fdm-chart-scale"><span>{fdmChartMax.toFixed(3)} ms</span><span>0 ms</span></div>
+          <div className="sim-fdm-stats">
+            <span>平均 <b>{fdmAverage.toFixed(3)} ms</b></span>
+            <span>最大 <b>{fdmMaximum.toFixed(3)} ms</b></span>
+            <span>最小 <b>{fdmMinimum.toFixed(3)} ms</b></span>
           </div>
         </div>
       )}
@@ -493,11 +607,6 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
 
           <div className="sim-menu-list">
             <div className="sim-menu-section-title">🎮 仿真</div>
-            {selectedModel && onForceSyncRemoteModel && (
-              <button className="sim-menu-item" onClick={() => void handleForceSync()} disabled={runBusy}>
-                ⬆️ 强制更新模型到 NuttX
-              </button>
-            )}
             {running && (
               <>
                 <button className="sim-menu-item" onClick={handleRestart} disabled={runBusy || (external ? !connected : !running)}>
@@ -516,7 +625,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
                 className={`sim-menu-item sim-menu-parent ${submenu === 'script' ? 'open' : ''}`}
                 onClick={() => toggleSubmenu('script')}
               >
-                📋 脚本选择 <span className="sim-caret">▸</span>
+                📋 脚本选择{selectedTest && ` · ${selectedTest.split('/').pop()?.replace(/\.xml$/i, '')}`} <span className="sim-caret">▸</span>
               </button>
               {submenu === 'script' && (
                 <div className="sim-submenu-list">
@@ -524,6 +633,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
                   {tests.map(t => (
                     <button
                       key={t.path}
+                      data-submenu="script"
+                      data-selected={selectedTest === t.path ? 'true' : 'false'}
                       className={`sim-submenu-item sim-script-card ${selectedTest === t.path ? 'selected' : ''}`}
                       onClick={() => handleRunScript(t.path)}
                       disabled={runBusy}
@@ -546,7 +657,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
                 className={`sim-menu-item sim-menu-parent ${submenu === 'model' ? 'open' : ''}`}
                 onClick={() => toggleSubmenu('model')}
               >
-                🛩️ 模型 <span className="sim-caret">▸</span>
+                🛩️ 模型{selectedModel && ` · ${selectedModel.split('/').pop()?.replace(/\.xml$/i, '')}`} <span className="sim-caret">▸</span>
               </button>
               {submenu === 'model' && (
                 <div className="sim-submenu-list">
@@ -554,6 +665,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
                   {models.map(m => (
                     <button
                       key={m.path}
+                      data-submenu="model"
+                      data-selected={selectedModel === m.path ? 'true' : 'false'}
                       className={`sim-submenu-item ${selectedModel === m.path ? 'selected' : ''}`}
                       onClick={() => handleSelectModel(m.path)}
                       disabled={runBusy}
@@ -579,28 +692,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           <span className="script-flow-mini-hint">点击展开完整逻辑</span>
         </button>
       )}
-      {scriptEditor.name && scriptEditorExpanded && (
-        <div className="script-editor-overlay" onClick={() => setScriptEditor({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] })}>
-          <div className="script-editor-modal" onClick={e => e.stopPropagation()}>
-            <div className="script-editor-head">
-              <div><span className="script-editor-icon">📋</span><span>测试脚本逻辑</span><small>{scriptEditor.name}</small></div>
-              <button onClick={() => setScriptEditor({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] })}>×</button>
-            </div>
-            <div className="script-editor-summary">
-              <span>✈️ 模型：<b>{scriptEditor.aircraft}</b></span>
-              <span>⚙️ 初始化：<b>{scriptEditor.initialize}</b></span>
-              <span>⏱️ 起止：<b>{scriptEditor.start} → {scriptEditor.end} s</b></span>
-              <span>Δt：<b>{scriptEditor.dt} s</b></span>
-            </div>
-            <div className="script-flow-board">
-              <div className="script-flow-start">▶ 开始仿真 <small>t = {scriptEditor.start}s</small></div>
-              {scriptEditor.events.length === 0 && <div className="script-flow-empty">脚本没有事件配置</div>}
-              {scriptEditor.events.map((event, index) => <div className="script-flow-event" key={`${event.name}-${index}`}><div className="script-flow-node-title"><span>{index + 1}</span>{event.name}</div><div className="script-flow-condition">◇ 条件：{event.condition}</div><div className="script-flow-actions">⚙ {event.actions} 个设置　📣 {event.notify} 个通知</div></div>)}
-              <div className="script-flow-end">■ 结束仿真 <small>t = {scriptEditor.end}s</small></div>
-            </div>
-          </div>
-        </div>
-      )}
+      {scriptEditor.name && scriptEditorExpanded && <ScriptEditorDialog value={scriptEditor} variables={globalVariables} onChange={setScriptEditor} onClose={() => setScriptEditorExpanded(false)} />}
     </div>
   );
 }

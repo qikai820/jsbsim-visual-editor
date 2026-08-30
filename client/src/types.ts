@@ -10,7 +10,7 @@ export type SubFileType = 'engine' | 'thruster' | 'system';
 
 export interface ParamDef {
   label: string;
-  type: 'number' | 'string' | 'select' | 'location' | 'vector3';
+  type: 'number' | 'integer' | 'string' | 'select' | 'location' | 'vector3';
   default: any;
   unit?: string;
   options?: string[];

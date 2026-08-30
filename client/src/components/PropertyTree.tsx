@@ -11,6 +11,15 @@ interface PropertyTreeProps {
   unitSystem: UnitSystem;
 }
 
+function readStringList(key: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 // Build a tree structure from flat property paths
 interface TreeNode {
   name: string;
@@ -123,9 +132,16 @@ function TreeNodeView({
               </span>
             )}
             <button
-              onClick={() => isPinned ? onUnpin(node.path) : onPin(node.path)}
+              onClick={() => {
+                if (isPinned) onUnpin(node.path);
+                else {
+                  onPin(node.path);
+                  const saved = readStringList('jsbsim-global-variables');
+                  if (!saved.includes(node.path)) localStorage.setItem('jsbsim-global-variables', JSON.stringify([...saved, node.path]));
+                }
+              }}
               className={`ptree-pin${isPinned ? ' is-pinned' : ''}`}
-              title={isPinned ? '取消固定' : '固定到仪表盘'}
+              title={isPinned ? '取消固定' : '加入全局变量浏览器'}
             >
               {isPinned ? '★' : '☆'}
             </button>
@@ -155,6 +171,19 @@ export default function PropertyTree({ telemetry, pinnedPaths, onPin, onUnpin, u
   const prevValues = useRef<Map<string, number>>(new Map());
 
   const tree = useMemo(() => buildTree(telemetry), [telemetry]);
+
+  useEffect(() => {
+    const paths: string[] = [];
+    const collect = (node: TreeNode) => {
+      if (node.isLeaf && node.path) paths.push(node.path);
+      node.children.forEach(collect);
+    };
+    collect(tree);
+    if (paths.length) {
+      localStorage.setItem('jsbsim-available-variables', JSON.stringify(paths));
+      window.dispatchEvent(new CustomEvent('jsbsim-variables-updated', { detail: paths }));
+    }
+  }, [tree]);
 
   const filteredTree = useMemo(() => {
     if (!filter) return tree;

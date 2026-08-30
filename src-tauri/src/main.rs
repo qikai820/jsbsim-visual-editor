@@ -105,6 +105,22 @@ fn parse_xml(
     let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
     let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
 
+    let package_files: Vec<serde_json::Value> = files.as_ref().map(|items| items.iter().map(|file| {
+        let lower = file.name.to_ascii_lowercase();
+        let category = if lower.ends_with("reset.xml") || lower.ends_with("initfile.xml") {
+            "initialization"
+        } else if lower.ends_with("-set.xml") {
+            "model-config"
+        } else if lower.contains("/systems/") || lower.starts_with("systems/") {
+            "system"
+        } else if lower.contains("/engine/") || lower.starts_with("engine/") {
+            "engine"
+        } else {
+            "companion"
+        };
+        serde_json::json!({ "path": file.name, "category": category, "xml": file.xml })
+    }).collect()).unwrap_or_default();
+
     let mut file_map = std::collections::HashMap::new();
     if let Some(user_files) = files {
         for f in user_files {
@@ -122,7 +138,10 @@ fn parse_xml(
     }
 
     match xml_parser::parse_xml(&xml, &file_map) {
-        Ok(result) => Ok(result),
+        Ok(mut result) => {
+            result["packageFiles"] = serde_json::Value::Array(package_files);
+            Ok(result)
+        }
         Err(e) => Err(e),
     }
 }
@@ -323,6 +342,19 @@ fn get_sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command]
+fn sim_sync_time(app: tauri::AppHandle, threshold_secs: u64) -> Result<serde_json::Value, String> {
+    let state = app.state::<AppState>();
+    let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+    let difference = client.sync_clock_if_needed(threshold_secs)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "checked": difference.is_some(),
+        "synchronized": difference.map(|value| value != 0).unwrap_or(false),
+        "differenceSeconds": difference
+    }))
+}
+
 /// Parse JSBSim XML into a Simulink-style signal graph.
 /// Returns all computation blocks, signal connections, and external I/O.
 #[tauri::command]
@@ -486,6 +518,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let cpu = client.jsbsim_cpu_load();
         let cpu_cores = client.cpu_core_loads();
         let memory = client.memory_usage();
+        let fdm_run_ms = client.fdm_run_ms();
         return Ok(serde_json::json!({
             "external": true,
             "running": connected && (remote_state == "running" || remote_state == "paused"),
@@ -499,6 +532,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "cpu": cpu,
             "cpuCores": cpu_cores,
             "memory": memory,
+            "fdmRunMs": fdm_run_ms,
         }));
     }
     let state = app.state::<AppState>();
@@ -570,6 +604,31 @@ fn ftp_list_dsdl() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn ftp_list_logs() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({ "files": ftp_sync::list_logs()?, "root": "/mnt/sdcard/LOG", "source": "nuttx-ftp" }))
+}
+
+#[tauri::command]
+fn ftp_download_log(file: String, directory: Option<String>) -> Result<serde_json::Value, String> {
+    let path = ftp_sync::download_log(&file, directory.as_deref())?;
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("cannot inspect downloaded log: {e}"))?;
+    /* Returning the download bytes lets the WebView open the file immediately.
+     * Keep the IPC payload bounded; the on-disk file is still available for
+     * large logs, which should be opened manually to avoid freezing the UI. */
+    const AUTO_OPEN_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    let bytes = if metadata.len() <= AUTO_OPEN_MAX_BYTES {
+        Some(std::fs::read(&path).map_err(|e| format!("cannot read downloaded log: {e}"))?)
+    } else { None };
+    Ok(serde_json::json!({ "file": file, "path": path, "size": metadata.len(), "bytes": bytes }))
+}
+
+#[tauri::command]
+fn ftp_delete_log(file: String) -> Result<serde_json::Value, String> {
+    ftp_sync::delete_log(&file)?;
+    Ok(serde_json::json!({ "file": file, "deleted": true }))
+}
+
+#[tauri::command]
 fn ftp_download_dsdl(file: String) -> Result<serde_json::Value, String> {
     let content = ftp_sync::download_dsdl(&file)?;
     Ok(serde_json::json!({ "file": file, "content": content, "source": "nuttx-ftp" }))
@@ -591,6 +650,18 @@ fn ftp_download_script(file: String) -> Result<serde_json::Value, String> {
 fn ftp_upload_model(model: String, xml: String) -> Result<serde_json::Value, String> {
     ftp_sync::upload_model(&model, &xml)?;
     Ok(serde_json::json!({ "model": model, "uploaded": true }))
+}
+
+#[tauri::command]
+fn ftp_download_sim_config(path: String) -> Result<serde_json::Value, String> {
+    let content = ftp_sync::download_config(&path)?;
+    Ok(serde_json::json!({"path": path, "content": content}))
+}
+
+#[tauri::command]
+fn ftp_upload_sim_config(path: String, content: String) -> Result<serde_json::Value, String> {
+    ftp_sync::upload_config(&path, &content)?;
+    Ok(serde_json::json!({"path": path, "saved": true}))
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -657,6 +728,7 @@ fn main() {
             load_aircraft,
             send_control,
             get_sim_status,
+            sim_sync_time,
             parse_dataflow,
             sim_start,
             sim_stop,
@@ -670,10 +742,15 @@ fn main() {
             ftp_list_systems,
             ftp_list_engines,
             ftp_list_dsdl,
+            ftp_list_logs,
+            ftp_download_log,
+            ftp_delete_log,
             ftp_download_dsdl,
             ftp_upload_file,
             ftp_download_script,
             ftp_upload_model,
+            ftp_download_sim_config,
+            ftp_upload_sim_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

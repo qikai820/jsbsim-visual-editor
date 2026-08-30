@@ -9,7 +9,7 @@
 use serde_json::Value;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /* The external bridge normally runs on the i.MX board, while this editor
@@ -327,6 +327,13 @@ impl SimClient {
             .get("task_top")?.get("memory").cloned()
     }
 
+    /// Wall-clock execution time of the most recent FGFDMExec::Run call.
+    pub fn fdm_run_ms(&self) -> Option<f64> {
+        let state = self.inner.lock().unwrap();
+        state.latest_task_top.as_ref()?
+            .get("task_top")?.get("fdm_run_ms")?.as_f64()
+    }
+
     /// Send a 72-byte VisControlFrame to the simulation host.
     ///
     /// Layout (little-endian):
@@ -359,6 +366,25 @@ impl SimClient {
         let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
         self.send_socket.send_to(&packet, addr)?;
         Ok(())
+    }
+
+    /// Synchronize NuttX realtime clock only when telemetry reports a
+    /// difference larger than the configured threshold.
+    pub fn sync_clock_if_needed(&self, threshold_secs: u64) -> std::io::Result<Option<i64>> {
+        let remote = self.latest_sim_status()
+            .and_then(|value| value.get("wall_time_s").and_then(Value::as_u64));
+        let Some(remote) = remote else { return Ok(None); };
+        let local = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| std::io::Error::other(e.to_string()))?.as_secs();
+        let difference = local as i128 - remote as i128;
+        if difference.unsigned_abs() <= threshold_secs as u128 { return Ok(Some(0)); }
+        let mut packet = [0u8; 13];
+        packet[0..4].copy_from_slice(b"VCMD");
+        packet[4] = 9; // VCMD_SET_WALL_CLOCK
+        packet[5..13].copy_from_slice(&local.to_le_bytes());
+        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
+        self.send_socket.send_to(&packet, addr)?;
+        Ok(Some(difference.clamp(i64::MIN as i128, i64::MAX as i128) as i64))
     }
 
     /// Request a model reload.  The NuttX bridge accepts a basename only.

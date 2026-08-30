@@ -34,6 +34,9 @@ async function call(command: string, args: Record<string, any> = {}): Promise<an
     get_jsbsim_files: { method: 'GET', path: '/api/jsbsim-files' },
     ftp_list_systems: { method: 'GET', path: '/api/nuttx-system-files' },
     ftp_list_engines: { method: 'GET', path: '/api/nuttx-engine-files' },
+    ftp_list_logs: { method: 'GET', path: '/api/nuttx-logs' },
+    ftp_download_log: { method: 'POST', path: '/api/nuttx-logs/download' },
+    ftp_delete_log: { method: 'POST', path: '/api/nuttx-logs/delete' },
     generate_subfile: { method: 'POST', path: '/api/generate-subfile' },
     parse_subfile: { method: 'POST', path: '/api/parse-subfile' },
     save_project: { method: 'POST', path: '/api/save' },
@@ -200,7 +203,7 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; memory?: { total: number; used: number; free: number; percent: number } }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; memory?: { total: number; used: number; free: number; percent: number }; fdmRunMs?: number }> {
   return call('sim_status');
 }
 
@@ -227,6 +230,31 @@ export async function ftpListSystems(): Promise<string[]> {
 export async function ftpListEngines(): Promise<string[]> {
   const result = await call('ftp_list_engines');
   return (result.engines || result.files || []).map((file: any) => String(file.path || file).replace(/^engine\//, ''));
+}
+
+export interface RemoteLogFile {
+  name: string;
+  size?: number | null;
+  modified?: string | null;
+}
+
+export async function ftpListLogs(): Promise<RemoteLogFile[]> {
+  const result = await call('ftp_list_logs');
+  return (result.files || []).map((file: any) => typeof file === 'string'
+    ? { name: file, size: null, modified: null }
+    : { name: String(file.name || ''), size: typeof file.size === 'number' ? file.size : null, modified: file.modified || null });
+}
+
+export async function ftpDownloadLog(file: string, directory?: string): Promise<{ file: string; path: string; size: number; bytes?: number[] | null }> {
+  return call('ftp_download_log', { file, directory });
+}
+
+export async function simSyncTime(thresholdSecs: number): Promise<{ checked: boolean; synchronized: boolean; differenceSeconds?: number | null }> {
+  return call('sim_sync_time', { thresholdSecs });
+}
+
+export async function ftpDeleteLog(file: string): Promise<{ file: string; deleted: boolean }> {
+  return call('ftp_delete_log', { file });
 }
 
 export async function ftpListEngineCatalog(): Promise<{ engines: string[]; propellers: string[] }> {
@@ -257,6 +285,14 @@ export async function ftpDownloadScript(file: string): Promise<{ file: string; x
 
 export async function ftpUploadModel(model: string, xml: string): Promise<{ model: string; uploaded: boolean }> {
   return call('ftp_upload_model', { model, xml });
+}
+
+export async function ftpDownloadSimConfig(path: string): Promise<{ path: string; content: string }> {
+  return call('ftp_download_sim_config', { path });
+}
+
+export async function ftpUploadSimConfig(path: string, content: string): Promise<{ path: string; saved: boolean }> {
+  return call('ftp_upload_sim_config', { path, content });
 }
 
 // ── Tauri event listeners (for telemetry) ───────────────────────────────────
