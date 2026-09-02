@@ -78,3 +78,4 @@ function projectOnSegment(a: Pt, b: Pt, p: Pt): Pt {
   t = Math.max(0, Math.min(1, t));
   return { x: a.x + t * dx, y: a.y + t * dy };
 }
+

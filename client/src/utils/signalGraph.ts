@@ -800,3 +800,4 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
 
   return channels.filter(Boolean).map(c => ({ name: c.name || '', items: c.items }));
 }
+

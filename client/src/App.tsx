@@ -611,3 +611,4 @@ export default function App() {
     </GlobalErrorBoundary>
   );
 }
+

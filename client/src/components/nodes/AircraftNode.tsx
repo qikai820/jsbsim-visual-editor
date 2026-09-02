@@ -98,3 +98,4 @@ function AircraftNode({ data, selected }: NodeProps) {
 }
 
 export default memo(AircraftNode);
+

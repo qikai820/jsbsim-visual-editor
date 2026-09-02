@@ -1,9 +1,4 @@
-/**
- * Tauri IPC API adapter — replaces all fetch('/api/...') calls with invoke().
- *
- * When running inside Tauri, uses @tauri-apps/api invoke/listen.
- * When running in a browser (dev with Vite), falls back to fetch().
- */
+/** Tauri desktop IPC adapter. The standalone HTTP/web edition is removed. */
 
 // Detect Tauri runtime
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -32,65 +27,12 @@ async function ensureTauri() {
   tauriListen = event.listen;
 }
 
-// ── Generic invoke wrapper with fetch fallback ──────────────────────────────
+// ── Generic Tauri invoke wrapper ───────────────────────────────────────────
 
 async function call(command: string, args: Record<string, any> = {}): Promise<any> {
-  if (isTauri) {
-    await ensureTauri();
-    return tauriInvoke(command, args);
-  }
-  // Fallback: map command names to legacy HTTP endpoints
-  const routeMap: Record<string, { method: string; path: string; bodyKey?: string }> = {
-    generate_xml: { method: 'POST', path: '/api/generate-xml', bodyKey: 'data' },
-    parse_xml: { method: 'POST', path: '/api/parse-xml' },
-    get_jsbsim_files: { method: 'GET', path: '/api/jsbsim-files' },
-    ftp_list_systems: { method: 'GET', path: '/api/nuttx-system-files' },
-    ftp_list_engines: { method: 'GET', path: '/api/nuttx-engine-files' },
-    ftp_list_logs: { method: 'GET', path: '/api/nuttx-logs' },
-    ftp_download_log: { method: 'POST', path: '/api/nuttx-logs/download' },
-    ftp_delete_log: { method: 'POST', path: '/api/nuttx-logs/delete' },
-    generate_subfile: { method: 'POST', path: '/api/generate-subfile' },
-    parse_subfile: { method: 'POST', path: '/api/parse-subfile' },
-    save_project: { method: 'POST', path: '/api/save' },
-    get_project_path: { method: 'POST', path: '/api/project-path' },
-    load_project: { method: 'POST', path: '/api/load' },
-    list_projects: { method: 'GET', path: '/api/projects' },
-    generate_aircraft: { method: 'POST', path: '/api/generate-aircraft', bodyKey: 'data' },
-    get_aircraft_library: { method: 'GET', path: '/api/aircraft-library' },
-    load_aircraft: { method: 'POST', path: '/api/load-aircraft' },
-    send_control: { method: 'POST', path: '/ws/sim' }, // WebSocket, not HTTP
-    get_sim_status: { method: 'GET', path: '/api/sim-status' },
-    parse_dataflow: { method: 'POST', path: '/api/parse-dataflow' },
-    sim_start: { method: 'POST', path: '/api/sim/start' },
-    sim_stop: { method: 'POST', path: '/api/sim/stop' },
-    sim_status: { method: 'GET', path: '/api/sim/status' },
-    sim_pause: { method: 'POST', path: '/api/sim/pause' },
-    sim_resume: { method: 'POST', path: '/api/sim/resume' },
-    sim_restart: { method: 'POST', path: '/api/sim/restart' },
-    sim_list_tests: { method: 'GET', path: '/api/sim/tests' },
-    sim_list_models: { method: 'GET', path: '/api/sim/models' },
-  };
-
-  const route = routeMap[command];
-  if (!route) throw new Error(`Unknown API command: ${command}`);
-
-  if (route.method === 'GET') {
-    const res = await fetch(route.path);
-    return res.json();
-  }
-
-  // Build body: if bodyKey is set, wrap args under that key; otherwise spread
-  const body = route.bodyKey ? { [route.bodyKey]: args } : args;
-  const res = await fetch(route.path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${text}`);
-  }
-  return res.json();
+  if (!isTauri) throw new Error('此编辑器仅支持 Tauri 桌面端运行。');
+  await ensureTauri();
+  return tauriInvoke(command, args);
 }
 
 // ── Typed API functions ─────────────────────────────────────────────────────
@@ -118,14 +60,14 @@ export async function getJsbsimFiles(): Promise<any> {
 
 export async function generateSubfile(fileType: string, name: string, params: any): Promise<string> {
   const request = { type: fileType, name, params };
-  const result = await call('generate_subfile', isTauri ? { req: request } : request);
+  const result = await call('generate_subfile', { req: request });
   if (result.error) throw new Error(result.error);
   return result.xml;
 }
 
 export async function parseSubfile(xml: string, fileType: string): Promise<any> {
   const request = { xml, fileType };
-  const result = await call('parse_subfile', isTauri ? { req: request } : request);
+  const result = await call('parse_subfile', { req: request });
   if (result.error) throw new Error(result.error);
   return result;
 }
@@ -179,10 +121,7 @@ export async function loadAircraft(aircraftId: string): Promise<any> {
 }
 
 export async function sendControl(override: boolean, channels: number[]): Promise<void> {
-  if (isTauri) {
-    await call('send_control', { msg: { override, channels } });
-  }
-  // In browser mode, control is sent via WebSocket (handled by useSimSocket)
+  await call('send_control', { msg: { override, channels } });
 }
 
 export async function getSimStatus(): Promise<{ connected: boolean; latest: any }> {
@@ -217,7 +156,7 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; memory?: { total: number; used: number; free: number; percent: number }; fdmRunMs?: number }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; memory?: { total: number; used: number; free: number; percent: number }; fdmRunMs?: number; simulationDt?: number }> {
   return call('sim_status');
 }
 
@@ -233,6 +172,10 @@ export async function simListModels(): Promise<any[]> {
 
 export async function ftpDownloadModel(model: string): Promise<{ model: string; xml: string; source: string }> {
   return call('ftp_download_model', { model });
+}
+
+export async function ftpDownloadXml(path: string): Promise<{ path: string; content: string; source: string }> {
+  return call('ftp_download_xml', { path });
 }
 
 export async function ftpListSystems(): Promise<string[]> {

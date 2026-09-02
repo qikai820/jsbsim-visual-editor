@@ -519,6 +519,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let cpu_cores = client.cpu_core_loads();
         let memory = client.memory_usage();
         let fdm_run_ms = client.fdm_run_ms();
+        let simulation_dt = client.simulation_dt();
         return Ok(serde_json::json!({
             "external": true,
             "running": connected && (remote_state == "running" || remote_state == "paused"),
@@ -533,6 +534,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "cpuCores": cpu_cores,
             "memory": memory,
             "fdmRunMs": fdm_run_ms,
+            "simulationDt": simulation_dt,
         }));
     }
     let state = app.state::<AppState>();
@@ -584,6 +586,12 @@ fn sim_list_models() -> Result<serde_json::Value, String> {
 fn ftp_download_model(model: String) -> Result<serde_json::Value, String> {
     let xml = ftp_sync::download_model(&model)?;
     Ok(serde_json::json!({ "model": model, "xml": xml, "source": "nuttx-ftp" }))
+}
+
+#[tauri::command]
+fn ftp_download_xml(path: String) -> Result<serde_json::Value, String> {
+    let content = ftp_sync::download_path(&path)?;
+    Ok(serde_json::json!({ "path": path, "content": content, "source": "nuttx-ftp" }))
 }
 
 #[tauri::command]
@@ -739,6 +747,7 @@ fn main() {
             sim_list_tests,
             sim_list_models,
             ftp_download_model,
+            ftp_download_xml,
             ftp_list_systems,
             ftp_list_engines,
             ftp_list_dsdl,

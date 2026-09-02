@@ -1,6 +1,6 @@
 //! UDP simulation client — receives telemetry from JSBSim sim_server.
 //!
-//! Mirrors `server/simClient.js`:
+//! Desktop simulation client:
 //!   - Listens on a UDP port (default 5801) for JSON telemetry packets.
 //!   - Stores the latest frame; marks disconnected after 2 s without packets.
 //!   - Sends 72-byte VisControlFrame (magic "VCTL" + override + 16×f32) back
@@ -332,6 +332,13 @@ impl SimClient {
         let state = self.inner.lock().unwrap();
         state.latest_task_top.as_ref()?
             .get("task_top")?.get("fdm_run_ms")?.as_f64()
+    }
+
+    /// Effective JSBSim integration step reported by the running FDM.
+    pub fn simulation_dt(&self) -> Option<f64> {
+        let state = self.inner.lock().unwrap();
+        state.latest_task_top.as_ref()?
+            .get("task_top")?.get("simulation_dt")?.as_f64()
     }
 
     /// Send a 72-byte VisControlFrame to the simulation host.

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpUploadModel, ftpUploadFile, ftpListSystems, ftpListEngines, isRemoteUploadEnabled } from '../utils/tauriApi';
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpListSystems, ftpListEngines, isRemoteUploadEnabled } from '../utils/tauriApi';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
 import SimulationConfigDialog from './SimulationConfigDialog';
 import LocalSettingsDialog from './LocalSettingsDialog';
+import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
+import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
 import { isTauri } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
@@ -60,11 +62,141 @@ function nodeOwnedPath(node: any): string {
       : withExt;
 }
 
+function comparableXml(xml: string): string {
+  return String(xml || '').replace(/\r\n?/g, '\n').trim();
+}
+
+function escapeXmlAttribute(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function getXmlAttribute(tag: string, name: string): string {
+  const match = tag.match(new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`, 'i'));
+  return match?.[2] || '';
+}
+
+function setXmlAttribute(tag: string, name: string, value: unknown): string {
+  if (value === undefined || value === null || String(value).trim() === '') return tag;
+  const escaped = escapeXmlAttribute(value);
+  const expression = new RegExp(`(\\s${name}\\s*=\\s*)(["'])(.*?)\\2`, 'i');
+  if (expression.test(tag)) {
+    return tag.replace(expression, (_match, prefix) => `${prefix}"${escaped}"`);
+  }
+  return tag.replace(/(\s*\/?>)$/, (_match, ending) => ` ${name}="${escaped}"${ending}`);
+}
+
+/**
+ * Apply editor changes to the original top-level I/O tags without rebuilding
+ * the aircraft document. generateXml() operates on the expanded visual graph,
+ * so using it for an imported model serializes referenced engine/system files
+ * into the main aircraft XML.
+ */
+function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
+  const ioNodes = nodes.filter(node => ['input', 'output', 'uavcan'].includes(node?.data?.componentType));
+  const used = new Set<number>();
+
+  // Top-level JSBSim transport declarations have both name and type
+  // attributes. Nested FCS expression tags such as <input>property</input>
+  // do not; excluding them prevents an I/O edit from touching control logic.
+  return sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>/gi, (tag, tagName: string) => {
+    const expectedTypes = tagName.toLowerCase() === 'input' ? new Set(['input']) : new Set(['output', 'uavcan']);
+    const originalName = getXmlAttribute(tag, 'name');
+    const originalType = getXmlAttribute(tag, 'type');
+    const compatible = (node: any, index: number) => !used.has(index) && expectedTypes.has(node?.data?.componentType);
+    let index = ioNodes.findIndex((node, candidateIndex) => {
+      if (!compatible(node, candidateIndex)) return false;
+      const params = node.data?.params || {};
+      return String(params.name ?? '') === originalName &&
+        String(node.data.componentType === 'uavcan' ? 'UAVCAN' : params.type ?? '') === originalType;
+    });
+    if (index < 0) {
+      index = ioNodes.findIndex((node, candidateIndex) =>
+        compatible(node, candidateIndex) && String(node.data?.params?.name ?? '') === originalName
+      );
+    }
+    if (index < 0) index = ioNodes.findIndex(compatible);
+    if (index < 0) return tag;
+
+    used.add(index);
+    const node = ioNodes[index];
+    const params = node.data?.params || {};
+    const attributes = node.data.componentType === 'uavcan'
+      ? ['name', 'interface', 'node_id', 'subject_id', 'rate', 'dsdl_path', 'dsdl_type', 'sensor_type']
+      : ['name', 'type', 'port', 'rate'];
+    let patched = tag;
+    if (node.data.componentType === 'uavcan') patched = setXmlAttribute(patched, 'type', 'UAVCAN');
+    for (const attribute of attributes) patched = setXmlAttribute(patched, attribute, params[attribute]);
+    return patched;
+  });
+}
+
+function originalMainXml(mainFile: any): string {
+  // originalXml is the immutable import/download snapshot. currentXml may
+  // contain output produced by an older, lossy regeneration path.
+  return mainFile?.originalXml?.trim()
+    ? mainFile.originalXml
+    : mainFile?.currentXml?.trim()
+      ? mainFile.currentXml
+      : localStorage.getItem('jsbsim-raw-xml') || '';
+}
+
+function childFileType(componentType: string): 'engine' | 'thruster' | 'system' {
+  if (componentType === 'system' || componentType === 'flight_control') return 'system';
+  return componentType === 'propeller' ? 'thruster' : 'engine';
+}
+
+async function buildChildUploadXml(current: any, path: string): Promise<string> {
+  const tracked = (current.xmlFiles || []).find((file: any) => file.path === path);
+  const owners = (current.nodes || []).filter((node: any) => nodeOwnedPath(node) === path &&
+    ['engine', 'propeller', 'system', 'flight_control'].includes(node.data?.componentType));
+  const subFile = (current.subFiles || []).find((item: any) => subFileRemotePath(item) === path);
+  const firstOwner = owners[0];
+  const fileType = firstOwner
+    ? childFileType(firstOwner.data.componentType)
+    : subFile?.fileType === 'system' ? 'system' : subFile?.fileType === 'thruster' ? 'thruster' : 'engine';
+  const fileName = path.replace(/^.*\//, '').replace(/\.xml$/i, '');
+  // originalXml is the last complete import/upload snapshot. A dirty currentXml
+  // may have been produced by an older lossy generator, so never choose it in
+  // preference to the complete source.
+  const source = tracked?.originalXml?.trim()
+    ? tracked.originalXml
+    : tracked?.currentXml?.trim() ? tracked.currentXml : '';
+
+  if (source.trim()) {
+    const patches = owners.length ? owners.map((node: any) => node.data?.params || {}) : subFile ? [subFile.data || {}] : [];
+    if (!patches.length) {
+      throw new Error(`子文件 ${path} 没有对应的图形模块，已取消覆盖以保护原始 XML。`);
+    }
+    let content = source;
+    for (const params of patches) {
+      const systemPatch = fileType === 'system'
+        ? await generateSubfile('system', fileName, params)
+        : undefined;
+      content = patchExistingSubfileXml(content, fileType, params, systemPatch);
+    }
+    return content;
+  }
+
+  // Full generation is permitted only for an explicitly-created subfile. An
+  // imported reference with missing source is unsafe because unknown fields,
+  // comments and lookup tables cannot be reconstructed from node parameters.
+  if (!subFile) {
+    throw new Error(`子文件 ${path} 缺少原始 XML。为防止丢失未建模字段、查表或注释，本次上传已取消；请重新导入完整目录。`);
+  }
+  return generateSubfile(subFile.fileType, subFile.fileName, subFile.data);
+}
+
 export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
   const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
   const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
   const [showXml, setShowXml] = useState(false);
+  const [showXmlSourceBrowser, setShowXmlSourceBrowser] = useState(false);
+  const [uploadReview, setUploadReview] = useState<{ documents: XmlSourceDocument[]; resolve: () => void } | null>(null);
   const [xmlContent, setXmlContent] = useState('');
   const [importedSubFiles, setImportedSubFiles] = useState<Array<{ name: string; referenced: boolean; category?: string }>>(() => {
     try { return JSON.parse(localStorage.getItem('jsbsim-imported-subfiles') || '[]'); } catch { return []; }
@@ -86,6 +218,18 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const editMenuRef = useRef<HTMLDivElement>(null);
   const displayMenuRef = useRef<HTMLDivElement>(null);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
+  const xmlSourceDocuments: XmlSourceDocument[] = [...xmlFiles
+    .filter(file => file.currentXml?.trim() || file.originalXml?.trim())
+    .map(file => ({
+      path: file.path,
+      content: file.currentXml?.trim() ? file.currentXml : file.originalXml,
+      category: file.category,
+      dirty: file.dirty,
+    }))];
+  if (!xmlSourceDocuments.some(file => file.category === 'main')) {
+    const rawXml = localStorage.getItem('jsbsim-raw-xml') || '';
+    if (rawXml.trim()) xmlSourceDocuments.unshift({ path: `${aircraft.name || 'model'}.xml`, content: rawXml, category: 'main' });
+  }
   const windowAction = async (action: 'min' | 'max' | 'close') => {
     if (!isTauri) return;
     const window = getCurrentWindow();
@@ -306,7 +450,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       ? dirtyRecords.some(file => file.category === 'main') ||
         modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`))
       : true;
-    const externalPaths = new Set(dirtyRecords.filter(file => file.category !== 'main').map(file => {
+    const externalPaths = new Set(dirtyRecords.filter(file => ['engine', 'thruster', 'system'].includes(file.category)).map(file => {
       const path = file.path.toLowerCase().endsWith('.xml') ? file.path : `${file.path}.xml`;
       if (path.includes('/')) return path;
       return file.category === 'system' ? `systems/${path}` : `engine/${path}`;
@@ -315,6 +459,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       // The upload loop below only writes paths present in this set, so a full
       // push has to seed it from the component nodes as well.
       for (const node of stateBeforeSave.nodes || []) {
+        if (!['engine', 'propeller', 'system', 'flight_control'].includes(node.data?.componentType)) continue;
         const path = nodeOwnedPath(node);
         if (path) externalPaths.add(path);
       }
@@ -351,32 +496,28 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     setLoading(true);
     try {
       const current = useFlowStore.getState();
-      let xml = localStorage.getItem('jsbsim-raw-xml') || '';
+      const mainFile = (current.xmlFiles || []).find(file => file.category === 'main');
+      const mainSource = originalMainXml(mainFile);
+      let xml = mainSource;
       if (mainDirty) {
-        xml = await generateXml({ aircraft: current.aircraft, nodes: current.nodes, edges: current.edges });
+        if (!mainSource.trim()) {
+          throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
+        }
+        xml = patchMainIoAttributes(mainSource, current.nodes);
         await ftpUploadModel(model, xml);
       }
-      for (const node of current.nodes || []) {
-        const type = node.data?.componentType;
-        const params = node.data?.params || {};
-        const path = nodeOwnedPath(node);
-        if (!path || !externalPaths.has(path) || !['engine', 'propeller', 'system', 'flight_control'].includes(type)) continue;
-        const fileType = type === 'system' || type === 'flight_control' ? 'system' : type === 'propeller' ? 'thruster' : 'engine';
-        const fileName = path.replace(/^.*\//, '').replace(/\.xml$/i, '');
-        // Rebuilding a subfile from the parsed node parameters is lossy: it
-        // drops channels and escapes child elements (a rebuilt SensorImu.xml
-        // lost every gyro/magnetometer channel and turned <output> into
-        // escaped text).  Uploading rebuilt text therefore degrades files the
-        // user never edited.  Only rebuild when this file was actually
-        // modified; otherwise send the original bytes read from the model.
-        const tracked = (current.xmlFiles || []).find(file => file.path === path);
-        const content = tracked && !tracked.dirty && tracked.currentXml
-          ? tracked.currentXml
-          : await generateSubfile(fileType, fileName, params);
+      const uploadedChildren = new Map<string, string>();
+      for (const path of externalPaths) {
+        const content = await buildChildUploadXml(current, path);
         await ftpUploadFile(path, content);
+        uploadedChildren.set(path, content);
       }
       useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
-        file.category === 'main' ? { ...file, currentXml: xml, dirty: false } : { ...file, dirty: false }
+        file.category === 'main'
+          ? { ...file, originalXml: mainDirty ? xml : file.originalXml, currentXml: mainDirty ? xml : file.currentXml, dirty: false }
+          : uploadedChildren.has(file.path)
+            ? { ...file, originalXml: uploadedChildren.get(file.path)!, currentXml: uploadedChildren.get(file.path)!, dirty: false }
+            : file
       ) });
       if (mainDirty) localStorage.setItem('jsbsim-raw-xml', xml);
       localStorage.setItem('jsbsim-remote-model', model);
@@ -500,41 +641,135 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       onLog?.(`[${new Date().toLocaleTimeString()}] 未检测到本地修改，跳过 NuttX 模型同步`);
       return false;
     }
-    // Uploading is deliberately locked while the reload path is being
-    // validated. In particular, do not regenerate an unchanged legacy XML:
-    // generation is lossy for fields not represented by the editor graph.
-    const xml = await generateXml({
-      aircraft: current.aircraft,
-      nodes: current.nodes,
-      edges: current.edges,
-    });
-    await ftpUploadModel(model, xml);
-    for (const file of current.subFiles || []) {
-      const fileXml = await generateSubfile(file.fileType, file.fileName, file.data);
-      await ftpUploadFile(subFileRemotePath(file), fileXml);
+    const mainFile = (current.xmlFiles || []).find(file => file.category === 'main');
+    const mainPath = mainFile?.path || `aircraft/${model}/${model}.xml`;
+    const mainCandidate = !!mainFile?.dirty || modifiedXmlFiles.some(file =>
+      file === `${model}.xml` || file.endsWith(`/${model}.xml`)
+    );
+    const mainSource = originalMainXml(mainFile);
+    if (mainCandidate && !mainSource.trim()) {
+      throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次同步已取消。请重新从仿真机加载模型。');
     }
-    for (const node of current.nodes || []) {
-      const type = node.data?.componentType;
-      const params = node.data?.params || {};
-      const file = String(params.file || '').trim();
-      if (!file || !['engine', 'propeller', 'system', 'flight_control'].includes(type)) continue;
-      const fileType = type === 'system' || type === 'flight_control' ? 'system' : type === 'propeller' ? 'thruster' : 'engine';
-      const fileName = file.replace(/^.*\//, '').replace(/\.xml$/i, '');
-      const path = file.includes('/') ? `${file.replace(/\.xml$/i, '')}.xml` : `${fileType === 'system' ? 'systems' : 'engine'}/${fileName}.xml`;
-      await ftpUploadFile(path, await generateSubfile(fileType, fileName, params));
+    const candidateMainXml = mainCandidate
+      ? patchMainIoAttributes(mainSource, current.nodes)
+      : mainSource;
+    const childCandidates = (current.xmlFiles || []).filter(file => file.dirty && file.category !== 'main');
+    const childContent = new Map<string, string>();
+    for (const file of childCandidates) {
+      childContent.set(file.path, await buildChildUploadXml(current, file.path));
     }
-    const changedFiles = (current.xmlFiles || []).filter(file => file.dirty && file.category !== 'main');
+    const candidatePaths = Array.from(new Set([
+      ...(mainCandidate ? [mainPath] : []),
+      ...childCandidates.map(file => file.path),
+    ]));
+    const unchangedPaths: string[] = [];
+    const pendingFiles: string[] = [];
+    for (const path of candidatePaths) {
+      const localContent = path === mainPath
+        ? candidateMainXml
+        : childContent.get(path) || '';
+      if (!localContent.trim()) {
+        pendingFiles.push(path);
+        continue;
+      }
+      try {
+        const remote = await ftpDownloadXml(path);
+        if (comparableXml(localContent) === comparableXml(remote.content)) unchangedPaths.push(path);
+        else pendingFiles.push(path);
+      } catch {
+        // A missing remote file is a real upload candidate. A transient FTP
+        // failure is reported again by the review/upload path and must never
+        // be interpreted as equality.
+        pendingFiles.push(path);
+      }
+    }
+    if (unchangedPaths.length) {
+      const unchanged = new Set(unchangedPaths);
+      useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file => unchanged.has(file.path) ? { ...file, dirty: false } : file) });
+      onSaveComplete?.(unchangedPaths);
+    }
+    const mainDirty = pendingFiles.includes(mainPath);
+    const changedFiles = childCandidates.filter(file => pendingFiles.includes(file.path));
+    if (!pendingFiles.length) {
+      const cleanProject = {
+        ...project,
+        xmlFiles: (project.xmlFiles || []).map(file => unchangedPaths.includes(file.path) ? { ...file, dirty: false } : file),
+      };
+      localStorage.setItem(remoteBaselineKey(model), projectFingerprint(cleanProject));
+      onLog?.(`[${new Date().toLocaleTimeString()}] 本机 XML 与仿真机一致，跳过上传`);
+      return false;
+    }
+    if (pendingFiles.length > 0) {
+      const isZh = !/^en(?:-|$)/i.test(navigator.language || '');
+      const fileList = pendingFiles.map(file => `  • ${file}`).join('\n');
+      const reviewMessage = isZh
+        ? `检测到本次将上传的 XML 文件：\n\n${fileList}\n\n是否先打开 XML 源码浏览器进行审查？\n确定=打开审查，取消=直接进入覆盖确认。`
+        : `The following XML files will be uploaded:\n\n${fileList}\n\nOpen the XML Source Browser for review first?\nOK = review, Cancel = go directly to overwrite confirmation.`;
+      if (window.confirm(reviewMessage)) {
+        const documents = pendingFiles.map(path => {
+          const tracked = (current.xmlFiles || []).find(file => file.path === path);
+          return {
+            path,
+            content: path === mainPath
+              ? candidateMainXml
+              : childContent.get(path) || '',
+            category: tracked?.category,
+            dirty: tracked?.dirty,
+          };
+        }).filter(file => file.content.trim());
+        if (documents.length) {
+          await new Promise<void>(resolve => {
+            setUploadReview({ documents, resolve });
+            setShowXmlSourceBrowser(false);
+          });
+        }
+      }
+      const message = isZh
+        ? `检测到本地修改，点击“确定”后将上传以下文件到仿真机：\n\n${fileList}\n\n上传后会覆盖仿真机对应文件，是否继续？`
+        : `Local changes detected. The following files will be uploaded to the simulator:\n\n${fileList}\n\nExisting simulator files may be overwritten. Continue?`;
+      if (!window.confirm(message)) {
+        onLog?.(`[${new Date().toLocaleTimeString()}] 用户取消上传，保留仿真机文件: ${model}`);
+        return false;
+      }
+    }
+    let uploadedMainXml = candidateMainXml;
+    let uploaded = false;
+
+    // Starting a simulation must not regenerate the aircraft merely because
+    // layout/subfile state changed.  Regeneration expands file-backed top-level
+    // sections (Metrics/Mass/Propulsion/Aero) and child thruster tables into the
+    // main XML.  Only rebuild when the main file itself was edited.  A forced
+    // sync of an unchanged model sends the original complete XML verbatim.
+    if (mainDirty) {
+      await ftpUploadModel(model, uploadedMainXml);
+      uploaded = true;
+    } else if (force && uploadedMainXml.trim()) {
+      await ftpUploadModel(model, uploadedMainXml);
+      uploaded = true;
+    }
     for (const file of changedFiles) {
-      await ftpUploadFile(file.path, file.currentXml);
+      const content = childContent.get(file.path);
+      if (!content?.trim()) throw new Error(`子文件 ${file.path} 的安全补丁为空，已取消上传。`);
+      await ftpUploadFile(file.path, content);
+      uploaded = true;
     }
     useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
-      file.category === 'main' ? { ...file, currentXml: xml, dirty: false } : { ...file, dirty: false }
+      file.category === 'main'
+        ? {
+            ...file,
+            originalXml: mainDirty && uploadedMainXml ? uploadedMainXml : file.originalXml,
+            currentXml: mainDirty && uploadedMainXml ? uploadedMainXml : file.currentXml,
+            dirty: mainDirty ? false : file.dirty,
+          }
+        : childContent.has(file.path) && pendingFiles.includes(file.path)
+          ? { ...file, originalXml: childContent.get(file.path)!, currentXml: childContent.get(file.path)!, dirty: false }
+          : unchangedPaths.includes(file.path) ? { ...file, dirty: false } : file
     ) });
-    localStorage.setItem('jsbsim-raw-xml', xml);
+    if (uploadedMainXml.trim()) localStorage.setItem('jsbsim-raw-xml', uploadedMainXml);
     localStorage.setItem('jsbsim-remote-model', model);
     localStorage.setItem(remoteBaselineKey(model), fingerprint);
-    onLog?.(`[${new Date().toLocaleTimeString()}] 已同步模型到 NuttX: ${model}`);
-    return true;
+    onLog?.(`[${new Date().toLocaleTimeString()}] ${uploaded ? '已同步模型变更到' : '主模型未修改，跳过写入'} NuttX: ${model}`);
+    return uploaded;
   };
 
   const handleSyncRemoteModel = (model: string) => syncRemoteModel(model, false);
@@ -599,6 +834,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
                 <button role="menuitem" onClick={() => { fileInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入 XML 文件（可多选依赖文件）' : 'Import XML files'}>📥 {isZh ? '导入 XML' : 'Import XML'}</button>
                 <button role="menuitem" onClick={() => { directoryInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入整个 XML 目录，自动保留目录结构' : 'Import an XML directory'}>📂 {isZh ? '导入 XML 目录' : 'Import XML folder'}</button>
                 <button role="menuitem" onClick={() => { void handleExportXml(); setShowFileMenu(false); }}>📤 {isZh ? '导出 XML' : 'Export XML'}</button>
+                <button role="menuitem" disabled={!xmlSourceDocuments.length} onClick={() => { setShowXmlSourceBrowser(true); setShowFileMenu(false); }}>🧾 {isZh ? 'XML 源码浏览器' : 'XML Source Browser'}</button>
               </div>
             )}
           </div>
@@ -657,6 +893,13 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
 
       {showSimulationConfig && <SimulationConfigDialog model={aircraft.name || librarySimulationModel || 'default'} onClose={() => setShowSimulationConfig(false)} />}
       {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} />}
+
+      {showXmlSourceBrowser && <XmlSourceBrowser documents={xmlSourceDocuments} loadRemoteContent={async path => (await ftpDownloadXml(path)).content} onClose={() => setShowXmlSourceBrowser(false)} />}
+      {uploadReview && <XmlSourceBrowser documents={uploadReview.documents} initialPath={uploadReview.documents[0]?.path} loadRemoteContent={async path => (await ftpDownloadXml(path)).content} onClose={() => {
+        const resolve = uploadReview.resolve;
+        setUploadReview(null);
+        resolve();
+      }} />}
 
       {showXml && (
         <div className="xml-modal-overlay" onClick={() => setShowXml(false)}>
@@ -726,3 +969,4 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     </>
   );
 }
+

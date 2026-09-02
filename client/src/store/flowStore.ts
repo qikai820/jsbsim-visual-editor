@@ -248,6 +248,16 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   addNode: (type, position) => {
     const def = getComponentDef(type);
     if (!def) return;
+    // JSBSim owns one global atmosphere/wind model per FGFDMExec instance.
+    // Keep the main canvas equally unambiguous instead of allowing several
+    // environment cards to appear to compete for the same runtime properties.
+    if (type === 'environment') {
+      const existing = get().nodes.find(node => node.data.componentType === 'environment');
+      if (existing) {
+        set({ selectedNodeId: existing.id });
+        return;
+      }
+    }
     const id = `node-${++nodeCounter}`;
     const params: Record<string, any> = {};
     for (const [key, paramDef] of Object.entries(def.params)) {
@@ -282,7 +292,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...params } } } : n
     );
     const sourcePath = resolveNodeOwnedPath(node) || String(node?.data.params?.source?.path || '').trim();
-    const xmlFiles = sourcePath
+    // Canvas-only layout metadata is stored with the node but is not part of
+    // the referenced JSBSim XML. Marking it dirty caused a harmless drag to
+    // regenerate and upload a System child file.
+    const changesXml = Object.keys(params).some(key => key !== 'layout');
+    const xmlFiles = sourcePath && changesXml
       ? state.xmlFiles.map(file => file.path === sourcePath ? { ...file, dirty: true } : file)
       : state.xmlFiles;
     set({ nodes: nextNodes, xmlFiles });

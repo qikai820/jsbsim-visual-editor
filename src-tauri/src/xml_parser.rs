@@ -1600,6 +1600,46 @@ fn apply_location_layout(nodes: &mut [Value]) {
     }
 }
 
+/// Add the two presentation-only JSBSim dynamics cards after parsing. These
+/// are always part of FGFDMExec, even if no Aero component or model is
+/// available. Keeping this in the parser is deliberate: a
+/// project imported by the web UI, a cached project and a Tauri project all
+/// receive the same closed-loop view before any frontend store path runs.
+/// These nodes carry `virtual: true` and are filtered before XML/project
+/// serialization by the frontend.
+fn append_builtin_flight_dynamics(nodes: &mut Vec<Value>) {
+    if nodes.iter().any(|node| node["data"]["virtual"].as_bool() == Some(true)) {
+        return;
+    }
+    let aero = nodes.iter().find(|node| node["data"]["componentType"] == "aero_coefficients");
+    let x = aero.and_then(|node| node["position"]["x"].as_f64()).unwrap_or(175.0);
+    let y = aero.and_then(|node| node["position"]["y"].as_f64()).unwrap_or(120.0);
+    nodes.push(json!({
+        "id": "builtin-forces-moments",
+        "type": "aircraftComponent",
+        "position": { "x": x + 245.0, "y": y + 12.0 },
+        "data": {
+            "label": "力和力矩计算",
+            "componentType": "force_moment",
+            "virtual": true,
+            "readOnly": true,
+            "params": { "mode": "系统内置 · 只读", "formula": "ΣF / ΣM" }
+        }
+    }));
+    nodes.push(json!({
+        "id": "builtin-six-dof",
+        "type": "aircraftComponent",
+        "position": { "x": x + 485.0, "y": y + 72.0 },
+        "data": {
+            "label": "JSBSim 六自由度模型",
+            "componentType": "six_dof",
+            "virtual": true,
+            "readOnly": true,
+            "params": { "mode": "系统内置 · 只读", "solver": "6DOF Dynamics" }
+        }
+    }));
+}
+
 // ── Section file resolver ──────────────────────────────────────────────────
 
 fn resolve_section_files(
@@ -1740,6 +1780,7 @@ pub fn parse_xml(xml: &str, file_map: &HashMap<String, String>) -> Result<Value,
 
     // Apply location-based layout
     apply_location_layout(&mut nodes);
+    append_builtin_flight_dynamics(&mut nodes);
 
     // Every parsed node gets an explicit file owner.  This metadata is part
     // of the v3 project format; the generator can therefore keep referenced
@@ -1821,6 +1862,76 @@ mod ownership_tests {
         assert_eq!(node["data"]["params"]["referencePath"], "systems/SensorImu.xml");
         assert_eq!(node["data"]["params"]["source"]["path"], "systems/SensorImu.xml");
         assert_eq!(node["data"]["params"]["source"]["category"], "system");
+    }
+
+    #[test]
+    fn file_backed_aero_adds_read_only_dynamics_nodes() {
+        let xml = r#"<fdm_config name="F450" version="2.0" release="PRODUCTION">
+  <aerodynamics file="Aero.xml"/>
+</fdm_config>"#;
+        let mut files = HashMap::new();
+        files.insert("Aero.xml".to_string(), r#"<aerodynamics>
+  <function name="aero/coefficient/CL"><value>0.2</value></function>
+</aerodynamics>"#.to_string());
+
+        let parsed = parse_xml(xml, &files).expect("parse referenced Aero.xml");
+        node(&parsed, "aero_coefficients");
+        let virtual_nodes: Vec<&Value> = parsed["nodes"].as_array().unwrap().iter()
+            .filter(|item| item["data"]["virtual"].as_bool() == Some(true))
+            .collect();
+        assert_eq!(virtual_nodes.len(), 2);
+        assert!(virtual_nodes.iter().any(|item| item["data"]["componentType"] == "force_moment"));
+        assert!(virtual_nodes.iter().any(|item| item["data"]["componentType"] == "six_dof"));
+    }
+
+    #[test]
+    fn model_without_aero_still_adds_read_only_dynamics_nodes() {
+        let xml = r#"<fdm_config name="NoModel" version="2.0" release="TEST"/>"#;
+
+        let parsed = parse_xml(xml, &HashMap::new()).expect("parse model without sections");
+        let virtual_nodes: Vec<&Value> = parsed["nodes"].as_array().unwrap().iter()
+            .filter(|item| item["data"]["virtual"].as_bool() == Some(true))
+            .collect();
+        assert_eq!(virtual_nodes.len(), 2);
+        assert!(virtual_nodes.iter().any(|item|
+            item["id"] == "builtin-forces-moments"
+                && item["data"]["readOnly"] == true));
+        assert!(virtual_nodes.iter().any(|item|
+            item["id"] == "builtin-six-dof"
+                && item["data"]["readOnly"] == true));
+    }
+
+    #[test]
+    fn inline_aero_ball_adds_read_only_dynamics_nodes() {
+        let ball = include_str!("../../../sdcard/jsbsim/aircraft/ball/ball.xml");
+
+        let parsed = parse_xml(ball, &HashMap::new()).expect("parse ball with inline aerodynamics");
+        node(&parsed, "aero_coefficients");
+        assert!(parsed["nodes"].as_array().unwrap().iter()
+            .any(|item| item["id"] == "builtin-forces-moments"
+                && item["data"]["componentType"] == "force_moment"
+                && item["data"]["virtual"] == true
+                && item["data"]["readOnly"] == true));
+        assert!(parsed["nodes"].as_array().unwrap().iter()
+            .any(|item| item["id"] == "builtin-six-dof"
+                && item["data"]["componentType"] == "six_dof"
+                && item["data"]["virtual"] == true
+                && item["data"]["readOnly"] == true));
+    }
+
+    #[test]
+    fn f450_px4_aero_xml_adds_read_only_dynamics_nodes() {
+        let f450 = include_str!("../../../sdcard/jsbsim/aircraft/F450_PX4/F450_PX4.xml");
+        let aero = include_str!("../../../sdcard/jsbsim/aircraft/F450_PX4/Aero.xml");
+        let mut files = HashMap::new();
+        files.insert("Aero.xml".to_string(), aero.to_string());
+
+        let parsed = parse_xml(f450, &files).expect("parse F450_PX4 with Aero.xml");
+        node(&parsed, "aero_coefficients");
+        assert!(parsed["nodes"].as_array().unwrap().iter()
+            .any(|item| item["id"] == "builtin-forces-moments" && item["data"]["virtual"] == true));
+        assert!(parsed["nodes"].as_array().unwrap().iter()
+            .any(|item| item["id"] == "builtin-six-dof" && item["data"]["virtual"] == true));
     }
 
     #[test]

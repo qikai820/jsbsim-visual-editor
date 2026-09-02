@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { ftpDownloadSimConfig, ftpUploadSimConfig } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 
-type Tab = '运行与时间' | '数值积分' | '初始状态' | 'MCAP日志' | '性能与安全';
+type Tab = '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全';
 type VariableCategory = 'attitude' | 'position' | 'inertia' | 'controls' | 'propulsion' | 'environment' | 'simulation' | 'other';
-const tabs: Tab[] = ['运行与时间', '数值积分', '初始状态', 'MCAP日志', '性能与安全'];
+const tabs: Tab[] = ['运行与时间', '数值积分', '初始状态', '环境模型', 'MCAP日志', '性能与安全'];
 const categoryOrder: VariableCategory[] = ['attitude', 'position', 'inertia', 'controls', 'propulsion', 'environment', 'simulation', 'other'];
 const variableCategory = (path: string): VariableCategory => {
   const value = path.replace(/^\/+/, '').toLowerCase();
@@ -22,6 +22,7 @@ const defaults = {
   runtime: { dt: 0.002, iterationsPerCycle: 1, catchupIterations: 4, realtimeFactor: 1, endBehavior: 'stop' },
   integrators: { rotationalRate: 1, translationalRate: 3, rotationalPosition: 1, translationalPosition: 4 },
   initial: { latitudeDeg: 0, longitudeDeg: 0, altitudeM: 0, rollDeg: 0, pitchDeg: 0, yawDeg: 0, airspeedMps: 0, trim: false },
+  environment: { pressureSlPsf: 2116.22, temperatureBiasR: 0, relativeHumidityPct: 0, windNorthFps: 0, windEastFps: 0, windDownFps: 0, turbulenceType: 0, turbulenceWindspeed20ftFps: 0, turbulenceSeverity: 0 },
   mcap: { enabled: true, rateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 256, bufferMb: 500, minFreeMb: 128, selectedVariables: [] as string[] },
   safety: { cpuCore: 0, taskPriority: 120, stackKb: 256, fdmTimeoutMs: 4, cpuWarningPercent: 90, ramWarningPercent: 85, nanCheck: true, faultAction: 'stop' },
 };
@@ -31,6 +32,7 @@ const merge = (source: any) => ({
   runtime: { ...defaults.runtime, ...source?.runtime },
   integrators: { ...defaults.integrators, ...source?.integrators },
   initial: { ...defaults.initial, ...source?.initial },
+  environment: { ...defaults.environment, ...source?.environment },
   mcap: { ...defaults.mcap, ...source?.mcap },
   safety: { ...defaults.safety, ...source?.safety },
 });
@@ -111,7 +113,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
       <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><span>{tr('模型', 'Model')}: {safeModel}</span></div><button onClick={onClose}>×</button></header>
       <div className="sim-config-path">{tr('SD卡路径', 'SD card path')}: /mnt/sdcard/jsbsim/{path}</div>
       <div className="sim-config-layout">
-        <nav>{tabs.map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety'} as any)[item] && !isZh ? ({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety'} as any)[item] : item}</button>)}</nav>
+        <nav>{tabs.map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety'} as any)[item] && !isZh ? ({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety'} as any)[item] : item}</button>)}</nav>
         <main>
           {tab === '运行与时间' && <section><h3>{tr('运行与时间','Runtime & Time')}</h3><div className="sim-config-grid">
             <NumberField label={tr('仿真步长','Time step')} value={config.runtime.dt} step={0.0001} min={0.00001} unit="s" onChange={(v:any)=>set('runtime','dt',v)} />
@@ -127,6 +129,17 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
           {tab === '初始状态' && <section><h3>{tr('初始状态','Initial State')}</h3><div className="sim-config-grid">
             {([['latitudeDeg',tr('纬度','Latitude'),'°'],['longitudeDeg',tr('经度','Longitude'),'°'],['altitudeM',tr('海拔','Altitude'),'m'],['rollDeg','Roll','°'],['pitchDeg','Pitch','°'],['yawDeg','Yaw','°'],['airspeedMps',tr('初始空速','Initial airspeed'),'m/s']] as const).map(([key,label,unit]) => <NumberField key={key} label={label} value={config.initial[key]} step={0.1} unit={unit} onChange={(v:any)=>set('initial',key,v)} />)}
             <label className="sim-config-check"><input type="checkbox" checked={config.initial.trim} onChange={e=>set('initial','trim',e.target.checked)} />{tr('启动时执行配平','Trim on startup')}</label>
+          </div></section>}
+          {tab === '环境模型' && <section><h3>{tr('环境模型','Environment Model')}</h3><p>{tr('运行时由 JSBSim 的 FGStandardAtmosphere/FGWinds 读取；保存后需重新加载模型。','Applied through JSBSim FGStandardAtmosphere/FGWinds after reload.')}</p><div className="sim-config-grid">
+            <NumberField label={tr('海平面压力','Sea-level pressure')} value={config.environment.pressureSlPsf} step={0.01} min={0} unit="PSF" onChange={(v:any)=>set('environment','pressureSlPsf',v)} />
+            <NumberField label={tr('温度偏差','Temperature bias')} value={config.environment.temperatureBiasR} step={0.1} unit="R" onChange={(v:any)=>set('environment','temperatureBiasR',v)} />
+            <NumberField label={tr('相对湿度','Relative humidity')} value={config.environment.relativeHumidityPct} step={1} min={0} unit="%" onChange={(v:any)=>set('environment','relativeHumidityPct',v)} />
+            <NumberField label={tr('北向风','North wind')} value={config.environment.windNorthFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windNorthFps',v)} />
+            <NumberField label={tr('东向风','East wind')} value={config.environment.windEastFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windEastFps',v)} />
+            <NumberField label={tr('地向风','Down wind')} value={config.environment.windDownFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windDownFps',v)} />
+            <SelectField label={tr('湍流模型','Turbulence model')} value={String(config.environment.turbulenceType)} onChange={(v:any)=>set('environment','turbulenceType',Number(v))}><option value="0">0 · {tr('关闭','Off')}</option><option value="1">1 · Standard</option><option value="2">2 · Culp</option><option value="3">3 · MIL-SPEC</option><option value="4">4 · Tustin</option></SelectField>
+            <NumberField label={tr('20 ft 风速','20 ft wind speed')} value={config.environment.turbulenceWindspeed20ftFps} step={0.1} min={0} unit="ft/s" onChange={(v:any)=>set('environment','turbulenceWindspeed20ftFps',v)} />
+            <NumberField label={tr('湍流强度','Turbulence severity')} value={config.environment.turbulenceSeverity} step={1} min={0} unit="0–7" onChange={(v:any)=>set('environment','turbulenceSeverity',Math.min(7, Math.max(0, v)))} />
           </div></section>}
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
             <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 Protobuf + MCAP 日志','Enable Protobuf + MCAP logging')}</label>

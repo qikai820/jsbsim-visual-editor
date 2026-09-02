@@ -190,6 +190,36 @@ export const componentDefs: ComponentDef[] = [
     outputs: [{ id: 'aero', label: '气动力' }],
   },
   {
+    type: 'environment',
+    label: '环境 Environment',
+    category: '环境',
+    color: '#0F766E',
+    icon: '🌍',
+    description: 'JSBSim 标准大气、风场与湍流运行参数',
+    params: {
+      atmosphere_model: {
+        label: '大气模型（planet）', type: 'select', default: 'STANDARD',
+        options: ['STANDARD', 'MSIS', 'MARS'],
+      },
+      pressure_sl_psf: { label: '海平面压力', type: 'number', default: 2116.22, unit: 'PSF' },
+      temperature_bias_r: { label: '温度偏差', type: 'number', default: 0, unit: 'R' },
+      relative_humidity_pct: { label: '相对湿度', type: 'number', default: 0, unit: '%' },
+      wind_north_fps: { label: '北向风', type: 'number', default: 0, unit: 'FT/SEC' },
+      wind_east_fps: { label: '东向风', type: 'number', default: 0, unit: 'FT/SEC' },
+      wind_down_fps: { label: '地向风', type: 'number', default: 0, unit: 'FT/SEC' },
+      turbulence_type: {
+        label: '湍流模型（0关/1标准/2Culp/3MIL/4Tustin）', type: 'select', default: '0',
+        options: ['0', '1', '2', '3', '4'],
+      },
+      turbulence_windspeed_20ft_fps: {
+        label: '20 ft 风速', type: 'number', default: 0, unit: 'FT/SEC',
+      },
+      turbulence_severity: { label: '湍流强度', type: 'integer', default: 0 },
+    },
+    inputs: [{ id: 'state', label: '高度/位置' }],
+    outputs: [{ id: 'environment', label: '大气/风场' }],
+  },
+  {
     type: 'system',
     label: '系统 System',
     category: '系统',
@@ -325,3 +355,4 @@ export function getCategories(): { name: string; defs: ComponentDef[] }[] {
   }
   return Array.from(cats.entries()).map(([name, defs]) => ({ name, defs }));
 }
+

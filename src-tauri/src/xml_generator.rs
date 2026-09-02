@@ -1,7 +1,6 @@
 //! JSBSim XML generator — converts JSON graph data to JSBSim XML strings.
 //!
-//! Port of server/xmlGenerator.js and the exprToXml portion of
-//! server/expressionXml.js.
+//! XML generator and expression serializer for the desktop editor.
 
 use serde_json::Value;
 
@@ -1479,7 +1478,14 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
     let mut lines = vec![];
     for sys in system_nodes {
         let p = get_params(sys);
-        let file = p.get("file").and_then(|v| v.as_str()).unwrap_or("");
+        // The editor stores imported child files in referencePath/_source_file
+        // as well as in the legacy `file` field.  Always emit a file-backed
+        // reference when any of these fields is present; otherwise the child
+        // signal graph gets inlined into the aircraft XML.
+        let file = p.get("file").and_then(|v| v.as_str())
+            .or_else(|| p.get("referencePath").and_then(|v| v.as_str()))
+            .or_else(|| p.get("_source_file").and_then(|v| v.as_str()))
+            .unwrap_or("");
 
         // A file-backed system is represented in the aircraft XML only by
         // its reference. Its channels/properties are serialized into the
@@ -1531,7 +1537,10 @@ fn build_flight_control(groups: &std::collections::HashMap<String, Vec<&Value>>)
     let mut lines = vec![];
     for node in fc_nodes {
         let p = get_params(node);
-        let file = p.get("file").and_then(|v| v.as_str()).unwrap_or("");
+        let file = p.get("file").and_then(|v| v.as_str())
+            .or_else(|| p.get("referencePath").and_then(|v| v.as_str()))
+            .or_else(|| p.get("_source_file").and_then(|v| v.as_str()))
+            .unwrap_or("");
         let name = p
             .get("name")
             .and_then(|v| v.as_str())

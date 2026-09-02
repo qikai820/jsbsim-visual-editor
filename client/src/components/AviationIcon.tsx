@@ -12,6 +12,7 @@ const paths: Record<ComponentType, string> = {
   point_mass: 'M12 3v5m-6 3h12M8 11l-4 8h8zm8 0l-4 8h8z',
   inertia: 'M12 4a8 8 0 1 0 8 8M12 4l3 3m-3-3L9 7M4 12h4m8 0h4',
   aero_coefficients: 'M3 17c5-8 9-10 18-10-5 2-8 5-10 10-3 3-5 2-8 0z',
+  environment: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3c3 3 3 15 0 18 M12 3c-3 3-3 15 0 18',
   system: 'M8 7h8v4H8z M4 15h6v4H4zm10 0h6v4h-6z M12 11v4M7 15v-2h10v2',
   flight_control: 'M4 6h16M7 6v5m10-5v9M4 11h6m4 4h6M7 15v4m10-8v8',
   input: 'M3 5h10v4h8v6h-8v4H3z M8 9v6m-3-3h6',
@@ -24,3 +25,4 @@ export default function AviationIcon({ type, size = 18 }: { type: ComponentType;
     <path d={paths[type]} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
   </svg>;
 }
+

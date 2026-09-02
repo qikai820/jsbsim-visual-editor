@@ -93,6 +93,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [cpuCores, setCpuCores] = useState<number[]>([]);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
+  const [simulationDt, setSimulationDt] = useState<number | null>(null);
   const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number }[]>([]);
   const [fdmPopupOpen, setFdmPopupOpen] = useState(false);
   const [fdmWindow, setFdmWindow] = useState<10 | 20 | 30>(10);
@@ -179,6 +180,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs }]
           .filter(sample => now - sample.at <= 30000));
       }
+      const remoteSimulationDt = Number(status.simulationDt);
+      setSimulationDt(Number.isFinite(remoteSimulationDt) && remoteSimulationDt > 0
+        ? remoteSimulationDt : null);
       if (cores.length) {
         setCpuHistory(history => [...history, cores].slice(-100));
       }
@@ -276,7 +280,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         try {
           const synced = await onSyncRemoteModel(modelToSync);
           if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
-          else appendLog(`未检测到本地修改，直接运行 NuttX 模型: ${modelToSync}`);
+          else appendLog(`未上传本地修改，直接运行 NuttX 现有模型: ${modelToSync}`);
         } catch (syncErr: any) {
           // A failed optional upload must not prevent starting the model that
           // is already present on NuttX. This is especially important after
@@ -595,7 +599,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             <div className="sim-status-info">
               <span className="sim-status-text">{statusText}</span>
               {displayName && <span className="sim-status-target" title={activeName}>{displayName}</span>}
-              {external && cpuLoad !== null && <span className="sim-status-target">CPU {cpuLoad.toFixed(1)}%</span>}
+              {external && cpuLoad !== null && (
+                <span className="sim-status-target">
+                  CPU {cpuLoad.toFixed(1)}%
+                  {simulationDt != null && ` · 步长 ${simulationDt.toFixed(4)} s · ${(1 / simulationDt).toFixed(0)} Hz`}
+                </span>
+              )}
             </div>
           </div>
 

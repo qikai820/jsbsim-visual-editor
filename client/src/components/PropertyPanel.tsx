@@ -1248,3 +1248,4 @@ function updatePropertyInExpr(expr: any, role: string, newVal: string): any {
   }
   return walk(expr);
 }
+

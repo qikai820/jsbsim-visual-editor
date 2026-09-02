@@ -123,3 +123,4 @@ export default function Canvas({ dragType }: CanvasProps) {
     </div>
   );
 }
+

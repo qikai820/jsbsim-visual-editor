@@ -6,12 +6,10 @@
   "scripts": {
     "dev": "tauri dev",
     "dev:client": "vite",
-    "dev:server": "node server/index.js",
     "build": "vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
-    "start": "NODE_ENV=production node server/index.js"
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@react-three/drei": "^9.93.0",
@@ -20,18 +18,11 @@
     "@types/dagre": "^0.7.54",
     "@types/three": "^0.160.0",
     "@xyflow/react": "^12.6.0",
-    "concurrently": "^9.1.0",
-    "cors": "^2.8.5",
     "dagre": "^0.8.5",
-    "express": "^4.21.0",
     "fast-xml-parser": "^4.5.0",
-    "multer": "^1.4.5-lts.1",
-    "playwright": "^1.62.0",
-    "puppeteer-core": "^24.43.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.160.0",
-    "ws": "^8.18.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

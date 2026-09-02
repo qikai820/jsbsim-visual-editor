@@ -44,3 +44,4 @@ export default function Palette({ onDragStart, collapsed, onToggle, width, onRes
     </div>
   );
 }
+

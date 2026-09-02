@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 use crate::file_index;
 
-/// Generate aircraft XML from wizard data (ported from server/index.js POST /api/generate-aircraft).
+/// Generate aircraft XML from wizard data.
 pub fn generate_aircraft_xml(data: &Value) -> Result<String, String> {
     let ind = |n: usize| "  ".repeat(n);
     let d = data;
