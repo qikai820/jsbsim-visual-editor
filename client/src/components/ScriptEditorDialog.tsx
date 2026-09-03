@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 interface ScriptEvent {
   name: string;
   condition: string;
@@ -19,6 +21,7 @@ interface Props {
   value: ScriptEditorValue;
   variables: string[];
   onChange: (value: ScriptEditorValue) => void;
+  onSave: (value: ScriptEditorValue) => Promise<void>;
   onClose: () => void;
 }
 
@@ -27,7 +30,9 @@ function splitCondition(condition: string): [string, string, string] {
   return match ? [match[1], match[2], match[3]] : [condition, '==', ''];
 }
 
-export default function ScriptEditorDialog({ value, variables, onChange, onClose }: Props) {
+export default function ScriptEditorDialog({ value, variables, onChange, onSave, onClose }: Props) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const updateEvent = (index: number, next: Partial<ScriptEvent>) => onChange({
     ...value,
     events: value.events.map((event, i) => i === index ? { ...event, ...next } : event),
@@ -39,13 +44,25 @@ export default function ScriptEditorDialog({ value, variables, onChange, onClose
     <div className="script-editor-modal script-editor-v2" onClick={event => event.stopPropagation()}>
       <header className="script-editor-head">
         <div><span className="script-editor-icon">📋</span><span>测试脚本逻辑</span><small>{value.name}</small></div>
-        <div><button className="script-editor-save" onClick={() => { localStorage.setItem(`jsbsim-script-editor:${value.name}`, JSON.stringify(value)); onClose(); }}>保存修改</button><button onClick={onClose}>×</button></div>
+        <div><button className="script-editor-save" disabled={saving} onClick={async () => {
+          setSaving(true);
+          setSaveError('');
+          try {
+            await onSave(value);
+            onClose();
+          } catch (error: any) {
+            setSaveError(error?.message || String(error));
+          } finally {
+            setSaving(false);
+          }
+        }}>{saving ? '正在上传…' : '保存到仿真机'}</button><button onClick={onClose}>×</button></div>
       </header>
+      {saveError && <div className="script-editor-save-error">保存失败：{saveError}</div>}
       <section className="script-editor-summary">
         <label>✈️ 模型：<input value={value.aircraft} onChange={event => onChange({ ...value, aircraft: event.target.value })} /></label>
-        <label>⚙️ 初始化：<input value={value.initialize} onChange={event => onChange({ ...value, initialize: event.target.value })} /></label>
-        <label>⏱️ 起止：<input value={value.start} onChange={event => onChange({ ...value, start: event.target.value })} /> → <input value={value.end} onChange={event => onChange({ ...value, end: event.target.value })} /> s</label>
-        <label>Δt：<input value={value.dt} onChange={event => onChange({ ...value, dt: event.target.value })} /> s</label>
+        <label>⚙️ 初始化：<input value={value.initialize} placeholder="默认初始化" onChange={event => onChange({ ...value, initialize: event.target.value })} /></label>
+        <label>⏱️ 起止：<input value={value.start} onChange={event => onChange({ ...value, start: event.target.value })} /> → <input value={value.end} placeholder="未设置" onChange={event => onChange({ ...value, end: event.target.value })} /> s</label>
+        <label>Δt：<input value={value.dt} placeholder="未设置" onChange={event => onChange({ ...value, dt: event.target.value })} /> s</label>
       </section>
       <main className="script-flow-board">
         <div className="script-flow-start">▶ 开始仿真 <small>t = {value.start}s</small></div>

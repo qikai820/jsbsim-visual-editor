@@ -9,8 +9,9 @@ import {
   simListTests,
   simListModels,
   ftpDownloadScript,
+  ftpUploadFile,
 } from '../utils/tauriApi';
-import ScriptEditorDialog from './ScriptEditorDialog';
+import ScriptEditorDialog, { type ScriptEditorValue } from './ScriptEditorDialog';
 
 interface SimMenuProps {
   loading?: boolean;
@@ -39,6 +40,70 @@ function readVariableCache(key: string): string[] {
   } catch {
     return [];
   }
+}
+
+function directChildren(element: Element, tagName: string): Element[] {
+  return Array.from(element.children).filter(child => child.tagName.toLowerCase() === tagName);
+}
+
+function setOptionalAttribute(element: Element, name: string, value: string) {
+  const normalized = value.trim();
+  if (normalized) element.setAttribute(name, normalized);
+  else element.removeAttribute(name);
+}
+
+/** Patch the downloaded runscript DOM so comments and unsupported attributes survive. */
+function serializeRunScript(sourceXml: string, value: ScriptEditorValue): string {
+  const documentXml = new DOMParser().parseFromString(sourceXml, 'application/xml');
+  if (documentXml.querySelector('parsererror')) throw new Error('原始脚本 XML 无法解析');
+  const use = documentXml.querySelector('runscript > use, use');
+  const run = documentXml.querySelector('runscript > run, run');
+  if (!use || !run) throw new Error('脚本缺少 <use> 或 <run> 节点');
+
+  setOptionalAttribute(use, 'aircraft', value.aircraft);
+  setOptionalAttribute(use, 'initialize', value.initialize);
+  setOptionalAttribute(run, 'start', value.start);
+  setOptionalAttribute(run, 'end', value.end);
+  setOptionalAttribute(run, 'dt', value.dt);
+
+  const existingEvents = directChildren(run, 'event');
+  value.events.forEach((editedEvent, eventIndex) => {
+    const eventElement = existingEvents[eventIndex] || documentXml.createElement('event');
+    if (!existingEvents[eventIndex]) run.appendChild(eventElement);
+    setOptionalAttribute(eventElement, 'name', editedEvent.name);
+
+    let condition = directChildren(eventElement, 'condition')[0];
+    if (!condition) {
+      condition = documentXml.createElement('condition');
+      eventElement.insertBefore(condition, eventElement.firstChild);
+    }
+    condition.textContent = editedEvent.condition.trim() ? ` ${editedEvent.condition.trim()} ` : '';
+
+    const existingSets = directChildren(eventElement, 'set');
+    editedEvent.sets.forEach((editedSet, setIndex) => {
+      const setElement = existingSets[setIndex] || documentXml.createElement('set');
+      if (!existingSets[setIndex]) {
+        const notify = directChildren(eventElement, 'notify')[0];
+        eventElement.insertBefore(setElement, notify || null);
+      }
+      setOptionalAttribute(setElement, 'name', editedSet.name);
+      setOptionalAttribute(setElement, 'value', editedSet.value);
+    });
+    existingSets.slice(editedEvent.sets.length).forEach(element => element.remove());
+
+    const existingNotifies = directChildren(eventElement, 'notify');
+    editedEvent.notifies.forEach((editedNotify, notifyIndex) => {
+      const notifyElement = existingNotifies[notifyIndex] || documentXml.createElement('notify');
+      if (!existingNotifies[notifyIndex]) eventElement.appendChild(notifyElement);
+      const text = editedNotify.trim();
+      if (notifyElement.hasAttribute('name')) setOptionalAttribute(notifyElement, 'name', text);
+      else notifyElement.textContent = text;
+    });
+    existingNotifies.slice(editedEvent.notifies.length).forEach(element => element.remove());
+  });
+  existingEvents.slice(value.events.length).forEach(element => element.remove());
+
+  return new XMLSerializer().serializeToString(documentXml);
 }
 
 function formatCondition(condition: string): string {
@@ -114,7 +179,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<SimPhase>('idle');
-  const [scriptEditor, setScriptEditor] = useState<{ name: string; aircraft: string; initialize: string; start: string; end: string; dt: string; events: { name: string; condition: string; sets: { name: string; value: string }[]; notifies: string[] }[] }>({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
+  const [scriptEditor, setScriptEditor] = useState<ScriptEditorValue>({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
   const [scriptEditorExpanded, setScriptEditorExpanded] = useState(false);
   const [globalVariables, setGlobalVariables] = useState<string[]>(() => Array.from(new Set([
     ...readVariableCache('jsbsim-global-variables'),
@@ -122,6 +187,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   ])));
 
   const wrapRef = useRef<HTMLDivElement>(null);
+  const scriptSourceRef = useRef<{ path: string; xml: string }>({ path: '', xml: '' });
   useEffect(() => {
     const update = (event: Event) => {
       const paths = (event as CustomEvent<string[]>).detail || [];
@@ -332,17 +398,21 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setScriptEditor({
         name: file,
         aircraft,
-        initialize: documentXml.querySelector('use')?.getAttribute('initialize') || '默认初始化',
+        initialize: documentXml.querySelector('use')?.getAttribute('initialize') || '',
         start: documentXml.querySelector('run')?.getAttribute('start') || '0',
-        end: documentXml.querySelector('run')?.getAttribute('end') || '未设置',
-        dt: documentXml.querySelector('run')?.getAttribute('dt') || '未设置',
+        end: documentXml.querySelector('run')?.getAttribute('end') || '',
+        dt: documentXml.querySelector('run')?.getAttribute('dt') || '',
         events: Array.from(documentXml.querySelectorAll('event')).map(event => ({
           name: event.getAttribute('name') || '未命名事件',
           condition: event.querySelector('condition')?.textContent?.trim().replace(/\s+/g, ' ') || '无条件',
           sets: Array.from(event.querySelectorAll('set')).map(set => ({ name: set.getAttribute('name') || '', value: set.getAttribute('value') || '' })),
-          notifies: Array.from(event.querySelectorAll('notify')).map(notify => notify.textContent?.trim().replace(/\s+/g, ' ') || notify.getAttribute('name') || '通知'),
+          notifies: Array.from(event.querySelectorAll('notify')).map(notify => notify.textContent?.trim().replace(/\s+/g, ' ') || notify.getAttribute('name') || ''),
         })),
       });
+      scriptSourceRef.current = {
+        path: path.startsWith('scripts/') ? path : `scripts/${file}`,
+        xml: script.xml,
+      };
       setScriptEditorExpanded(false);
       setSelectedModel(aircraft);
       setPreparedTarget({ script: path, model: aircraft });
@@ -359,6 +429,34 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     }
       setLoading(false);
   }, [models, onOpenRemoteModel, running, paused, appendLog]);
+
+  const handleSaveScript = useCallback(async (value: ScriptEditorValue) => {
+    if (!value.aircraft.trim()) throw new Error('关联模型不能为空');
+    const source = scriptSourceRef.current;
+    if (!source.path || !source.xml) throw new Error('缺少从仿真机下载的原始脚本');
+    const remotePath = source.path.startsWith('scripts/')
+      ? source.path
+      : `scripts/${source.path.split('/').pop()}`;
+    const xml = serializeRunScript(source.xml, value);
+    appendLog(`正在上传脚本到 NuttX: ${remotePath}`);
+    await ftpUploadFile(remotePath, xml);
+
+    // Read the file back through the same FTP path. A successful upload alone
+    // is not enough evidence that the live script contains the edited bytes.
+    const file = remotePath.split('/').pop() || value.name;
+    const verified = await ftpDownloadScript(file);
+    if (verified.xml.trim() !== xml.trim()) {
+      throw new Error('上传后回读内容不一致，仿真机脚本未确认更新');
+    }
+    scriptSourceRef.current = { path: remotePath, xml: verified.xml };
+    localStorage.setItem(`jsbsim-script-editor:${value.name}`, JSON.stringify(value));
+    setScriptEditor(value);
+    setSelectedTest(remotePath);
+    setSelectedModel(value.aircraft.trim());
+    setPreparedTarget({ script: remotePath, model: value.aircraft.trim() });
+    appendLog(`脚本已写入并回读确认: /mnt/sdcard/jsbsim/${remotePath}`);
+    await loadLists();
+  }, [appendLog, loadLists]);
 
   useEffect(() => {
     const selectScript = (event: Event) => {
@@ -490,6 +588,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const statusText = external
     ? (!connected ? '等待连接' : remoteState === 'waiting' ? '已连接 · 等待开始' : phaseText[phase])
     : phaseText[phase];
+  // Connection polling starts as soon as the application opens, but CPU/RAM/FDM
+  // are runtime indicators. Keep the whole indicator hidden until a simulation
+  // has actually entered its lifecycle (or an already-running remote task is
+  // discovered), and hide it again after STOP returns to idle.
+  const showRuntimeStatus = running || phase !== 'idle';
   const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
   const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.value)) * 1.1;
   const fdmValues = fdmVisibleHistory.map(sample => sample.value);
@@ -512,6 +615,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setOpen(true);
     }
   };
+
+  useEffect(() => {
+    if (showRuntimeStatus) return;
+    setCpuPopupOpen(false);
+    setFdmPopupOpen(false);
+  }, [showRuntimeStatus]);
 
   return (
     <div className="sim-menu-wrap" ref={wrapRef}>
@@ -539,26 +648,28 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {(selectedTest || preparedTarget.script || currentScript) ? '📋' : '🛩️'} {displayName}
         </span>
       )}
-      <span className={`sim-connection-chip ${connected ? 'online' : 'offline'}`} title="仿真机连接状态">
-        <span className="sim-connection-dot" />
-        {connected ? '已连接' : '等待连接'}
-        {external && cpuCores.length > 0 && (
-          <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
-            CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(0)}%`).join(' · ')}
-          </button>
-        )}
-        {external && memory && (
-          <span className="sim-connection-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
-            RAM {memory.percent.toFixed(1)}%
-          </span>
-        )}
-        {external && fdmRunMs != null && (
-          <span className="sim-connection-fdm" role="button" tabIndex={0} title="单击查看 FDM 运行时间曲线" onClick={() => setFdmPopupOpen(open => !open)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setFdmPopupOpen(open => !open); }}>
-            FDM {fdmRunMs.toFixed(3)} ms <small>⌁</small>
-          </span>
-        )}
-      </span>
-      {cpuPopupOpen && cpuCores.length > 0 && (
+      {showRuntimeStatus && (
+        <span className={`sim-connection-chip ${connected ? 'online' : 'offline'}`} title="仿真机连接状态">
+          <span className="sim-connection-dot" />
+          {connected ? '已连接' : '等待连接'}
+          {external && cpuCores.length > 0 && (
+            <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
+              CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(0)}%`).join(' · ')}
+            </button>
+          )}
+          {external && memory && (
+            <span className="sim-connection-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
+              RAM {memory.percent.toFixed(1)}%
+            </span>
+          )}
+          {external && fdmRunMs != null && (
+            <span className="sim-connection-fdm" role="button" tabIndex={0} title="单击查看 FDM 运行时间曲线" onClick={() => setFdmPopupOpen(open => !open)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setFdmPopupOpen(open => !open); }}>
+              FDM {fdmRunMs.toFixed(3)} ms <small>⌁</small>
+            </span>
+          )}
+        </span>
+      )}
+      {showRuntimeStatus && cpuPopupOpen && cpuCores.length > 0 && (
         <div className="sim-cpu-popup">
           <div className="sim-cpu-popup-head"><b>双核 CPU 利用率</b><span>10 Hz</span></div>
           <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
@@ -573,7 +684,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           </div>
         </div>
       )}
-      {fdmPopupOpen && fdmRunMs != null && (
+      {showRuntimeStatus && fdmPopupOpen && fdmRunMs != null && (
         <div className="sim-fdm-popup">
           <div className="sim-cpu-popup-head"><b>FDM 单步运行时间</b><span>{fdmRunMs.toFixed(3)} ms</span></div>
           <div className="sim-fdm-window-picker">
@@ -701,7 +812,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           <span className="script-flow-mini-hint">点击展开完整逻辑</span>
         </button>
       )}
-      {scriptEditor.name && scriptEditorExpanded && <ScriptEditorDialog value={scriptEditor} variables={globalVariables} onChange={setScriptEditor} onClose={() => setScriptEditorExpanded(false)} />}
+      {scriptEditor.name && scriptEditorExpanded && <ScriptEditorDialog value={scriptEditor} variables={globalVariables} onChange={setScriptEditor} onSave={handleSaveScript} onClose={() => setScriptEditorExpanded(false)} />}
     </div>
   );
 }

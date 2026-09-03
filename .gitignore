@@ -1,6 +1,10 @@
 node_modules/
 dist/
 projects/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.env
+.qwen/
 *.log
 .DS_Store
 test-*.mjs
