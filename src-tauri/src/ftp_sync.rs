@@ -287,6 +287,13 @@ pub fn download_path(path: &str) -> Result<String, String> {
         .map_err(|e| format!("remote XML is not UTF-8: {e}"))
 }
 
+pub fn download_simulator_version() -> Result<String, String> {
+    let url = format!("{}/jsbsim/VERSION.json", endpoint());
+    let auth = credentials();
+    String::from_utf8(curl_output(&["--user", &auth, &url])?)
+        .map_err(|e| format!("simulator version is not UTF-8: {e}"))
+}
+
 /// Atomically replace a file below the NuttX JSBSim root.  The caller passes
 /// a relative path such as `systems/foo.xml`; traversal and absolute paths are
 /// rejected before curl is invoked.

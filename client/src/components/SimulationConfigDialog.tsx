@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ftpDownloadSimConfig, ftpUploadSimConfig } from '../utils/tauriApi';
+import { ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, SimulatorVersion } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 
 type Tab = '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全';
@@ -55,6 +55,12 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   const [baseline, setBaseline] = useState('');
   const [status, setStatus] = useState(tr('正在读取仿真机配置…', 'Reading simulator configuration…'));
   const [saving, setSaving] = useState(false);
+  const [simulatorVersion, setSimulatorVersion] = useState<SimulatorVersion | null>(null);
+  const [versionStatus, setVersionStatus] = useState(tr('正在读取仿真机版本…', 'Reading simulator version…'));
+  const [showVersionManager, setShowVersionManager] = useState(false);
+  const [versionSnapshots, setVersionSnapshots] = useState<Array<SimulatorVersion & { savedAt: string }>>(() => {
+    try { const saved = JSON.parse(localStorage.getItem('jsbsim-simulator-version-snapshots') || '[]'); return Array.isArray(saved) ? saved : []; } catch { return []; }
+  });
   const [variableFilter, setVariableFilter] = useState('');
   const [availableVariables, setAvailableVariables] = useState<string[]>(() => {
     try { const saved = JSON.parse(localStorage.getItem('jsbsim-available-variables') || '[]'); return Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : []; } catch { return []; }
@@ -97,6 +103,27 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     }).catch(() => { setConfig(defaults); setBaseline(''); setStatus(tr('未找到模型配置，当前使用默认值', 'No model configuration found; using defaults')); });
   }, [path]);
 
+  const refreshSimulatorVersion = async () => {
+    setVersionStatus(tr('正在读取仿真机版本…', 'Reading simulator version…'));
+    try {
+      const version = await ftpGetSimulatorVersion();
+      setSimulatorVersion(version);
+      setVersionStatus(tr('已读取仿真机版本', 'Simulator version loaded'));
+    } catch (error: any) {
+      setSimulatorVersion(null);
+      setVersionStatus(`${tr('读取失败', 'Read failed')}: ${error?.message || error}`);
+    }
+  };
+
+  const saveVersionSnapshot = () => {
+    if (!simulatorVersion) return;
+    const next = [{ ...simulatorVersion, savedAt: new Date().toISOString() }, ...versionSnapshots].slice(0, 20);
+    setVersionSnapshots(next);
+    localStorage.setItem('jsbsim-simulator-version-snapshots', JSON.stringify(next));
+  };
+
+  useEffect(() => { void refreshSimulatorVersion(); }, []);
+
   const save = async () => {
     const changedGroups = Object.keys(defaults).filter(key => key !== 'version' && JSON.stringify((config as any)[key]) !== JSON.stringify((baseline ? JSON.parse(baseline) : defaults as any)[key]));
     if (!window.confirm(isZh
@@ -111,6 +138,12 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   return <div className="sim-config-overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
     <div className="sim-config-dialog">
       <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><span>{tr('模型', 'Model')}: {safeModel}</span></div><button onClick={onClose}>×</button></header>
+      <div className="simulator-version-card">
+        <div><strong>{tr('仿真机版本', 'Simulator Version')}</strong><small>{versionStatus}</small></div>
+        {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}
+        <button type="button" onClick={() => setShowVersionManager(true)}>{tr('版本管理', 'Version Manager')}</button>
+        <button type="button" onClick={() => void refreshSimulatorVersion()}>{tr('刷新', 'Refresh')}</button>
+      </div>
       <div className="sim-config-path">{tr('SD卡路径', 'SD card path')}: /mnt/sdcard/jsbsim/{path}</div>
       <div className="sim-config-layout">
         <nav>{tabs.map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety'} as any)[item] && !isZh ? ({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety'} as any)[item] : item}</button>)}</nav>
@@ -155,6 +188,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
         </main>
       </div>
       <footer><span>{status}</span><div><button onClick={()=>setConfig(defaults)}>{tr('恢复默认值','Restore Defaults')}</button><button className="primary" disabled={saving || serialized === baseline} onClick={()=>void save()}>{saving?tr('保存中…','Saving…'):tr('保存到仿真机','Save to Simulator')}</button></div></footer>
+      {showVersionManager && <div className="sim-config-version-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setShowVersionManager(false); }}><section className="sim-config-version-manager"><header><b>{tr('仿真机版本管理', 'Simulator Version Manager')}</b><button type="button" onClick={() => setShowVersionManager(false)}>×</button></header><p>{tr('版本来自仿真机只读 VERSION.json；快照保存在本机，便于记录每次固件和航空库组合。', 'The version comes from the simulator read-only VERSION.json. Snapshots are stored locally to track firmware and aviation-library combinations.')}</p><div className="sim-config-version-actions"><button type="button" onClick={() => void refreshSimulatorVersion()}>{tr('重新读取仿真机', 'Read simulator')}</button><button type="button" disabled={!simulatorVersion} onClick={saveVersionSnapshot}>{tr('保存当前快照', 'Save snapshot')}</button></div><div className="sim-config-version-list">{versionSnapshots.length === 0 ? <span>{tr('暂无版本快照', 'No version snapshots')}</span> : versionSnapshots.map((item, index) => <article key={`${item.savedAt}-${index}`}><b>{item.product || 'JSBSim Realtime'} {item.version || '—'}</b><span>{item.firmware || '—'} · JSBSim {item.jsbsim || '—'} · {new Date(item.savedAt).toLocaleString()}</span></article>)}</div></section></div>}
     </div>
   </div>;
 }

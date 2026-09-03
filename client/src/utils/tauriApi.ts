@@ -232,8 +232,58 @@ export async function ftpDownloadDsdl(file: string): Promise<string> {
   return result.content || '';
 }
 
+function comparableXml(xml: string): string {
+  return String(xml || '').replace(/\r\n?/g, '\n').trim();
+}
+
+function xmlChangePreview(remoteXml: string, localXml: string): string {
+  const remoteLines = comparableXml(remoteXml).split('\n');
+  const localLines = comparableXml(localXml).split('\n');
+  const changes: string[] = [];
+  let changedLines = 0;
+  const total = Math.max(remoteLines.length, localLines.length);
+  for (let index = 0; index < total; index++) {
+    const before = remoteLines[index] ?? '';
+    const after = localLines[index] ?? '';
+    if (before === after) continue;
+    changedLines++;
+    if (changes.length < 24) {
+      const line = index + 1;
+      changes.push(`- ${line}: ${before.slice(0, 180)}`);
+      changes.push(`+ ${line}: ${after.slice(0, 180)}`);
+    }
+  }
+  const omitted = changedLines - changes.length / 2;
+  return `${changes.join('\n')}${omitted > 0 ? `\n…另有 ${omitted} 行差异` : ''}`;
+}
+
+async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote: () => Promise<string>): Promise<boolean> {
+  if (!isRemoteUploadEnabled()) {
+    throw new Error('仿真机 XML 上传已关闭，请先在“本地配置”中启用');
+  }
+  let remoteXml: string;
+  try {
+    remoteXml = await loadRemote();
+  } catch (error: any) {
+    throw new Error(`无法读取仿真机原文件，不能比较变更，已禁止上传：${error?.message || error}`);
+  }
+  if (comparableXml(remoteXml) === comparableXml(localXml)) return false;
+  const preview = xmlChangePreview(remoteXml, localXml);
+  const confirmed = window.confirm(
+    `即将更新仿真机 XML：\n/mnt/sdcard/jsbsim/${path}\n\n请比较以下变更：\n\n${preview}\n\n远端原文件会保留为 .bak。确认应用这些变更吗？`
+  );
+  if (!confirmed) throw new Error('用户取消 XML 更新，仿真机文件未修改');
+  return true;
+}
+
 export async function ftpUploadFile(path: string, content: string): Promise<{ path: string; uploaded: boolean }> {
-  return call('ftp_upload_file', { path, content });
+  const normalizedPath = String(path).replace(/^\/+|^jsbsim\//g, '');
+  const shouldUpload = await confirmRemoteXmlUpdate(normalizedPath, content, async () => {
+    const remote = await ftpDownloadXml(normalizedPath);
+    return remote.content;
+  });
+  if (!shouldUpload) return { path: normalizedPath, uploaded: false };
+  return call('ftp_upload_file', { path: normalizedPath, content });
 }
 
 export async function ftpDownloadScript(file: string): Promise<{ file: string; xml: string; source: string }> {
@@ -241,7 +291,14 @@ export async function ftpDownloadScript(file: string): Promise<{ file: string; x
 }
 
 export async function ftpUploadModel(model: string, xml: string): Promise<{ model: string; uploaded: boolean }> {
-  return call('ftp_upload_model', { model, xml });
+  const modelName = String(model).replace(/^aircraft\//, '').replace(/\/.*$/, '');
+  const path = `aircraft/${modelName}/${modelName}.xml`;
+  const shouldUpload = await confirmRemoteXmlUpdate(path, xml, async () => {
+    const remote = await ftpDownloadModel(modelName);
+    return remote.xml;
+  });
+  if (!shouldUpload) return { model: modelName, uploaded: false };
+  return call('ftp_upload_model', { model: modelName, xml });
 }
 
 export async function ftpDownloadSimConfig(path: string): Promise<{ path: string; content: string }> {
@@ -250,6 +307,21 @@ export async function ftpDownloadSimConfig(path: string): Promise<{ path: string
 
 export async function ftpUploadSimConfig(path: string, content: string): Promise<{ path: string; saved: boolean }> {
   return call('ftp_upload_sim_config', { path, content });
+}
+
+export interface SimulatorVersion {
+  product?: string;
+  version?: string;
+  firmware?: string;
+  jsbsim?: string;
+  aviation_library?: string;
+  schema?: number;
+  [key: string]: unknown;
+}
+
+export async function ftpGetSimulatorVersion(): Promise<SimulatorVersion> {
+  const result = await call('ftp_get_simulator_version');
+  return result.version || {};
 }
 
 // ── Tauri event listeners (for telemetry) ───────────────────────────────────

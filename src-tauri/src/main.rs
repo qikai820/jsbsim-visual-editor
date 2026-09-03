@@ -595,6 +595,14 @@ fn ftp_download_xml(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn ftp_get_simulator_version() -> Result<serde_json::Value, String> {
+    let content = ftp_sync::download_simulator_version()?;
+    let version: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("invalid simulator VERSION.json: {e}"))?;
+    Ok(serde_json::json!({ "version": version, "source": "nuttx-ftp" }))
+}
+
+#[tauri::command]
 fn ftp_list_systems() -> Result<serde_json::Value, String> {
     let files = ftp_sync::list_systems()?;
     Ok(serde_json::json!({ "files": files, "source": "nuttx-ftp" }))
@@ -748,6 +756,7 @@ fn main() {
             sim_list_models,
             ftp_download_model,
             ftp_download_xml,
+            ftp_get_simulator_version,
             ftp_list_systems,
             ftp_list_engines,
             ftp_list_dsdl,
