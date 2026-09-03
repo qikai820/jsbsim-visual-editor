@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getAircraftLibrary, loadAircraft, simListTests, ftpDownloadScript } from '../utils/tauriApi';
+import { getAircraftLibrary, loadAircraft, simListTests, ftpDownloadScript, ftpListEngineCatalog } from '../utils/tauriApi';
 
 interface AircraftEntry {
   id: string;
@@ -35,7 +35,7 @@ interface Props {
 interface ScriptEntry { name: string; file: string; path: string; aircraft?: string; initialize?: string; start?: string; end?: string; dt?: string; events?: number; error?: string; sourcePath?: string }
 
 export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation, onSelectScriptForSimulation }: Props) {
-  const [tab, setTab] = useState<'models' | 'scripts'>('models');
+  const [tab, setTab] = useState<'models' | 'scripts' | 'engines' | 'propellers'>('models');
   const [library, setLibrary] = useState<AircraftEntry[]>([]);
   const [scripts, setScripts] = useState<ScriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +48,10 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const [userModels, setUserModels] = useState<AircraftEntry[]>(() => JSON.parse(localStorage.getItem('jsbsim-user-models') || '[]'));
   const [userScripts, setUserScripts] = useState<ScriptEntry[]>(() => JSON.parse(localStorage.getItem('jsbsim-user-scripts') || '[]'));
   const [group, setGroup] = useState<'nuttx' | 'user'>('nuttx');
+  const [engineFiles, setEngineFiles] = useState<string[]>([]);
+  const [propellerFiles, setPropellerFiles] = useState<string[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   useEffect(() => {
     Promise.all([getAircraftLibrary(), simListTests()])
@@ -58,6 +62,19 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    if ((tab !== 'engines' && tab !== 'propellers') || catalogLoaded || catalogLoading) return;
+    setCatalogLoading(true);
+    ftpListEngineCatalog()
+      .then(catalog => {
+        setEngineFiles(catalog.engines);
+        setPropellerFiles(catalog.propellers);
+        setCatalogLoaded(true);
+      })
+      .catch(err => console.warn('发动机/螺旋桨库暂不可用：', err))
+      .finally(() => setCatalogLoading(false));
+  }, [tab, catalogLoaded, catalogLoading]);
 
   const inspectScript = async (entry: ScriptEntry) => {
     setSelectedScript(entry);
@@ -81,6 +98,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   });
   const visibleModels = group === 'user' ? userModels : filtered;
   const visibleScripts = group === 'user' ? userScripts : scripts;
+  const visibleComponents = tab === 'engines' ? engineFiles : propellerFiles;
   const copyModel = (aircraft: AircraftEntry) => {
     const name = window.prompt('请输入用户模型名称', `${aircraft.name} 副本`);
     if (!name?.trim()) return;
@@ -126,16 +144,16 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
       <div className="library-modal" onClick={e => e.stopPropagation()}>
         <div className="library-header">
           <h2>📚 模型与脚本库</h2>
-          <span className="library-count">{library.length} 个模型 · {scripts.length} 个脚本</span>
+          <span className="library-count">{library.length} 个模型 · {scripts.length} 个脚本 · {engineFiles.length} 个发动机 · {propellerFiles.length} 个螺旋桨</span>
           <button className="wizard-close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => { setTab('models'); setGroup('nuttx'); }}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => { setTab('scripts'); setGroup('nuttx'); }}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => { setTab('models'); setGroup('user'); }}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => { setTab('scripts'); setGroup('user'); }}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
+        <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => { setTab('models'); setGroup('nuttx'); }}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => { setTab('scripts'); setGroup('nuttx'); }}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'engines' ? 'active' : ''} onClick={() => { setTab('engines'); setGroup('nuttx'); }}>⚙️ 发动机/电机库 <b>{engineFiles.length}</b></button><button className={tab === 'propellers' ? 'active' : ''} onClick={() => { setTab('propellers'); setGroup('nuttx'); }}>🌀 螺旋桨库 <b>{propellerFiles.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => { setTab('models'); setGroup('user'); }}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => { setTab('scripts'); setGroup('user'); }}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
         <div className="library-toolbar">
           <input
             type="text"
             className="library-search"
-            placeholder={tab === 'models' ? '🔍 搜索模型名称...' : '🔍 搜索脚本名称...'}
+            placeholder={tab === 'models' ? '🔍 搜索模型名称...' : tab === 'scripts' ? '🔍 搜索脚本名称...' : '🔍 搜索文件名称...'}
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -182,7 +200,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
                   </div>
                 );
               })
-            ) : visibleScripts.filter(script => !search || `${script.name} ${script.file} ${script.aircraft || ''}`.toLowerCase().includes(search.toLowerCase())).map(script => <div key={script.path} className={`library-item ${selectedScript?.path === script.path ? 'selected' : ''}`} onClick={() => void inspectScript(script)}><span className="library-item-icon">📋</span><div className="library-item-info"><div className="library-item-name">{(script.name || script.file).replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{group === 'user' ? '用户脚本' : '测试脚本'}</span>{script.aircraft && <span>· 模型 {script.aircraft}</span>}</div></div><span className="library-item-size">XML</span></div>)}
+            ) : tab === 'scripts' ? visibleScripts.filter(script => !search || `${script.name} ${script.file} ${script.aircraft || ''}`.toLowerCase().includes(search.toLowerCase())).map(script => <div key={script.path} className={`library-item ${selectedScript?.path === script.path ? 'selected' : ''}`} onClick={() => void inspectScript(script)}><span className="library-item-icon">📋</span><div className="library-item-info"><div className="library-item-name">{(script.name || script.file).replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{group === 'user' ? '用户脚本' : '测试脚本'}</span>{script.aircraft && <span>· 模型 {script.aircraft}</span>}</div></div><span className="library-item-size">XML</span></div>) : catalogLoading ? <div className="library-loading">发动机/螺旋桨库加载中...</div> : visibleComponents.filter(file => !search || file.toLowerCase().includes(search.toLowerCase())).map(file => <div key={file} className="library-item"><span className="library-item-icon">{tab === 'engines' ? '⚙️' : '🌀'}</span><div className="library-item-info"><div className="library-item-name">{file.replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{tab === 'engines' ? '发动机 / 电机' : '螺旋桨'}</span><span>· ROMFS → SD</span></div></div><span className="library-item-size">XML</span></div>)}
           </div>
 
           {tab === 'models' && selected && (
