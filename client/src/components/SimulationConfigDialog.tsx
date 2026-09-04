@@ -140,7 +140,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
       <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><span>{tr('模型', 'Model')}: {safeModel}</span></div><button onClick={onClose}>×</button></header>
       <div className="simulator-version-card">
         <div><strong>{tr('仿真机版本', 'Simulator Version')}</strong><small>{versionStatus}</small></div>
-        {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}
+        {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span><span>{tr('编译时间', 'Built')} {simulatorVersion.build_time || '—'} · Git {simulatorVersion.git_short_hash || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}
         <button type="button" onClick={() => setShowVersionManager(true)}>{tr('版本管理', 'Version Manager')}</button>
         <button type="button" onClick={() => void refreshSimulatorVersion()}>{tr('刷新', 'Refresh')}</button>
       </div>

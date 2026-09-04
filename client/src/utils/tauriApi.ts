@@ -315,6 +315,8 @@ export interface SimulatorVersion {
   firmware?: string;
   jsbsim?: string;
   aviation_library?: string;
+  build_time?: string;
+  git_short_hash?: string;
   schema?: number;
   [key: string]: unknown;
 }
