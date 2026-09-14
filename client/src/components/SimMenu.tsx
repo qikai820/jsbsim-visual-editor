@@ -302,13 +302,23 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // prepares it for the primary "开始" action without forcing an XML upload.
   useEffect(() => {
     if (!selectedModelFromLibrary) return;
+    /* Selecting a run script loads its aircraft into the canvas too.  That
+     * model update must not be mistaken for an explicit model selection: it
+     * would clear the script context and make the script editor disappear. */
+    if (selectedTest) {
+      setSelectedModel(selectedModelFromLibrary);
+      setPreparedTarget(current => current.script
+        ? { ...current, model: selectedModelFromLibrary }
+        : current);
+      return;
+    }
     setSelectedModel(selectedModelFromLibrary);
     setSelectedTest('');
     setPreparedTarget({ script: '', model: selectedModelFromLibrary });
     setScriptEditor({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
     setScriptEditorExpanded(false);
     setPhase('idle');
-  }, [selectedModelFromLibrary]);
+  }, [selectedModelFromLibrary, selectedTest]);
 
   // Close on outside click
   useEffect(() => {
@@ -418,7 +428,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         path: path.startsWith('scripts/') ? path : `scripts/${file}`,
         xml: script.xml,
       };
-      setScriptEditorExpanded(false);
+      setScriptEditorExpanded(true);
       setSelectedModel(aircraft);
       setPreparedTarget({ script: path, model: aircraft });
       if (!onOpenRemoteModel) throw new Error('编辑器模型加载接口不可用');
@@ -529,10 +539,13 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setSelectedModel(current => current || preparedTarget.model);
       setPhase('idle');
     } catch (err: any) {
-      setError(err.message || '停止失败');
+      const message = err.message || '停止失败';
+      setError(message);
+      appendLog(`停止失败: ${message}`);
+      setPhase(paused ? 'paused' : 'running');
     }
     setLoading(false);
-  }, [preparedTarget]);
+  }, [preparedTarget, paused, appendLog]);
 
   const handleRestart = useCallback(async () => {
     setLoading(true);
@@ -563,10 +576,17 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         setPaused(false);
         setPhase('running');
       } else {
-        await simPause();
+        const result = await simPause();
         localLifecycleControlUntilRef.current = Date.now() + 3000;
-        setPaused(true);
-        setPhase('paused');
+        if (result?.stopped) {
+          setPaused(false);
+          setRunning(false);
+          setPhase('idle');
+          appendLog('模型已自然结束，当前为停止状态');
+        } else {
+          setPaused(true);
+          setPhase('paused');
+        }
       }
     } catch (err: any) {
       const message = err instanceof Error ? err.message :

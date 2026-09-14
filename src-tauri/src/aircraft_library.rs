@@ -456,6 +456,10 @@ pub fn load_aircraft(
         }));
     }
     if let Some(object) = result.as_object_mut() {
+        // Keep the filesystem directory identity separate from the XML
+        // display name (e.g. directory "OV10", fdm_config name "OV10 Bronco").
+        // The bridge must receive this ID to locate the model on NuttX.
+        object.insert("model".into(), serde_json::Value::String(aircraft_id.to_string()));
         object.insert("xmlFiles".into(), serde_json::Value::Array(project_files));
         object.insert("format".into(), serde_json::json!("jsbsim-model-project"));
         object.insert("version".into(), serde_json::json!(3));

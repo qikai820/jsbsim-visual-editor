@@ -457,6 +457,21 @@ fn sim_pause(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         client.request_lifecycle_state("paused");
         client.send_lifecycle_command(3).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("paused", std::time::Duration::from_secs(3)) {
+            // A script may finish between opening the menu and sending PAUSE.
+            // In that case the bridge correctly reports stopped, not paused.
+            if client.latest_sim_status().and_then(|frame|
+                frame.get("state").and_then(|value| value.as_str()).map(|state| state == "stopped")
+            ).unwrap_or(false) {
+                client.clear_lifecycle_request("paused");
+                return Ok(serde_json::json!({"running": false, "paused": false, "stopped": true}));
+            }
+            // Older bridge builds do not send the immediate control_ack.
+            // A stopped simulation clock is independent confirmation that
+            // PAUSE took effect, so retain compatibility with those builds.
+            if !client.simulation_is_advancing() {
+                client.clear_lifecycle_request("paused");
+                return Ok(serde_json::json!({"running": true, "paused": true}));
+            }
             client.clear_lifecycle_request("paused");
             return Err("仿真机未确认暂停，请检查 UDP 控制与回传连接".to_string());
         }
@@ -507,8 +522,15 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
-        client.send_command(2).map_err(|e| e.to_string())?;
         client.request_lifecycle_state("stopped");
+        client.send_lifecycle_command(2).map_err(|e| e.to_string())?;
+        if !client.wait_for_lifecycle_state("stopped", std::time::Duration::from_secs(3))
+            && client.simulation_is_advancing()
+        {
+            client.clear_lifecycle_request("stopped");
+            return Err("仿真机未确认停止，请检查 UDP 控制与回传连接".to_string());
+        }
+        client.clear_lifecycle_request("stopped");
         return Ok(serde_json::json!({"running": false, "external": true}));
     }
     let state = app.state::<AppState>();
@@ -596,12 +618,27 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let latest = client.latest_sim_status();
         let remote_state = if task_alive == Some(false) {
             "crashed".to_owned()
-        } else { client.lifecycle_state()
-            .unwrap_or_else(|| if connected {
-                "waiting".to_owned()
-            } else {
-                "disconnected".to_owned()
-            }) };
+        } else if client.simulation_is_advancing() {
+            /* Timestamp progression proves the FDM is executing.  Prefer it
+             * to any lifecycle label that could have been queued before a
+             * model reload or a dropped control acknowledgement. */
+            "running".to_owned()
+        } else {
+            // A naturally completed script publishes `stopped` and then no
+            // longer advances its simulation clock. Do not let an old
+            // optimistic `running` request mask that terminal state.
+            let latest_state = latest.as_ref()
+                .and_then(|value| value.get("state"))
+                .and_then(|value| value.as_str());
+            if latest_state == Some("stopped") {
+                "stopped".to_owned()
+            } else { client.lifecycle_state()
+                .unwrap_or_else(|| if connected {
+                    "waiting".to_owned()
+                } else {
+                    "disconnected".to_owned()
+                }) }
+        };
         let model = latest.as_ref()
             .and_then(|value| value.get("model"))
             .and_then(|value| value.as_str());

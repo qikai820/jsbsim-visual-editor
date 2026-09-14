@@ -239,6 +239,18 @@ function AppContent() {
       const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles };
       if (applyingHistory.current || JSON.stringify(next) === JSON.stringify(historyCurrent.current)) return;
       const previous = historyCurrent.current;
+      // Loading another aircraft replaces the whole project in one store
+      // update. That is navigation, not an edit to the newly selected model;
+      // otherwise the old model's graph is reported as a local XML change.
+      if (previous && previous.aircraft?.name !== next.aircraft?.name) {
+        historyCurrent.current = next;
+        undoStack.current = [];
+        redoStack.current = [];
+        if (historyBurst.current) clearTimeout(historyBurst.current);
+        historyBurst.current = null;
+        setModifiedXmlFiles([]);
+        return;
+      }
       if (previous) {
         const mainFile = `${state.aircraft.name || 'aircraft'}.xml`;
         const files = new Set<string>();
@@ -611,4 +623,3 @@ export default function App() {
     </GlobalErrorBoundary>
   );
 }
-

@@ -111,10 +111,10 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { if (tab === 'local' && selected) void analyseLocal(selected); }, [tab, selected]);
 
-  const downloadRemote = async () => {
-    if (!selected || tab !== 'remote') return; setBusy(true); setStatus(`正在下载 ${selected}…`);
+  const downloadRemote = async (name = selected) => {
+    if (!name || tab !== 'remote' || busy) return; setBusy(true); setSelected(name); setStatus(`正在下载 ${name}…`);
     try {
-      const result = await ftpDownloadLog(selected, localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
+      const result = await ftpDownloadLog(name, localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
       if (result.bytes) {
         const file = new File([new Uint8Array(result.bytes)], result.file, { type: 'application/octet-stream', lastModified: Date.now() });
         await openFileArray([file]);
@@ -175,7 +175,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     <main className="log-center-body">
       <aside className="log-file-panel">
         <div className="log-panel-title">日志文件</div>
-        {items.length === 0 ? <div className="log-empty">暂无日志</div> : items.map(name => <button key={name} className={selected === name ? 'selected' : ''} onClick={() => setSelected(name)}>
+        {items.length === 0 ? <div className="log-empty">暂无日志</div> : items.map(name => <button key={name} className={selected === name ? 'selected' : ''} onClick={() => setSelected(name)} onDoubleClick={() => { if (tab === 'remote') void downloadRemote(name); }} title={tab === 'remote' ? '双击下载并打开' : '选择日志'}>
           <span>◫</span><div><strong>{name}</strong><small>{tab === 'remote' ? `${formatRemoteDate(remoteLogs.find(log => log.name === name)?.modified)} · ${formatSize(remoteLogs.find(log => log.name === name)?.size)}` : (localLogs.find(log => log.name === name) ? formatSize(localLogs.find(log => log.name === name)!.size) : '')}</small></div>
         </button>)}
       </aside>

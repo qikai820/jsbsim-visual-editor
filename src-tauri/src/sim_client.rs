@@ -23,6 +23,10 @@ fn model_basename(model: &str) -> &str {
     model.rsplit('/').next().unwrap_or(model).trim_end_matches(".xml")
 }
 
+fn lifecycle_packet(command: u8) -> [u8; 5] {
+    [b'V', b'C', b'M', b'D', command]
+}
+
 // ── public struct ──────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -49,6 +53,11 @@ struct SimClientInner {
     /// authoritative until another lifecycle command is issued; telemetry is
     /// observational and may arrive delayed or out of order over UDP.
     commanded_lifecycle_state: Option<String>,
+    /// Local receipt time of the most recent strictly advancing JSBSim clock.
+    /// It is independent evidence that the FDM is running, even if one
+    /// lifecycle packet is delayed or stale after a bridge replacement.
+    last_simulation_progress: Option<Instant>,
+    last_simulation_timestamp: Option<f64>,
     connected: bool,
     last_packet_time: Instant,
     packets: u64,
@@ -139,6 +148,8 @@ impl SimClient {
                 latest_sim_status: None,
                 latest_task_top: None,
                 commanded_lifecycle_state: None,
+                last_simulation_progress: None,
+                last_simulation_timestamp: None,
                 connected: false,
             last_packet_time: Instant::now(),
             packets: 0,
@@ -184,6 +195,27 @@ impl SimClient {
                                                     .unwrap_or(false);
                                                 if acknowledged {
                                                     state.commanded_lifecycle_state = None;
+                                                }
+                                            }
+                                            if let Some(timestamp) = val.get("timestamp").and_then(Value::as_f64) {
+                                                match state.last_simulation_timestamp {
+                                                    Some(previous) if timestamp > previous + 1e-6 => {
+                                                        state.last_simulation_progress = Some(Instant::now());
+                                                    }
+                                                    /* A reload restarts JSBSim time at zero.  Accept
+                                                     * the new baseline; the next advancing frame will
+                                                     * prove the replacement FDM is running. */
+                                                    Some(previous) if timestamp + 1e-6 < previous => {
+                                                        state.last_simulation_timestamp = Some(timestamp);
+                                                    }
+                                                    None => state.last_simulation_timestamp = Some(timestamp),
+                                                    _ => {}
+                                                }
+                                                if state.last_simulation_timestamp
+                                                    .map(|previous| timestamp > previous)
+                                                    .unwrap_or(false)
+                                                {
+                                                    state.last_simulation_timestamp = Some(timestamp);
                                                 }
                                             }
                                             if val.get("task_top").is_some() {
@@ -340,6 +372,14 @@ impl SimClient {
         self.inner.lock().unwrap().packets
     }
 
+    /// Whether the reported JSBSim simulation clock advanced in the recent
+    /// past.  This is more trustworthy than a stale lifecycle label.
+    pub fn simulation_is_advancing(&self) -> bool {
+        self.inner.lock().unwrap().last_simulation_progress
+            .map(|at| at.elapsed() < Duration::from_secs(2))
+            .unwrap_or(false)
+    }
+
     /// `Some(false)` means a fresh task snapshot was received and JSBSim is
     /// absent. `None` means no task snapshot is available yet.
     pub fn jsbsim_task_alive(&self) -> Option<bool> {
@@ -445,12 +485,15 @@ impl SimClient {
     /// local OS accepted the datagram; it does not mean the NuttX bridge saw
     /// it.  START/STOP/PAUSE/RESUME are idempotent, so retries are safe.
     pub fn send_lifecycle_command(&self, command: u8) -> std::io::Result<()> {
-        let packet = [b'V', b'C', b'M', b'D', command];
+        let packet = lifecycle_packet(command);
         let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        for attempt in 0..3 {
+        // Spread retries across multiple bridge polling cycles. Bursting all
+        // copies within 40 ms was ineffective when NuttX was busy flushing
+        // MCAP or completing a model/script transition.
+        for attempt in 0..5 {
             self.send_socket.send_to(&packet, addr)?;
-            if attempt != 2 {
-                std::thread::sleep(Duration::from_millis(20));
+            if attempt != 4 {
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
         Ok(())
@@ -530,9 +573,10 @@ impl SimClient {
         let count = bytes.len().min(packet.len() - 5);
         packet[5..5 + count].copy_from_slice(&bytes[..count]);
         let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        for _ in 0..3 {
-            self.send_socket.send_to(&packet, addr)?;
-        }
+        // Unlike model LOAD, script LOAD always rebuilds the bridge. Sending
+        // duplicates can make the freshly-created task consume a trailing
+        // datagram and immediately rebuild itself again.
+        self.send_socket.send_to(&packet, addr)?;
         Ok(())
     }
 
@@ -574,6 +618,11 @@ impl SimClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_command_uses_bridge_lifecycle_protocol() {
+        assert_eq!(lifecycle_packet(2), *b"VCMD\x02");
+    }
 
     #[test]
     fn requested_stop_masks_delayed_running_telemetry() {

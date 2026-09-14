@@ -195,6 +195,15 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
   const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
+  const loadedModelDirectory = (() => {
+    const mainPath = xmlFiles.find(file => file.category === 'main')?.path || '';
+    const match = mainPath.replace(/\\/g, '/').match(/^aircraft\/([^/]+)\//i);
+    return match?.[1] || '';
+  })();
+  // handleOpenRemoteModel records the exact FTP directory selected by the
+  // user/script. This remains authoritative even when parsing replaces the
+  // project aircraft name with the human-readable fdm_config name.
+  const remoteModelDirectory = localStorage.getItem('jsbsim-remote-model') || '';
   const [showXml, setShowXml] = useState(false);
   const [showXmlSourceBrowser, setShowXmlSourceBrowser] = useState(false);
   const [uploadReview, setUploadReview] = useState<{ documents: XmlSourceDocument[]; resolve: () => void } | null>(null);
@@ -608,11 +617,17 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     clearAll();
     const remote = await ftpDownloadModel(model);
     const data = await parseXml(remote.xml);
+    // Commit the selected directory before loadProject updates the parsed
+    // display name, preventing a render from briefly reusing the prior model.
+    localStorage.setItem('jsbsim-remote-model', model);
     // The file name and JSBSim's internal <fileheader> name are allowed to
     // differ (for example c172r.xml may contain the internal name c172).
     // The requested remote path is therefore the model identity; do not
     // reject a valid model just because those two names differ.
     loadProject(data);
+    // Keep the remote directory ID as the launch target; the parsed XML may
+    // expose a different human-readable fdm_config name.
+    setLibrarySimulationModel(model);
     clearImportedSubFiles();
     // Keep a separate baseline for every aircraft. A single global baseline
     // makes switching c172x -> 737 look like a local edit and can upload the
@@ -621,7 +636,6 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     localStorage.setItem('jsbsim-project', JSON.stringify(data));
     localStorage.setItem('jsbsim-raw-xml', remote.xml);
     localStorage.setItem('jsbsim-reference-files', '[]');
-    localStorage.setItem('jsbsim-remote-model', model);
     onLog?.(`[${new Date().toLocaleTimeString()}] 已从 NuttX 加载模型: ${model}`);
   };
 
@@ -881,7 +895,11 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
           <SimMenu loading={loading} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}
-            selectedModelFromLibrary={hasLoadedModel ? aircraft.name : librarySimulationModel} />
+            // aircraft.name is the XML's display name (for example
+            // "OV10 Bronco"), while the simulator needs the model directory
+            // ID ("OV10"). Keep the library selection as the authoritative
+            // launch target when a model has been loaded.
+            selectedModelFromLibrary={librarySimulationModel || remoteModelDirectory || loadedModelDirectory || (hasLoadedModel ? aircraft.name : '')} />
         </div>
         {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}
         <div className="toolbar-right">
