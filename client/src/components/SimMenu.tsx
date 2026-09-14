@@ -12,6 +12,7 @@ import {
   ftpUploadFile,
 } from '../utils/tauriApi';
 import ScriptEditorDialog, { type ScriptEditorValue } from './ScriptEditorDialog';
+import { useSimSocket } from '../sim/useSimSocket';
 
 interface SimMenuProps {
   loading?: boolean;
@@ -40,6 +41,60 @@ function readVariableCache(key: string): string[] {
   } catch {
     return [];
   }
+}
+
+const SIM_TARGET_CACHE_KEY = 'jsbsim-last-simulation-target';
+
+function readSavedSimulationTarget(): { script: string; model: string } {
+  try {
+    const value = JSON.parse(localStorage.getItem(SIM_TARGET_CACHE_KEY) || '{}');
+    return {
+      script: typeof value?.script === 'string' ? value.script : '',
+      model: typeof value?.model === 'string' ? value.model : '',
+    };
+  } catch {
+    return { script: '', model: '' };
+  }
+}
+
+function saveSimulationTarget(script: string, model: string) {
+  localStorage.setItem(SIM_TARGET_CACHE_KEY, JSON.stringify({ script, model }));
+}
+
+function scriptEditorCacheKey(path: string) {
+  const file = path.split('/').pop() || path;
+  return `jsbsim-script-editor:${file}`;
+}
+
+function readSavedScriptEditor(path: string): ScriptEditorValue | null {
+  if (!path) return null;
+  try {
+    const value = JSON.parse(localStorage.getItem(scriptEditorCacheKey(path)) || 'null');
+    return value && typeof value.name === 'string' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseScriptEditorValue(file: string, xml: string): ScriptEditorValue {
+  const documentXml = new DOMParser().parseFromString(xml, 'application/xml');
+  if (documentXml.querySelector('parsererror')) throw new Error(`脚本 XML 解析失败: ${file}`);
+  const aircraft = documentXml.querySelector('use')?.getAttribute('aircraft')?.trim();
+  if (!aircraft) throw new Error(`脚本 ${file} 未声明 <use aircraft="...">`);
+  return {
+    name: file,
+    aircraft,
+    initialize: documentXml.querySelector('use')?.getAttribute('initialize') || '',
+    start: documentXml.querySelector('run')?.getAttribute('start') || '0',
+    end: documentXml.querySelector('run')?.getAttribute('end') || '',
+    dt: documentXml.querySelector('run')?.getAttribute('dt') || '',
+    events: Array.from(documentXml.querySelectorAll('event')).map(event => ({
+      name: event.getAttribute('name') || '未命名事件',
+      condition: event.querySelector('condition')?.textContent?.trim().replace(/\s+/g, ' ') || '无条件',
+      sets: Array.from(event.querySelectorAll('set')).map(set => ({ name: set.getAttribute('name') || '', value: set.getAttribute('value') || '' })),
+      notifies: Array.from(event.querySelectorAll('notify')).map(notify => notify.textContent?.trim().replace(/\s+/g, ' ') || notify.getAttribute('name') || ''),
+    })),
+  };
 }
 
 function directChildren(element: Element, tagName: string): Element[] {
@@ -149,6 +204,8 @@ type Submenu = 'model' | 'script' | null;
 type SimPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'restarting' | 'pausing' | 'paused' | 'resuming' | 'loading';
 
 export default function SimMenu({ loading: parentLoading = false, onLog, onOpenRemoteModel, onSyncRemoteModel, selectedModelFromLibrary = '' }: SimMenuProps) {
+  const { telemetry } = useSimSocket();
+  const savedTargetRef = useRef(readSavedSimulationTarget());
   const [open, setOpen] = useState(false);
   const [submenu, setSubmenu] = useState<Submenu>(null);
   const [running, setRunning] = useState(false);
@@ -170,21 +227,31 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [tests, setTests] = useState<TestScript[]>([]);
   const [models, setModels] = useState<AircraftModel[]>([]);
-  const [selectedTest, setSelectedTest] = useState('');
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedTest, setSelectedTest] = useState(() => readSavedSimulationTarget().script);
+  const [selectedModel, setSelectedModel] = useState(() => readSavedSimulationTarget().model);
   /* The bridge clears status.model/status.script after STOP.  Keep the
    * user's last valid launch target independently so STOP never forces an
    * unnecessary second model selection before START can be used again. */
-  const [preparedTarget, setPreparedTarget] = useState({ script: '', model: '' });
+  const [preparedTarget, setPreparedTarget] = useState(() => readSavedSimulationTarget());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<SimPhase>('idle');
-  const [scriptEditor, setScriptEditor] = useState<ScriptEditorValue>({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
+  const [scriptEditor, setScriptEditor] = useState<ScriptEditorValue>(() =>
+    readSavedScriptEditor(savedTargetRef.current.script) || { name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
   const [scriptEditorExpanded, setScriptEditorExpanded] = useState(false);
   const [globalVariables, setGlobalVariables] = useState<string[]>(() => Array.from(new Set([
     ...readVariableCache('jsbsim-global-variables'),
     ...readVariableCache('jsbsim-available-variables'),
   ])));
+
+  useEffect(() => {
+    if (selectedTest || selectedModel || preparedTarget.script || preparedTarget.model) {
+      saveSimulationTarget(
+        selectedTest || preparedTarget.script,
+        selectedModel || preparedTarget.model,
+      );
+    }
+  }, [selectedTest, selectedModel, preparedTarget]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const scriptSourceRef = useRef<{ path: string; xml: string }>({ path: '', xml: '' });
@@ -205,6 +272,25 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     const stamp = new Date().toLocaleTimeString();
     onLog?.(`[${stamp}] ${message}`);
   }, [onLog]);
+
+  useEffect(() => {
+    const path = savedTargetRef.current.script;
+    if (!path) return;
+    let cancelled = false;
+    const file = path.split('/').pop() || path;
+    void ftpDownloadScript(file).then(script => {
+      if (cancelled) return;
+      const value = parseScriptEditorValue(file, script.xml);
+      scriptSourceRef.current = { path: path.startsWith('scripts/') ? path : `scripts/${file}`, xml: script.xml };
+      localStorage.setItem(scriptEditorCacheKey(path), JSON.stringify(value));
+      setScriptEditor(value);
+      setSelectedModel(value.aircraft);
+      setPreparedTarget({ script: path, model: value.aircraft });
+    }).catch(error => appendLog(`恢复脚本编辑失败: ${error?.message || error}`));
+    return () => { cancelled = true; };
+    // Restore once at startup; parent log callback identity is not stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadLists = useCallback(async () => {
     try {
@@ -305,11 +391,15 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     /* Selecting a run script loads its aircraft into the canvas too.  That
      * model update must not be mistaken for an explicit model selection: it
      * would clear the script context and make the script editor disappear. */
-    if (selectedTest) {
+    if (selectedTest || preparedTarget.script) {
       setSelectedModel(selectedModelFromLibrary);
       setPreparedTarget(current => current.script
         ? { ...current, model: selectedModelFromLibrary }
         : current);
+      saveSimulationTarget(
+        selectedTest || preparedTarget.script,
+        selectedModelFromLibrary,
+      );
       return;
     }
     setSelectedModel(selectedModelFromLibrary);
@@ -318,7 +408,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setScriptEditor({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
     setScriptEditorExpanded(false);
     setPhase('idle');
-  }, [selectedModelFromLibrary, selectedTest]);
+  }, [selectedModelFromLibrary, selectedTest, preparedTarget.script]);
 
   // Close on outside click
   useEffect(() => {
@@ -343,6 +433,14 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const activeName = selectedTest || selectedModel || preparedTarget.script ||
     preparedTarget.model || currentScript || currentModel || '';
   const displayName = activeName.split('/').pop()?.replace(/\.xml$/i, '') || '';
+  const scriptStart = Number.parseFloat(scriptEditor.start);
+  const scriptEnd = Number.parseFloat(scriptEditor.end);
+  const totalSimulationTime = Number.isFinite(scriptStart) && Number.isFinite(scriptEnd) && scriptEnd >= scriptStart
+    ? scriptEnd - scriptStart
+    : null;
+  const elapsedSimulationTime = typeof telemetry?.t === 'number' && Number.isFinite(telemetry.t)
+    ? Math.max(0, telemetry.t - (Number.isFinite(scriptStart) ? scriptStart : 0))
+    : null;
 
   const handleRunSelected = useCallback(async () => {
     const script = selectedTest || preparedTarget.script || undefined;
@@ -370,6 +468,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       localLifecycleControlUntilRef.current = Date.now() + 35000;
       const res = await simStart({ script, model: script ? modelToSync : model });
       setPreparedTarget({ script: script || '', model: modelToSync || '' });
+      saveSimulationTarget(script || '', modelToSync || '');
       setRunning(true);
       setPaused(false);
       setCurrentScript(res.script || null);
@@ -403,27 +502,13 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setSelectedTest(path);
       const file = path.split('/').pop() || path;
       const script = await ftpDownloadScript(file);
-      const documentXml = new DOMParser().parseFromString(script.xml, 'application/xml');
-      if (documentXml.querySelector('parsererror')) throw new Error(`脚本 XML 解析失败: ${file}`);
-      const aircraft = documentXml.querySelector('use')?.getAttribute('aircraft')?.trim();
-      if (!aircraft) throw new Error(`脚本 ${file} 未声明 <use aircraft="...">`);
+      const editorValue = parseScriptEditorValue(file, script.xml);
+      const aircraft = editorValue.aircraft;
       if (models.length > 0 && !models.some(model => model.path === aircraft)) {
         throw new Error(`脚本关联模型 ${aircraft} 不在 NuttX 模型库中`);
       }
-      setScriptEditor({
-        name: file,
-        aircraft,
-        initialize: documentXml.querySelector('use')?.getAttribute('initialize') || '',
-        start: documentXml.querySelector('run')?.getAttribute('start') || '0',
-        end: documentXml.querySelector('run')?.getAttribute('end') || '',
-        dt: documentXml.querySelector('run')?.getAttribute('dt') || '',
-        events: Array.from(documentXml.querySelectorAll('event')).map(event => ({
-          name: event.getAttribute('name') || '未命名事件',
-          condition: event.querySelector('condition')?.textContent?.trim().replace(/\s+/g, ' ') || '无条件',
-          sets: Array.from(event.querySelectorAll('set')).map(set => ({ name: set.getAttribute('name') || '', value: set.getAttribute('value') || '' })),
-          notifies: Array.from(event.querySelectorAll('notify')).map(notify => notify.textContent?.trim().replace(/\s+/g, ' ') || notify.getAttribute('name') || ''),
-        })),
-      });
+      setScriptEditor(editorValue);
+      localStorage.setItem(scriptEditorCacheKey(path), JSON.stringify(editorValue));
       scriptSourceRef.current = {
         path: path.startsWith('scripts/') ? path : `scripts/${file}`,
         xml: script.xml,
@@ -431,6 +516,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setScriptEditorExpanded(true);
       setSelectedModel(aircraft);
       setPreparedTarget({ script: path, model: aircraft });
+      saveSimulationTarget(path, aircraft);
       if (!onOpenRemoteModel) throw new Error('编辑器模型加载接口不可用');
       appendLog(`脚本关联模型: ${aircraft}，正在加载到编辑器`);
       await onOpenRemoteModel(aircraft);
@@ -469,6 +555,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setSelectedTest(remotePath);
     setSelectedModel(value.aircraft.trim());
     setPreparedTarget({ script: remotePath, model: value.aircraft.trim() });
+    saveSimulationTarget(remotePath, value.aircraft.trim());
     appendLog(`脚本已写入并回读确认: /mnt/sdcard/jsbsim/${remotePath}`);
     await loadLists();
   }, [appendLog, loadLists]);
@@ -511,6 +598,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setSelectedModel(path);
       setSelectedTest('');
       setPreparedTarget({ script: '', model: path });
+      saveSimulationTarget('', path);
       if (!onOpenRemoteModel) throw new Error('编辑器模型加载接口不可用');
       await onOpenRemoteModel(path);
       appendLog(`模型已加载到编辑器: ${path}`);
@@ -750,6 +838,13 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             <div className="sim-status-info">
               <span className="sim-status-text">{statusText}</span>
               {displayName && <span className="sim-status-target" title={activeName}>{displayName}</span>}
+              {phase !== 'idle' && (
+                <span className="sim-status-target sim-runtime-time">
+                  ⏱ 已运行 {elapsedSimulationTime == null ? '--' : `${elapsedSimulationTime.toFixed(1)} s`}
+                  {' / 总计 '}
+                  {totalSimulationTime == null ? '未设置' : `${totalSimulationTime.toFixed(1)} s`}
+                </span>
+              )}
               {external && cpuLoad !== null && (
                 <span className="sim-status-target">
                   CPU {cpuLoad.toFixed(1)}%
