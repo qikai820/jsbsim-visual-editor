@@ -12,7 +12,10 @@ mod jsbsim_process;
 mod ftp_sync;
 
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
 // ── Shared application state ────────────────────────────────────────────────
@@ -79,9 +82,14 @@ struct ControlMessage {
 }
 
 fn external_sim_mode() -> bool {
-    matches!(
+    /* This application is packaged primarily as the NuttX upper computer.
+     * A release/AppImage does not pass through run-tauri.sh, so requiring
+     * SIM_EXTERNAL=1 made its HUD consume remote telemetry while the toolbar
+     * queried the stopped local JSBSim manager.  Default to the remote board;
+     * local-only development remains available with SIM_EXTERNAL=0. */
+    !matches!(
         std::env::var("SIM_EXTERNAL").ok().as_deref(),
-        Some("1") | Some("true") | Some("yes") | Some("TRUE") | Some("YES")
+        Some("0") | Some("false") | Some("no") | Some("FALSE") | Some("NO")
     )
 }
 
@@ -413,6 +421,15 @@ fn sim_start(
             client.send_command(1).map_err(|e| e.to_string())?;
         }
         client.request_lifecycle_state("running");
+        let expected_model = model.as_deref()
+            .or_else(|| script.as_deref())
+            .ok_or("The selected launch has no model")?;
+        if !client.wait_for_running_model(expected_model, std::time::Duration::from_secs(30)) {
+            return Err(format!(
+                "NuttX did not confirm model '{}' running within 30 seconds",
+                expected_model
+            ));
+        }
         return Ok(serde_json::json!({"running": true, "external": true,
                                      "script": script, "model": model}));
     }
@@ -437,8 +454,12 @@ fn sim_pause(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
-        client.send_command(3).map_err(|e| e.to_string())?;
         client.request_lifecycle_state("paused");
+        client.send_lifecycle_command(3).map_err(|e| e.to_string())?;
+        if !client.wait_for_lifecycle_state("paused", std::time::Duration::from_secs(3)) {
+            client.clear_lifecycle_request("paused");
+            return Err("仿真机未确认暂停，请检查 UDP 控制与回传连接".to_string());
+        }
         return Ok(serde_json::json!({"running": true, "paused": true}));
     }
     let state = app.state::<AppState>();
@@ -452,8 +473,12 @@ fn sim_resume(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
-        client.send_command(4).map_err(|e| e.to_string())?;
         client.request_lifecycle_state("running");
+        client.send_lifecycle_command(4).map_err(|e| e.to_string())?;
+        if !client.wait_for_lifecycle_state("running", std::time::Duration::from_secs(3)) {
+            client.clear_lifecycle_request("running");
+            return Err("仿真机未确认继续，请检查 UDP 控制与回传连接".to_string());
+        }
         return Ok(serde_json::json!({"running": true, "paused": false}));
     }
     let state = app.state::<AppState>();
@@ -467,7 +492,7 @@ fn sim_restart(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
-        client.send_command(6).map_err(|e| e.to_string())?;
+        client.send_restart().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("running");
         return Ok(serde_json::json!({"running": true, "restarting": true, "external": true}));
     }
@@ -490,6 +515,71 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let manager = state.jsbsim.lock().map_err(|e| e.to_string())?;
     manager.stop()?;
     Ok(serde_json::json!({ "running": false }))
+}
+
+#[tauri::command]
+fn nsh_execute(command: String) -> Result<String, String> {
+    let command = command.trim();
+    if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
+        return Err("NSH command must be one non-empty line of at most 512 bytes".to_owned());
+    }
+    let host = std::env::var("SIM_UDP_HOST")
+        .unwrap_or_else(|_| "192.168.101.81".to_owned());
+    let port = std::env::var("NSH_TELNET_PORT")
+        .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
+    let address: SocketAddr = format!("{}:{}", host, port).parse()
+        .map_err(|_| format!("invalid NSH target {}:{}", host, port))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("cannot connect to NuttX NSH: {}", error))?;
+    stream.set_read_timeout(Some(Duration::from_millis(250))).map_err(|e| e.to_string())?;
+    stream.write_all(command.as_bytes()).and_then(|_| stream.write_all(b"\n"))
+        .map_err(|error| format!("cannot send NSH command: {}", error))?;
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 1024];
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut interrupted = false;
+    loop {
+        if Instant::now() >= deadline || output.len() >= 16384 {
+            /* Commands such as `top` continuously refresh the terminal.
+             * This console executes one command per connection, so stop the
+             * remote foreground command rather than leaving the UI waiting
+             * forever for a prompt that will never arrive. */
+            let _ = stream.write_all(&[0x03]);
+            interrupted = true;
+            break;
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(length) => {
+                output.extend_from_slice(&buffer[..length]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock ||
+                          error.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(error) => return Err(format!("cannot read NSH output: {}", error)),
+        }
+    }
+
+    /* Do not close an idle Telnet socket underneath nsh_session: it would
+     * make the board print `readline failed` and reset the TCP state.  End
+     * the shell session cleanly after this one-shot command instead. */
+    if command != "exit" {
+        let _ = stream.write_all(b"exit\n");
+        let cleanup_deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < cleanup_deadline {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => output.extend_from_slice(&buffer[..length]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock ||
+                              error.kind() == std::io::ErrorKind::TimedOut => break,
+                Err(_) => break,
+            }
+        }
+    }
+    let mut text = String::from_utf8_lossy(&output).replace('\r', "");
+    if interrupted {
+        text.push_str("\n[continuous output stopped after 2 seconds; Ctrl+C sent]\n");
+    }
+    Ok(text)
 }
 
 #[tauri::command]
@@ -522,7 +612,10 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let simulation_dt = client.simulation_dt();
         return Ok(serde_json::json!({
             "external": true,
-            "running": connected && (remote_state == "running" || remote_state == "paused"),
+            /* Lifecycle and transport health are independent.  A brief UDP
+             * timeout must not turn a running model's Stop button back into
+             * Start; the connection chip reports `connected` separately. */
+            "running": remote_state == "running" || remote_state == "paused",
             "paused": remote_state == "paused",
             "stopped": remote_state == "stopped",
             "state": remote_state,
@@ -748,6 +841,7 @@ fn main() {
             parse_dataflow,
             sim_start,
             sim_stop,
+            nsh_execute,
             sim_status,
             sim_pause,
             sim_resume,

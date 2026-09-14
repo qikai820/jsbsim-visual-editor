@@ -144,6 +144,10 @@ export async function simStop(): Promise<any> {
   return call('sim_stop');
 }
 
+export async function nshExecute(command: string): Promise<string> {
+  return call('nsh_execute', { command });
+}
+
 export async function simPause(): Promise<any> {
   return call('sim_pause');
 }

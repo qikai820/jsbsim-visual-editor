@@ -19,6 +19,10 @@ const DEFAULT_CTRL_HOST: &str = "192.168.101.81";
 const DEFAULT_CTRL_PORT: u16 = 5802;
 const DISCOVERY_PORT: u16 = 5803;
 
+fn model_basename(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model).trim_end_matches(".xml")
+}
+
 // ── public struct ──────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -69,6 +73,25 @@ fn jsbsim_task_alive(frame: Option<&Value>) -> Option<bool> {
             .map(|name| name.eq_ignore_ascii_case("jsbsim") || name.to_ascii_lowercase().starts_with("jsbsim "))
             .unwrap_or(false)
     }))
+}
+
+fn combined_telemetry(
+    latest: Option<&Value>,
+    latest_sim_status: Option<&Value>,
+    latest_task_top: Option<&Value>,
+) -> Option<Value> {
+    /* The receiver gets visual and task-top as separate UDP datagrams.  The
+     * Tauri event loop samples at 30 Hz, so returning only the last datagram
+     * can permanently miss a 10 Hz task-top stream depending on packet
+     * phase after a model reload.  Always publish one coherent snapshot. */
+    let mut snapshot = latest_sim_status.cloned().or_else(|| latest.cloned())?;
+    if let (Some(object), Some(task_top)) = (
+        snapshot.as_object_mut(),
+        latest_task_top.and_then(|frame| frame.get("task_top")),
+    ) {
+        object.insert("task_top".to_owned(), task_top.clone());
+    }
+    Some(snapshot)
 }
 
 // Compile-time assertion: SimClient must be Clone + Send + Sync for Tauri.
@@ -124,6 +147,7 @@ impl SimClient {
         // ── receiver thread ───────────────────────────────────────────
         {
             let inner = Arc::clone(&inner);
+            let telemetry_ctrl_addr = Arc::clone(&ctrl_addr);
             let sock = recv_socket;
             std::thread::Builder::new()
                 .name("sim-client-recv".into())
@@ -131,24 +155,46 @@ impl SimClient {
                     let mut buf = [0u8; 8192];
                     loop {
                         match sock.recv_from(&mut buf) {
-                            Ok((n, _addr)) => {
+                            Ok((n, peer)) => {
                                 if let Ok(text) = std::str::from_utf8(&buf[..n]) {
                                     if let Ok(val) = serde_json::from_str::<Value>(text) {
                                         if val.is_object() {
+                                            /* Telemetry is authoritative proof of which board is
+                                             * connected.  Route subsequent control packets to its
+                                             * source IP: discovery packets or an outdated setting
+                                             * must never leave the UI receiving telemetry from one
+                                             * target while controlling another. */
+                                            if let Ok(mut address) = telemetry_ctrl_addr.lock() {
+                                                *address = SocketAddr::new(peer.ip(), ctrl_port);
+                                            }
                                             let mut state = inner.lock().unwrap();
+                                            let heartbeat = val.get("kind")
+                                                .and_then(Value::as_str) == Some("heartbeat");
                                             if let Some(remote_state) = val.get("state").and_then(Value::as_str) {
                                                 state.latest_sim_status = Some(val.clone());
-                                                /* waiting/stopped are authoritative board
-                                                 * acknowledgements.  They must clear a stale
-                                                 * local START request from an earlier run. */
-                                                if remote_state == "waiting" || remote_state == "stopped" {
+                                                /* Only a matching board state acknowledges a
+                                                 * lifecycle request.  During LOAD/restart the old
+                                                 * FDM can publish one final `stopped` frame after
+                                                 * START was sent; clearing a pending `running`
+                                                 * request on that stale frame made the toolbar
+                                                 * flash back to Start immediately. */
+                                                let acknowledged = state.commanded_lifecycle_state
+                                                    .as_deref()
+                                                    .map(|requested| requested == remote_state)
+                                                    .unwrap_or(false);
+                                                if acknowledged {
                                                     state.commanded_lifecycle_state = None;
                                                 }
                                             }
                                             if val.get("task_top").is_some() {
                                                 state.latest_task_top = Some(val.clone());
                                             }
-                                            state.latest = Some(val);
+                                            /* Heartbeat acknowledgements prove board reachability
+                                             * but carry no model data and must not replace the
+                                             * latest visual/task snapshot. */
+                                            if !heartbeat {
+                                                state.latest = Some(val);
+                                            }
                                             state.connected = true;
                                             state.last_packet_time = Instant::now();
                                             state.packets += 1;
@@ -244,9 +290,15 @@ impl SimClient {
         self.inner.lock().unwrap().connected
     }
 
-    /// Clone of the most recently received telemetry frame, or `None`.
+    /// Coherent visual telemetry plus the latest independently received task
+    /// statistics, or `None` before the first packet.
     pub fn latest(&self) -> Option<Value> {
-        self.inner.lock().unwrap().latest.clone()
+        let state = self.inner.lock().unwrap();
+        combined_telemetry(
+            state.latest.as_ref(),
+            state.latest_sim_status.as_ref(),
+            state.latest_task_top.as_ref(),
+        )
     }
 
     /// Latest packet which explicitly reports `running` / `paused` /
@@ -257,8 +309,22 @@ impl SimClient {
     }
 
     pub fn request_lifecycle_state(&self, requested: &str) {
-        self.inner.lock().unwrap().commanded_lifecycle_state =
-            Some(requested.to_owned());
+        let mut state = self.inner.lock().unwrap();
+        state.commanded_lifecycle_state = Some(requested.to_owned());
+        /* A command must be acknowledged by a new lifecycle frame.  Keeping
+         * the previous `running` frame made STOP -> START succeed instantly
+         * even when the stopped FDM never resumed. */
+        state.latest_sim_status = None;
+    }
+
+    /// Drop an unacknowledged optimistic lifecycle request.  This is used
+    /// after a command timeout so status polling exposes the board's real
+    /// state instead of continuing to display the requested state locally.
+    pub fn clear_lifecycle_request(&self, requested: &str) {
+        let mut state = self.inner.lock().unwrap();
+        if state.commanded_lifecycle_state.as_deref() == Some(requested) {
+            state.commanded_lifecycle_state = None;
+        }
     }
 
     pub fn lifecycle_state(&self) -> Option<String> {
@@ -375,6 +441,42 @@ impl SimClient {
         Ok(())
     }
 
+    /// Send a lifecycle command redundantly.  UDP `send_to` only means the
+    /// local OS accepted the datagram; it does not mean the NuttX bridge saw
+    /// it.  START/STOP/PAUSE/RESUME are idempotent, so retries are safe.
+    pub fn send_lifecycle_command(&self, command: u8) -> std::io::Result<()> {
+        let packet = [b'V', b'C', b'M', b'D', command];
+        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
+        for attempt in 0..3 {
+            self.send_socket.send_to(&packet, addr)?;
+            if attempt != 2 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Ok(())
+    }
+
+    /// Request a bridge restart.  The request identifier makes a retransmit
+    /// idempotent across the old and replacement NuttX bridge tasks.
+    pub fn send_restart(&self) -> std::io::Result<()> {
+        let request = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .as_millis() as u32;
+        let mut packet = [0u8; 9];
+        packet[0..4].copy_from_slice(b"VCMD");
+        packet[4] = 6; // VCMD_RESTART
+        packet[5..9].copy_from_slice(&request.to_le_bytes());
+
+        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
+        for attempt in 0..3 {
+            self.send_socket.send_to(&packet, addr)?;
+            if attempt != 2 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Ok(())
+    }
+
     /// Synchronize NuttX realtime clock only when telemetry reports a
     /// difference larger than the configured threshold.
     pub fn sync_clock_if_needed(&self, threshold_secs: u64) -> std::io::Result<Option<i64>> {
@@ -399,13 +501,19 @@ impl SimClient {
         let mut packet = [0u8; 80];
         packet[0..4].copy_from_slice(b"VCMD");
         packet[4] = 5; // VCMD_LOAD
-        let name = model.rsplit('/').next().unwrap_or(model)
-            .trim_end_matches(".xml");
+        let name = model_basename(model);
         let bytes = name.as_bytes();
         let count = bytes.len().min(packet.len() - 5);
         packet[5..5 + count].copy_from_slice(&bytes[..count]);
         let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        self.send_socket.send_to(&packet, addr)?;
+        /* A bridge reload closes and reopens its UDP control socket.  Repeat
+         * the idempotent LOAD datagram so a packet landing in that short gap
+         * does not leave the desktop UI believing a model switch succeeded.
+         * The bridge treats a duplicate request for its active model as a
+         * start, rather than reconstructing it a second time. */
+        for _ in 0..3 {
+            self.send_socket.send_to(&packet, addr)?;
+        }
         Ok(())
     }
 
@@ -416,15 +524,50 @@ impl SimClient {
         packet[0..4].copy_from_slice(b"VCMD");
         packet[4] = 8; // VCMD_LOAD_SCRIPT
         let script = script.rsplit('/').next().unwrap_or(script);
-        let model = model.rsplit('/').next().unwrap_or(model)
-            .trim_end_matches(".xml");
+        let model = model_basename(model);
         let payload = format!("{}|{}", script, model);
         let bytes = payload.as_bytes();
         let count = bytes.len().min(packet.len() - 5);
         packet[5..5 + count].copy_from_slice(&bytes[..count]);
         let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        self.send_socket.send_to(&packet, addr)?;
+        for _ in 0..3 {
+            self.send_socket.send_to(&packet, addr)?;
+        }
         Ok(())
+    }
+
+    /// Wait for the board to confirm both the requested model and its running
+    /// lifecycle state.  A successful `send_to` only confirms that Linux
+    /// accepted a UDP datagram; it is not evidence that NuttX reloaded it.
+    pub fn wait_for_running_model(&self, model: &str, timeout: Duration) -> bool {
+        let expected = model_basename(model);
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let confirmed = self.latest_sim_status().map(|frame| {
+                frame.get("state").and_then(Value::as_str) == Some("running") &&
+                frame.get("model").and_then(Value::as_str) == Some(expected)
+            }).unwrap_or(false);
+            if confirmed {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// Wait for a fresh lifecycle telemetry acknowledgement from the bridge.
+    pub fn wait_for_lifecycle_state(&self, expected: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let confirmed = self.latest_sim_status().map(|frame| {
+                frame.get("state").and_then(Value::as_str) == Some(expected)
+            }).unwrap_or(false);
+            if confirmed {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
     }
 }
 
@@ -457,5 +600,18 @@ mod tests {
         assert_eq!(jsbsim_task_alive(Some(&alive)), Some(true));
         assert_eq!(jsbsim_task_alive(Some(&crashed)), Some(false));
         assert_eq!(jsbsim_task_alive(Some(&serde_json::json!({"state":"running"}))), None);
+    }
+
+    #[test]
+    fn visual_snapshot_retains_independent_task_top_frame() {
+        let visual = serde_json::json!({"state":"running","model":"F450","timestamp":9.6});
+        let task_top = serde_json::json!({"kind":"task_top","task_top":{"tasks":[{"name":"jsbsim"}]}});
+        let combined = combined_telemetry(Some(&visual), Some(&visual), Some(&task_top)).unwrap();
+        assert_eq!(combined.get("state").and_then(Value::as_str), Some("running"));
+        assert_eq!(
+            combined.get("task_top").and_then(|value| value.get("tasks"))
+                .and_then(Value::as_array).map(Vec::len),
+            Some(1),
+        );
     }
 }

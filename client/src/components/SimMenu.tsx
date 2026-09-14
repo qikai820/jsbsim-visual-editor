@@ -253,9 +253,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         setCpuHistory(history => [...history, cores].slice(-100));
       }
       setRemoteState(status.state || (status.connected ? 'waiting' : 'disconnected'));
-      const remoteStopped = status.running === false &&
-        (status.connected === false || status.taskAlive === false || status.state === 'crashed' || status.state === 'stopped');
-      if (remoteStopped || Date.now() >= localLifecycleControlUntilRef.current) {
+      /* LOAD recreates the remote task and may briefly return the old
+       * `stopped` snapshot or report disconnected.  Only a confirmed crash
+       * may bypass the local command grace period; otherwise that stale
+       * snapshot makes the Start button flash back after one status poll. */
+      const remoteCrashed = status.taskAlive === false || status.state === 'crashed';
+      if (remoteCrashed || Date.now() >= localLifecycleControlUntilRef.current) {
         setRunning(status.running);
         setPaused(!!status.paused);
         setPhase(status.state === 'paused' ? 'paused' :
@@ -291,7 +294,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // closed or the bridge state is changed by another client.
   useEffect(() => {
     checkStatus();
-    const id = setInterval(checkStatus, 100);
+    const id = setInterval(checkStatus, 1000);
     return () => clearInterval(id);
   }, [checkStatus]);
 
@@ -354,8 +357,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           appendLog(`模型同步失败，继续启动 NuttX 现有模型: ${syncErr?.message || syncErr}`);
         }
       }
+      localLifecycleControlUntilRef.current = Date.now() + 35000;
       const res = await simStart({ script, model: script ? modelToSync : model });
-      localLifecycleControlUntilRef.current = Date.now() + 3000;
       setPreparedTarget({ script: script || '', model: modelToSync || '' });
       setRunning(true);
       setPaused(false);
@@ -363,7 +366,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setCurrentModel(res.model || null);
       setPhase('running');
     } catch (err: any) {
-      setError(err.message || '启动失败');
+      const message = err.message || '启动失败';
+      setError(message);
+      appendLog(`启动失败: ${message}`);
     }
     setLoading(false);
   }, [selectedTest, selectedModel, preparedTarget, onSyncRemoteModel]);
@@ -532,7 +537,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const handleRestart = useCallback(async () => {
     setLoading(true);
     setPhase('restarting');
-    appendLog('发送重新运行请求');
+    appendLog(`重新运行当前模型: ${displayName || '当前模型'}`);
     setError('');
     try {
       await simRestart();
@@ -544,7 +549,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setError(err.message || '重新运行失败');
     }
     setLoading(false);
-  }, []);
+  }, [appendLog, displayName]);
 
   const handlePauseToggle = useCallback(async () => {
     setLoading(true);
@@ -564,8 +569,10 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         setPhase('paused');
       }
     } catch (err: any) {
-      setError(err.message || '操作失败');
-      appendLog(`错误: ${err.message || '操作失败'}`);
+      const message = err instanceof Error ? err.message :
+        (typeof err === 'string' ? err : '操作失败');
+      setError(message);
+      appendLog(`错误: ${message}`);
     }
     setLoading(false);
   }, [paused]);
@@ -588,11 +595,20 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const statusText = external
     ? (!connected ? '等待连接' : remoteState === 'waiting' ? '已连接 · 等待开始' : phaseText[phase])
     : phaseText[phase];
-  // Connection polling starts as soon as the application opens, but CPU/RAM/FDM
-  // are runtime indicators. Keep the whole indicator hidden until a simulation
-  // has actually entered its lifecycle (or an already-running remote task is
-  // discovered), and hide it again after STOP returns to idle.
-  const showRuntimeStatus = running || phase !== 'idle';
+  /* Reload creates a new bridge/UDP task.  It can legitimately take longer
+   * than the two-second packet timeout, so distinguish that expected gap from
+   * a real disconnected board while a lifecycle request is still pending. */
+  const awaitingReloadTelemetry = external && !connected &&
+    Date.now() < localLifecycleControlUntilRef.current;
+  const connectionClass = connected ? 'online' :
+    (awaitingReloadTelemetry ? 'syncing' : 'offline');
+  const connectionLabel = connected ? '已连接' :
+    (awaitingReloadTelemetry ? '重载中' : '等待连接');
+  // On an external NuttX target this is a simulator/system status bar rather
+  // than a model-only indicator.  Keep connection, CPU, RAM and the latest FDM
+  // timing visible while the model is stopped so board health remains
+  // observable between runs and reloads.
+  const showRuntimeStatus = external || running || phase !== 'idle';
   const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
   const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.value)) * 1.1;
   const fdmValues = fdmVisibleHistory.map(sample => sample.value);
@@ -608,7 +624,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
 
   const handlePrimaryAction = () => {
     if (running) {
-      void handleStop();
+      if (paused) {
+        void handlePauseToggle();
+      } else {
+        void handleStop();
+      }
     } else if (selectedTest || selectedModel || preparedTarget.script || preparedTarget.model) {
       void handleRunSelected();
     } else {
@@ -629,11 +649,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           className="sim-primary-action"
           onClick={handlePrimaryAction}
           disabled={runBusy}
-          title={running ? '停止当前仿真' : (selectedTest || selectedModel || preparedTarget.script || preparedTarget.model ? '启动当前选择' : '选择脚本或模型')}
+          title={running ? (paused ? '继续当前仿真' : '停止当前仿真') : (selectedTest || selectedModel || preparedTarget.script || preparedTarget.model ? '启动当前选择' : '选择脚本或模型')}
         >
           {phase === 'starting' || phase === 'loading' ? '⏳ 加载中' :
            phase === 'stopping' ? '⏳ 停止中' :
-           running ? '⏹ 停止' : '▶ 开始'}
+           running ? (paused ? '▶ 继续' : '⏹ 停止') : '▶ 开始'}
         </button>
         <button
           className="sim-dropdown-toggle"
@@ -649,9 +669,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         </span>
       )}
       {showRuntimeStatus && (
-        <span className={`sim-connection-chip ${connected ? 'online' : 'offline'}`} title="仿真机连接状态">
+        <span className={`sim-connection-chip ${connectionClass}`} title="仿真机连接状态">
           <span className="sim-connection-dot" />
-          {connected ? '已连接' : '等待连接'}
+          {connectionLabel}
           {external && cpuCores.length > 0 && (
             <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
               CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(0)}%`).join(' · ')}

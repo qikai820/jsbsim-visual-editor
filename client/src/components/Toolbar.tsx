@@ -6,6 +6,7 @@ import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
 import SimulationConfigDialog from './SimulationConfigDialog';
 import LocalSettingsDialog from './LocalSettingsDialog';
+import NshConsoleDialog from './NshConsoleDialog';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
 import { isTauri } from '../utils/tauriApi';
@@ -208,6 +209,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const [showEditMenu, setShowEditMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showNshConsole, setShowNshConsole] = useState(false);
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
   const [librarySimulationModel, setLibrarySimulationModel] = useState('');
@@ -870,6 +872,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
             </button>
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowToolsMenu(false); }}>📊 {isZh ? '日志中心' : 'Log Center'}</button>
+              <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
             </div>}
           </div>
           <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 {isZh ? '模型库' : 'Models'}</button>
@@ -878,8 +881,9 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
           <SimMenu loading={loading} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}
-            selectedModelFromLibrary={librarySimulationModel} />
+            selectedModelFromLibrary={hasLoadedModel ? aircraft.name : librarySimulationModel} />
         </div>
+        {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}
         <div className="toolbar-right">
           {isTauri && <div className="window-controls" onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
             <button onClick={() => void windowAction('min')} title={isZh ? '最小化' : 'Minimize'} aria-label={isZh ? '最小化' : 'Minimize'}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10" /></svg></button>
@@ -969,4 +973,3 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     </>
   );
 }
-

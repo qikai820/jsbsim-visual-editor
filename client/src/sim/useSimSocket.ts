@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { sendControl as tauriSendControl, listenTelemetry, listenSimStatus, removeAllListeners } from '../utils/tauriApi';
+import { sendControl as tauriSendControl, listenTelemetry, listenSimStatus } from '../utils/tauriApi';
 
 export interface Telemetry {
   t?: number;
@@ -55,13 +55,24 @@ export function useSimSocket() {
 
   useEffect(() => {
     let cancelled = false;
+    const unlistenFns: (() => void)[] = [];
     (async () => {
-      await listenTelemetry((data: Telemetry) => {
+      const unlistenTelemetry = await listenTelemetry((data: Telemetry) => {
         if (!cancelled) setTelemetry(previous => mergeTelemetry(previous, data));
       });
-      await listenSimStatus((payload: any) => {
+      if (cancelled) {
+        unlistenTelemetry();
+        return;
+      }
+      unlistenFns.push(unlistenTelemetry);
+      const unlistenSimStatus = await listenSimStatus((payload: any) => {
         if (!cancelled) setConnected(!!payload.connected);
       });
+      if (cancelled) {
+        unlistenSimStatus();
+        return;
+      }
+      unlistenFns.push(unlistenSimStatus);
       try {
         const { getSimStatus } = await import('../utils/tauriApi');
         const status = await getSimStatus();
@@ -71,7 +82,10 @@ export function useSimSocket() {
         }
       } catch { /* ignore */ }
     })();
-    return () => { cancelled = true; removeAllListeners(); };
+    return () => {
+      cancelled = true;
+      for (const unlisten of unlistenFns) unlisten();
+    };
   }, []);
 
   const sendControl = useCallback((override: boolean, channels: number[]) => {
