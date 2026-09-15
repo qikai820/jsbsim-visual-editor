@@ -21,6 +21,7 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --floating-panel-width: 310px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2119,7 +2120,7 @@ html, body, #root {
 
 .jsbsim-log-sidebar { display: flex; flex-direction: column; height: auto; min-height: 0; }
 /* Dock independently below the HUD. It grows to ten lines, then scrolls. */
-.jsbsim-log-sidebar.jsbsim-log-detached { position: fixed; z-index: 2240; right: 8px; left: auto; top: 224px; width: min(310px, calc(100vw - 16px)); max-height: calc(100vh - 236px); background: #f3f7fa; box-shadow: 0 8px 24px rgba(30,64,80,.18); border: 1px solid #b9d4df; border-radius: 10px; overflow: hidden; }
+.jsbsim-log-sidebar.jsbsim-log-detached { position: fixed; z-index: 2240; right: 8px; left: auto; top: 224px; width: min(var(--floating-panel-width), calc(100vw - 16px)); max-height: calc(100vh - 236px); background: #f3f7fa; box-shadow: 0 8px 24px rgba(30,64,80,.18); border: 1px solid #b9d4df; border-radius: 10px; overflow: hidden; }
 .jsbsim-log-sidebar-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; color: #315c6b; background: #e8f1f5; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .4px; border-bottom: 1px solid #c9dce4; cursor: grab; user-select: none; }
 .jsbsim-log-sidebar-head:active { cursor: grabbing; }
 .jsbsim-log-sidebar-head > div { display: flex; align-items: center; gap: 8px; }
@@ -2136,7 +2137,7 @@ html, body, #root {
   background: #f8fbfc;
   color: #49616d;
 }
-.jsbsim-hud-window { position: fixed; z-index: 2250; right: 8px; top: 52px; width: min(310px, calc(100vw - 16px)); border: 0; border-radius: 0; overflow: hidden; background: transparent; box-shadow: none; }
+.jsbsim-hud-window { position: fixed; z-index: 2250; right: 8px; top: 52px; width: min(var(--floating-panel-width), calc(100vw - 16px)); border: 0; border-radius: 0; overflow: hidden; background: transparent; box-shadow: none; }
 .jsbsim-hud-window-head { display: flex; justify-content: space-between; padding: 7px 12px; color: var(--text-secondary); background: var(--bg-secondary); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 1px; cursor: grab; user-select: none; border-bottom: 1px solid var(--border); }
 .jsbsim-hud-window-head:active { cursor: grabbing; }
 .hud-window-actions { display: flex; align-items: center; gap: 8px; }
