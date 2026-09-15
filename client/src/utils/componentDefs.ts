@@ -265,6 +265,36 @@ export const componentDefs: ComponentDef[] = [
     outputs: [{ id: 'input', label: '输入数据' }],
   },
   {
+    type: 'serial_hil',
+    label: 'PX4 串口 HIL',
+    category: '协议',
+    color: '#0F766E',
+    icon: '🔌',
+    description: '通过 MAVLink 串口向 PX4 发送 HIL_SENSOR/HIL_GPS，并接收 HIL_ACTUATOR_CONTROLS',
+    params: {
+      name: { label: '链路名称', type: 'string', default: 'PX4 Serial HIL' },
+      device: { label: '串口设备', type: 'string', default: '/dev/ttyS1' },
+      baud: { label: '波特率', type: 'select', default: '921600', options: ['57600', '115200', '230400', '460800', '921600'] },
+      data_bits: { label: '数据位', type: 'select', default: '8', options: ['8'] },
+      parity: { label: '校验位', type: 'select', default: 'NONE', options: ['NONE'] },
+      stop_bits: { label: '停止位', type: 'select', default: '1', options: ['1'] },
+      flow_control: { label: '流控', type: 'select', default: 'NONE', options: ['NONE'] },
+      mavlink_version: { label: 'MAVLink 版本', type: 'select', default: '2', options: ['2', '1'] },
+      system_id: { label: '仿真系统 ID', type: 'integer', default: 1 },
+      component_id: { label: '仿真组件 ID', type: 'integer', default: 200 },
+      sensor_rate: { label: 'HIL_SENSOR 频率 (Hz)', type: 'number', default: 250 },
+      gps_rate: { label: 'HIL_GPS 频率 (Hz)', type: 'number', default: 10 },
+      sensor_properties: { label: 'HIL_SENSOR 属性映射', type: 'string', default: 'sensor/imu/accelX_mps2,sensor/imu/accelY_mps2,sensor/imu/accelZ_mps2,sensor/imu/gyroX_rps,sensor/imu/gyroY_rps,sensor/imu/gyroZ_rps,sensor/imu/magX_nT,sensor/imu/magY_nT,sensor/imu/magZ_nT,sensor/baro/pressure_hpa,sensor/baro/diff_pressure_hpa,sensor/baro/alt_m,sensor/imu/temp_C' },
+      gps_properties: { label: 'HIL_GPS 属性映射', type: 'string', default: 'sensor/gps/lat_rad,sensor/gps/long_rad,sensor/gps/alt_m,sensor/gps/vel_mps,sensor/gps/cog_rad,sensor/gps/vNorth_mps,sensor/gps/vEast_mps,sensor/gps/vDown_mps' },
+      actuator_properties: { label: 'HIL_ACTUATOR_CONTROLS 映射', type: 'string', default: Array.from({ length: 16 }, (_, index) => `fcs/throttle-cmd-norm[${index}]`).join(',') },
+    },
+    inputs: [
+      { id: 'imu', label: 'IMU/磁罗盘/气压' },
+      { id: 'gps', label: 'GPS' },
+    ],
+    outputs: [{ id: 'actuators', label: 'PX4 执行器 0..15' }],
+  },
+  {
     type: 'uavcan',
     label: 'UAVCAN Sensor',
     category: '协议',
@@ -355,4 +385,3 @@ export function getCategories(): { name: string; defs: ComponentDef[] }[] {
   }
   return Array.from(cats.entries()).map(([name, defs]) => ({ name, defs }));
 }
-

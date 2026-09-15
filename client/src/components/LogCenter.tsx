@@ -51,6 +51,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
   const [selectedFields, setSelectedFields] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [fieldFilter, setFieldFilter] = useState('');
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
 
   const refreshRemote = async () => {
     setStatus('正在读取仿真机日志…');
@@ -92,6 +93,26 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     if (Number.isNaN(date.getTime())) return value;
     return `${date.toLocaleString()} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
   };
+  const groupedItems = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const name of items) {
+      let day = tab === 'remote' && /^\d{4}-\d{2}-\d{2}\//.test(name) ? name.slice(0, 10) : '';
+      if (!day) {
+        const entry = tab === 'remote' ? remoteLogs.find(log => log.name === name) : localLogs.find(log => log.name === name);
+        const value = tab === 'remote' ? (entry as RemoteLogFile | undefined)?.modified : (entry as LocalLog | undefined)?.modified;
+        const date = typeof value === 'number' ? new Date(value) : value?.startsWith('epoch:') ? new Date(Number(value.slice(6)) * 1000) : value ? new Date(value) : null;
+        day = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString('en-CA') : '日期未知';
+      }
+      if (!groups.has(day)) groups.set(day, []);
+      groups.get(day)!.push(name);
+    }
+    return [...groups.entries()].sort(([left], [right]) => right.localeCompare(left));
+  }, [items, localLogs, remoteLogs, tab]);
+  const toggleDay = (day: string) => setExpandedDays(current => {
+    const next = new Set(current);
+    if (next.has(day)) next.delete(day); else next.add(day);
+    return next;
+  });
 
   const analyseLocal = async (name: string) => {
     const entry = localLogs.find(log => log.name === name); if (!entry || entry.analysis || entry.error) return;
@@ -116,7 +137,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     try {
       const result = await ftpDownloadLog(name, localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
       if (result.bytes) {
-        const file = new File([new Uint8Array(result.bytes)], result.file, { type: 'application/octet-stream', lastModified: Date.now() });
+        const file = new File([new Uint8Array(result.bytes)], result.file.split('/').pop() || result.file, { type: 'application/octet-stream', lastModified: Date.now() });
         await openFileArray([file]);
         setStatus(`下载并自动打开：${result.path}`);
       } else {
@@ -175,9 +196,12 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     <main className="log-center-body">
       <aside className="log-file-panel">
         <div className="log-panel-title">日志文件</div>
-        {items.length === 0 ? <div className="log-empty">暂无日志</div> : items.map(name => <button key={name} className={selected === name ? 'selected' : ''} onClick={() => setSelected(name)} onDoubleClick={() => { if (tab === 'remote') void downloadRemote(name); }} title={tab === 'remote' ? '双击下载并打开' : '选择日志'}>
-          <span>◫</span><div><strong>{name}</strong><small>{tab === 'remote' ? `${formatRemoteDate(remoteLogs.find(log => log.name === name)?.modified)} · ${formatSize(remoteLogs.find(log => log.name === name)?.size)}` : (localLogs.find(log => log.name === name) ? formatSize(localLogs.find(log => log.name === name)!.size) : '')}</small></div>
-        </button>)}
+        {items.length === 0 ? <div className="log-empty">暂无日志</div> : groupedItems.map(([day, names]) => <div className="log-day-group" key={day}>
+          <button className="log-day-title" onClick={() => toggleDay(day)} aria-expanded={expandedDays.has(day)} title={expandedDays.has(day) ? '折叠该日期' : '展开该日期'}><span className="log-day-arrow">{expandedDays.has(day) ? '▼' : '▶'}</span><span>{expandedDays.has(day) ? '📂' : '📁'}</span><strong>{day}</strong><small>{names.length}</small></button>
+          {expandedDays.has(day) && names.map(name => <button key={name} className={selected === name ? 'selected' : ''} onClick={() => setSelected(name)} onDoubleClick={() => { if (tab === 'remote') void downloadRemote(name); }} title={tab === 'remote' ? '双击下载并打开' : '选择日志'}>
+            <span>◫</span><div><strong>{name.split('/').pop()}</strong><small>{tab === 'remote' ? `${formatRemoteDate(remoteLogs.find(log => log.name === name)?.modified)} · ${formatSize(remoteLogs.find(log => log.name === name)?.size)}` : (localLogs.find(log => log.name === name) ? formatSize(localLogs.find(log => log.name === name)!.size) : '')}</small></div>
+          </button>)}
+        </div>)}
       </aside>
       <section className="log-plot-panel">
         <div className="log-plot-toolbar"><strong>时序图</strong>{chartPaths.map(item => <span key={item.field} style={{ color: item.color }}>● {item.field}</span>)}{analysis && selectedFields.length > 0 && <button onClick={exportCsv}>导出 CSV</button>}</div>

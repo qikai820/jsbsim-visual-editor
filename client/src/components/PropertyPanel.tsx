@@ -526,9 +526,10 @@ export default function PropertyPanel() {
           return true;
         })
         .map(([key, paramDef]) => {
-          if (node.data.componentType === 'input' && key === 'properties' &&
-              node.data.params.type === 'HIL_ACTUATOR_CONTROLS') {
-            const configured = String(node.data.params.properties || '')
+          if ((node.data.componentType === 'input' && key === 'properties' &&
+               node.data.params.type === 'HIL_ACTUATOR_CONTROLS') ||
+              (node.data.componentType === 'serial_hil' && key === 'actuator_properties')) {
+            const configured = String(node.data.params[key] || '')
               .split(',')
               .map(value => value.trim());
             const values = Array.from(
@@ -538,7 +539,7 @@ export default function PropertyPanel() {
             const updateOutput = (index: number, value: string) => {
               const next = [...values];
               next[index] = value;
-              updateNodeParams(node.id, { properties: next.join(',') });
+              updateNodeParams(node.id, { [key]: next.join(',') });
             };
             return (
               <div className="field-row hil-actuator-properties" key={key}>
@@ -1248,4 +1249,3 @@ function updatePropertyInExpr(expr: any, role: string, newVal: string): any {
   }
   return walk(expr);
 }
-

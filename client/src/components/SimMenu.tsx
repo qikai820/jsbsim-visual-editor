@@ -475,7 +475,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setCurrentModel(res.model || null);
       setPhase('running');
     } catch (err: any) {
-      const message = err.message || '启动失败';
+      const message = err?.message || String(err || '启动失败');
       setError(message);
       appendLog(`启动失败: ${message}`);
     }
@@ -942,7 +942,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       {scriptEditor.name && !scriptEditorExpanded && (
         <button className="script-flow-mini" onClick={() => setScriptEditorExpanded(true)} title="点击查看完整脚本逻辑">
           <span className="script-flow-mini-head">📋 {scriptEditor.name}</span>
-          <span className="script-flow-mini-meta">✈️ {scriptEditor.aircraft}　⏱ {scriptEditor.dt}s</span>
+          <span className="script-flow-mini-meta">
+            ✈️ {scriptEditor.aircraft}　⏱ 步长 {scriptEditor.dt || '—'}s
+            <span className="script-flow-mini-duration">
+              总时长 {totalSimulationTime == null ? '未设置' : `${totalSimulationTime.toFixed(1)}s`}
+            </span>
+          </span>
           <span className="script-flow-mini-track"><i>▶</i>{scriptEditor.events.slice(0, 4).map((event, index) => <i key={`${event.name}-${index}`}>{index + 1}</i>)}<i>■</i></span>
           <span className="script-flow-mini-hint">点击展开完整逻辑</span>
         </button>

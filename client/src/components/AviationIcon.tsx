@@ -18,6 +18,7 @@ const paths: Record<ComponentType, string> = {
   input: 'M3 5h10v4h8v6h-8v4H3z M8 9v6m-3-3h6',
   output: 'M3 5h10v4h8v6h-8v4H3z M16 9l4 3-4 3',
   uavcan: 'M5 5h14v14H5z M8 9h8M8 12h8M8 15h5 M3 8h2m14 0h2M3 16h2m14 0h2',
+  serial_hil: 'M4 5h16v14H4z M7 9h4m-4 3h7m-7 3h3 M17 8v8m-2-2 2 2 2-2',
 };
 
 export default function AviationIcon({ type, size = 18 }: { type: ComponentType; size?: number }) {
@@ -25,4 +26,3 @@ export default function AviationIcon({ type, size = 18 }: { type: ComponentType;
     <path d={paths[type]} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
   </svg>;
 }
-

@@ -411,6 +411,10 @@ fn sim_start(
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+        // MCAP chooses its directory and filename as soon as the bridge loads
+        // a model. Synchronize the board clock first so a stale boot clock
+        // cannot create logs under an old date such as 2022-03-01.
+        client.sync_clock_now().map_err(|e| e.to_string())?;
         if let Some(script_name) = script.as_deref() {
             let model_name = model.as_deref()
                 .ok_or("The selected script has no associated aircraft model")?;

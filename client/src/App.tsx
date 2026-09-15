@@ -32,15 +32,6 @@ function checkWebGL(): boolean {
   } catch { return false; }
 }
 
-function normalizeFloatingPanelPosition(value: any) {
-  return {
-    // Floating panels are anchored to the right. Positive X moves them out of
-    // the viewport and makes equal-width panels appear to have different sizes.
-    x: Math.min(0, Number(value?.x) || 0),
-    y: Number(value?.y) || 0,
-  };
-}
-
 // Aerodynamic functions use the same expression language as FCS functions.
 // Adapt them to channels so the signal-flow canvas can visualise dependencies
 // between coefficients and external aerodynamic properties.
@@ -180,10 +171,10 @@ function AppContent() {
   const logWindowRef = useRef<HTMLDivElement | null>(null);
   const followLogTailRef = useRef(true);
   const { telemetry, connected } = useSimSocket();
-  const [logPos, setLogPos] = useState(() => normalizeFloatingPanelPosition(JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}')));
+  const [logPos, setLogPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'));
   const logDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const [draggingLog, setDraggingLog] = useState(false);
-  const [hudPos, setHudPos] = useState(() => normalizeFloatingPanelPosition(JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}')));
+  const [hudPos, setHudPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
   const [hudVisible, setHudVisible] = useState(() => localStorage.getItem('jsbsim-hud-visible') !== 'false');
   const [draggingHud, setDraggingHud] = useState(false);
   const hudDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
@@ -219,8 +210,8 @@ function AppContent() {
       const settings = (event as CustomEvent).detail || {};
       setPaletteCollapsed(!!settings.paletteCollapsed);
       setPaletteWidth(Number(settings.paletteWidth || 250));
-      setHudPos(normalizeFloatingPanelPosition(settings.hudPosition));
-      setLogPos(normalizeFloatingPanelPosition(settings.logPosition));
+      setHudPos(settings.hudPosition || { x: 0, y: 0 });
+      setLogPos(settings.logPosition || { x: 0, y: 0 });
     };
     window.addEventListener('jsbsim-project-settings-loaded', restore);
     return () => window.removeEventListener('jsbsim-project-settings-loaded', restore);
@@ -362,7 +353,7 @@ function AppContent() {
     if (!draggingLog) return;
     const move = (e: PointerEvent) => setLogPos({ x: logDrag.current.left + e.clientX - logDrag.current.x, y: logDrag.current.top + e.clientY - logDrag.current.y });
     const up = () => {
-      setLogPos(pos => normalizeFloatingPanelPosition({ x: Math.abs(pos.x) < 18 ? 0 : pos.x, y: Math.abs(pos.y) < 18 ? 0 : pos.y }));
+      setLogPos(pos => ({ x: Math.abs(pos.x) < 18 ? 0 : pos.x, y: Math.abs(pos.y) < 18 ? 0 : pos.y }));
       setDraggingLog(false);
     };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
@@ -372,7 +363,7 @@ function AppContent() {
     if (!draggingHud) return;
     const move = (e: PointerEvent) => setHudPos({ x: hudDrag.current.left + e.clientX - hudDrag.current.x, y: hudDrag.current.top + e.clientY - hudDrag.current.y });
     const up = () => {
-      setHudPos(pos => normalizeFloatingPanelPosition({ x: Math.abs(pos.x) < 18 ? 0 : pos.x, y: Math.abs(pos.y) < 18 ? 0 : pos.y }));
+      setHudPos(pos => ({ x: Math.abs(pos.x) < 18 ? 0 : pos.x, y: Math.abs(pos.y) < 18 ? 0 : pos.y }));
       setDraggingHud(false);
     };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);

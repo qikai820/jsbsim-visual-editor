@@ -46,6 +46,30 @@ fn safe_component(value: &str) -> Result<&str, String> {
     Ok(value)
 }
 
+fn is_day_directory(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            index == 4 || index == 7 || byte.is_ascii_digit()
+        })
+}
+
+fn safe_log_path(value: &str) -> Result<&str, String> {
+    if value.is_empty() || value.contains("..") || value.contains('\\') || value.starts_with('/') {
+        return Err("invalid remote log path".into());
+    }
+    let parts: Vec<&str> = value.split('/').collect();
+    let valid = match parts.as_slice() {
+        [file] => safe_component(file).is_ok(),
+        [day, file] => is_day_directory(day) && safe_component(file).is_ok(),
+        _ => false,
+    };
+    if !valid { return Err("invalid remote log path".into()); }
+    Ok(value)
+}
+
 fn curl_output(args: &[&str]) -> Result<Vec<u8>, String> {
     let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let output = Command::new("curl")
@@ -150,6 +174,7 @@ fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn log_name_timestamp(name: &str) -> Option<String> {
+    let name = name.rsplit('/').next()?;
     let stem = name.strip_suffix(".mcap")?;
     let seconds = stem.rsplit('_').next()?.parse::<u64>().ok()?;
     // The file name is generated from NuttX epoch seconds. Prefix it so the
@@ -180,15 +205,26 @@ fn log_info(name: String) -> LogFileInfo {
 }
 
 pub fn list_logs() -> Result<Vec<LogFileInfo>, String> {
-    let mut files = list_ftp_relative("LOG")?;
-    files.retain(|name| name.to_ascii_lowercase().ends_with(".mcap"));
+    let entries = list_ftp_relative("LOG")?;
+    let mut files = Vec::new();
+    for entry in entries {
+        if entry.to_ascii_lowercase().ends_with(".mcap") {
+            files.push(entry);
+        } else if is_day_directory(&entry) {
+            if let Ok(day_files) = list_ftp_relative(&format!("LOG/{entry}")) {
+                files.extend(day_files.into_iter()
+                    .filter(|name| name.to_ascii_lowercase().ends_with(".mcap"))
+                    .map(|name| format!("{entry}/{name}")));
+            }
+        }
+    }
     files.sort();
     files.reverse();
     Ok(files.into_iter().map(log_info).collect())
 }
 
 pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<String, String> {
-    let file = safe_component(file)?;
+    let file = safe_log_path(file)?;
     if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
     let home = std::env::var("HOME").map_err(|_| "HOME is not available")?;
     let requested = configured_directory.unwrap_or("~/Downloads/JSBSim-Logs");
@@ -199,8 +235,9 @@ pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<St
         return Err("log download directory must be an absolute path inside the current user's home directory".into());
     }
     std::fs::create_dir_all(&directory).map_err(|e| format!("cannot create download directory: {e}"))?;
-    let target = directory.join(file);
-    let partial = directory.join(format!(".{file}.part"));
+    let local_name = file.rsplit('/').next().ok_or("invalid remote log path")?;
+    let target = directory.join(local_name);
+    let partial = directory.join(format!(".{local_name}.part"));
     let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
     let status = Command::new("curl").args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--user", &auth, "--output"])
         .arg(&partial).arg(&url).status().map_err(|e| format!("cannot start curl: {e}"))?;
@@ -216,7 +253,7 @@ pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<St
 }
 
 pub fn delete_log(file: &str) -> Result<(), String> {
-    let file = safe_component(file)?;
+    let file = safe_log_path(file)?;
     if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
     /* curl sends --quote commands before navigating to the URL path.  The
      * old `DELE <file>` therefore ran in the FTP home directory rather than

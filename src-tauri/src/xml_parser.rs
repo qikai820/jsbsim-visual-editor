@@ -1253,6 +1253,14 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
         params["name"] = json!(get_attr(out, "name").unwrap_or("localhost"));
         params["type"] = json!(get_attr(out, "type").unwrap_or("SOCKET"));
         let is_uavcan = get_attr(out, "type") == Some("UAVCAN");
+        let is_serial_hil = get_attr(out, "transport") == Some("SERIAL") &&
+            matches!(get_attr(out, "type"), Some("HIL_SENSOR") | Some("HIL_GPS"));
+        if is_serial_hil {
+            for key in ["device", "baud", "data_bits", "parity", "stop_bits", "flow_control",
+                        "mavlink_version", "system_id", "component_id"] {
+                if let Some(value) = get_attr(out, key) { params[key] = json!(value); }
+            }
+        }
         if is_uavcan {
             for key in ["interface", "node_id", "subject_id", "dsdl_path", "dsdl_type", "sensor_type"] {
                 if let Some(value) = get_attr(out, key) {
@@ -1290,6 +1298,32 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
             }
         }
 
+        if is_serial_hil {
+            let property_key = if get_attr(out, "type") == Some("HIL_GPS") {
+                params["gps_rate"] = params.get("rate").cloned().unwrap_or(json!(10));
+                "gps_properties"
+            } else {
+                params["sensor_rate"] = params.get("rate").cloned().unwrap_or(json!(250));
+                "sensor_properties"
+            };
+            params[property_key] = params.get("properties").cloned().unwrap_or(json!(""));
+            if let Some(existing) = nodes.iter_mut().find(|node|
+                node["data"]["componentType"] == "serial_hil" &&
+                node["data"]["params"]["device"] == params["device"])
+            {
+                if let (Some(target), Some(source)) =
+                    (existing["data"]["params"].as_object_mut(), params.as_object()) {
+                    for (key, value) in source { target.insert(key.clone(), value.clone()); }
+                }
+            } else {
+                let id = layout.next_id();
+                nodes.push(json!({"id": id, "type": "aircraftComponent",
+                    "data": {"label": "PX4 Serial HIL", "componentType": "serial_hil", "params": params},
+                    "position": layout.next_position()}));
+            }
+            continue;
+        }
+
         let id = layout.next_id();
         let name = params["name"].as_str().unwrap_or("localhost");
         nodes.push(json!({
@@ -1322,6 +1356,29 @@ fn parse_input(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut Lay
             .map(|property| get_text(property))
             .filter(|property| !property.is_empty())
             .collect();
+        let is_serial_hil = get_attr(input, "transport") == Some("SERIAL") &&
+            get_attr(input, "type") == Some("HIL_ACTUATOR_CONTROLS");
+        if is_serial_hil {
+            for key in ["device", "baud", "data_bits", "parity", "stop_bits", "flow_control", "mavlink_version"] {
+                if let Some(value) = get_attr(input, key) { params[key] = json!(value); }
+            }
+            params["actuator_properties"] = json!(properties.join(","));
+            if let Some(existing) = nodes.iter_mut().find(|node|
+                node["data"]["componentType"] == "serial_hil" &&
+                node["data"]["params"]["device"] == params["device"])
+            {
+                if let (Some(target), Some(source)) =
+                    (existing["data"]["params"].as_object_mut(), params.as_object()) {
+                    for (key, value) in source { target.insert(key.clone(), value.clone()); }
+                }
+            } else {
+                let id = layout.next_id();
+                nodes.push(json!({"id": id, "type": "aircraftComponent",
+                    "data": {"label": "PX4 Serial HIL", "componentType": "serial_hil", "params": params},
+                    "position": layout.next_position()}));
+            }
+            continue;
+        }
         if !properties.is_empty() {
             params["properties"] = json!(properties.join(","));
         }
@@ -2005,5 +2062,28 @@ mod ownership_tests {
         assert_eq!(node(&reloaded, "output")["data"]["params"]["rate"], 251.0);
         assert_eq!(node(&reloaded, "engine")["data"]["params"]["name"], "Motor");
         assert_eq!(node(&reloaded, "fuel_tank")["data"]["params"]["name"], "Tank 0");
+    }
+
+    #[test]
+    fn serial_hil_round_trip_merges_three_mavlink_channels() {
+        let xml = r#"<fdm_config name="Serial" version="2.0" release="TEST">
+  <input name="PX4" type="HIL_ACTUATOR_CONTROLS" transport="SERIAL" device="/dev/ttyS1" baud="921600"><property>fcs/a</property></input>
+  <output name="PX4" type="HIL_SENSOR" transport="SERIAL" device="/dev/ttyS1" baud="921600" rate="250"><property>sensor/imu/x</property></output>
+  <output name="PX4" type="HIL_GPS" transport="SERIAL" device="/dev/ttyS1" baud="921600" rate="10"><property>sensor/gps/lat</property></output>
+</fdm_config>"#;
+        let graph = parse_xml(xml, &HashMap::new()).expect("parse serial HIL");
+        let serial = node(&graph, "serial_hil");
+        assert_eq!(serial["data"]["params"]["device"], "/dev/ttyS1");
+        assert_eq!(serial["data"]["params"]["sensor_rate"], 250.0);
+        assert_eq!(serial["data"]["params"]["gps_rate"], 10.0);
+        assert_eq!(serial["data"]["params"]["actuator_properties"], "fcs/a");
+
+        let saved = crate::xml_generator::generate_xml(&graph).expect("save serial HIL");
+        assert!(saved.contains("type=\"HIL_SENSOR\" transport=\"SERIAL\""));
+        assert!(saved.contains("type=\"HIL_GPS\" transport=\"SERIAL\""));
+        assert!(saved.contains("type=\"HIL_ACTUATOR_CONTROLS\" transport=\"SERIAL\""));
+        let reloaded = parse_xml(&saved, &HashMap::new()).expect("reload serial HIL");
+        assert_eq!(reloaded["nodes"].as_array().unwrap().iter()
+            .filter(|item| item["data"]["componentType"] == "serial_hil").count(), 1);
     }
 }

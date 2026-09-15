@@ -37,6 +37,7 @@ pub struct SimClient {
     /// yet).
     send_socket: Arc<UdpSocket>,
     ctrl_addr: Arc<Mutex<SocketAddr>>,
+    configured_ctrl_addr: SocketAddr,
 }
 
 struct SimClientInner {
@@ -112,6 +113,23 @@ const _: fn() = || {
 // ── implementation ─────────────────────────────────────────────────────────
 
 impl SimClient {
+    fn control_addresses(&self) -> std::io::Result<(SocketAddr, Option<SocketAddr>)> {
+        let learned = *self.ctrl_addr.lock()
+            .map_err(|_| std::io::Error::other("control address lock"))?;
+        let fallback = (self.configured_ctrl_addr != learned)
+            .then_some(self.configured_ctrl_addr);
+        Ok((learned, fallback))
+    }
+
+    fn send_to_control_addresses(&self, packet: &[u8]) -> std::io::Result<()> {
+        let (learned, fallback) = self.control_addresses()?;
+        self.send_socket.send_to(packet, learned)?;
+        if let Some(fallback) = fallback {
+            self.send_socket.send_to(packet, fallback)?;
+        }
+        Ok(())
+    }
+
     /// Create a new `SimClient` and spawn background threads for receiving
     /// telemetry and connection-watchdog timing.
     ///
@@ -136,11 +154,15 @@ impl SimClient {
             .set_nonblocking(true)
             .expect("set_nonblocking");
 
-        // A separate socket for sending — avoids borrowing conflicts and
-        // works even if the recv socket hasn't been bound yet.
-        let send_socket =
-            UdpSocket::bind("0.0.0.0:0").expect("SimClient: ephemeral send bind failed");
-        let send_socket = Arc::new(send_socket);
+        // Send control from the same bound UDP endpoint that receives
+        // telemetry.  The bridge is rebuilt when a model/script is started
+        // again and associates its peer with the packet source.  An
+        // ephemeral sending socket made that association differ from the
+        // desktop's telemetry endpoint (5801), which could leave lifecycle
+        // commands/ACKs detached after the second start.
+        let send_socket = Arc::new(
+            recv_socket.try_clone().expect("SimClient: clone telemetry socket"),
+        );
 
         let ctrl_addr = Arc::new(Mutex::new(initial_ctrl_addr));
         let inner = Arc::new(Mutex::new(SimClientInner {
@@ -182,7 +204,22 @@ impl SimClient {
                                             let heartbeat = val.get("kind")
                                                 .and_then(Value::as_str) == Some("heartbeat");
                                             if let Some(remote_state) = val.get("state").and_then(Value::as_str) {
-                                                state.latest_sim_status = Some(val.clone());
+                                                let control_ack = val.get("kind")
+                                                    .and_then(Value::as_str) == Some("control_ack");
+                                                if control_ack {
+                                                    // ACK frames contain only lifecycle state. Merge
+                                                    // that state into the full visual frame so model,
+                                                    // timestamp and wall_time_s remain available.
+                                                    if let Some(status) = state.latest_sim_status.as_mut()
+                                                        .and_then(Value::as_object_mut)
+                                                    {
+                                                        status.insert("state".to_owned(), Value::String(remote_state.to_owned()));
+                                                    } else {
+                                                        state.latest_sim_status = Some(val.clone());
+                                                    }
+                                                } else {
+                                                    state.latest_sim_status = Some(val.clone());
+                                                }
                                                 /* Only a matching board state acknowledges a
                                                  * lifecycle request.  During LOAD/restart the old
                                                  * FDM can publish one final `stopped` frame after
@@ -314,6 +351,7 @@ impl SimClient {
             inner,
             send_socket,
             ctrl_addr,
+            configured_ctrl_addr: initial_ctrl_addr,
         }
     }
 
@@ -486,12 +524,17 @@ impl SimClient {
     /// it.  START/STOP/PAUSE/RESUME are idempotent, so retries are safe.
     pub fn send_lifecycle_command(&self, command: u8) -> std::io::Result<()> {
         let packet = lifecycle_packet(command);
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
+        let (addr, fallback) = self.control_addresses()?;
+        eprintln!("[sim-control] VCMD {} -> {}{}", command, addr,
+                  fallback.map(|value| format!(" and {}", value)).unwrap_or_default());
         // Spread retries across multiple bridge polling cycles. Bursting all
         // copies within 40 ms was ineffective when NuttX was busy flushing
         // MCAP or completing a model/script transition.
         for attempt in 0..5 {
             self.send_socket.send_to(&packet, addr)?;
+            if let Some(fallback) = fallback {
+                self.send_socket.send_to(&packet, fallback)?;
+            }
             if attempt != 4 {
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -510,9 +553,8 @@ impl SimClient {
         packet[4] = 6; // VCMD_RESTART
         packet[5..9].copy_from_slice(&request.to_le_bytes());
 
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
         for attempt in 0..3 {
-            self.send_socket.send_to(&packet, addr)?;
+            self.send_to_control_addresses(&packet)?;
             if attempt != 2 {
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -522,6 +564,30 @@ impl SimClient {
 
     /// Synchronize NuttX realtime clock only when telemetry reports a
     /// difference larger than the configured threshold.
+    pub fn sync_clock_now(&self) -> std::io::Result<u64> {
+        let local = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| std::io::Error::other(e.to_string()))?.as_secs();
+        self.send_clock_value(local)?;
+        // Give the bridge communication task a full set of polling cycles to
+        // apply CLOCK_REALTIME before a following LOAD starts MCAP.
+        std::thread::sleep(Duration::from_millis(100));
+        Ok(local)
+    }
+
+    fn send_clock_value(&self, local: u64) -> std::io::Result<()> {
+        let mut packet = [0u8; 13];
+        packet[0..4].copy_from_slice(b"VCMD");
+        packet[4] = 9; // VCMD_SET_WALL_CLOCK
+        packet[5..13].copy_from_slice(&local.to_le_bytes());
+        for attempt in 0..3 {
+            self.send_to_control_addresses(&packet)?;
+            if attempt != 2 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Ok(())
+    }
+
     pub fn sync_clock_if_needed(&self, threshold_secs: u64) -> std::io::Result<Option<i64>> {
         let remote = self.latest_sim_status()
             .and_then(|value| value.get("wall_time_s").and_then(Value::as_u64));
@@ -530,12 +596,7 @@ impl SimClient {
             .map_err(|e| std::io::Error::other(e.to_string()))?.as_secs();
         let difference = local as i128 - remote as i128;
         if difference.unsigned_abs() <= threshold_secs as u128 { return Ok(Some(0)); }
-        let mut packet = [0u8; 13];
-        packet[0..4].copy_from_slice(b"VCMD");
-        packet[4] = 9; // VCMD_SET_WALL_CLOCK
-        packet[5..13].copy_from_slice(&local.to_le_bytes());
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        self.send_socket.send_to(&packet, addr)?;
+        self.send_clock_value(local)?;
         Ok(Some(difference.clamp(i64::MIN as i128, i64::MAX as i128) as i64))
     }
 
@@ -548,14 +609,13 @@ impl SimClient {
         let bytes = name.as_bytes();
         let count = bytes.len().min(packet.len() - 5);
         packet[5..5 + count].copy_from_slice(&bytes[..count]);
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
         /* A bridge reload closes and reopens its UDP control socket.  Repeat
          * the idempotent LOAD datagram so a packet landing in that short gap
          * does not leave the desktop UI believing a model switch succeeded.
          * The bridge treats a duplicate request for its active model as a
          * start, rather than reconstructing it a second time. */
         for _ in 0..3 {
-            self.send_socket.send_to(&packet, addr)?;
+            self.send_to_control_addresses(&packet)?;
         }
         Ok(())
     }
@@ -572,11 +632,10 @@ impl SimClient {
         let bytes = payload.as_bytes();
         let count = bytes.len().min(packet.len() - 5);
         packet[5..5 + count].copy_from_slice(&bytes[..count]);
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
         // Unlike model LOAD, script LOAD always rebuilds the bridge. Sending
         // duplicates can make the freshly-created task consume a trailing
         // datagram and immediately rebuild itself again.
-        self.send_socket.send_to(&packet, addr)?;
+        self.send_to_control_addresses(&packet)?;
         Ok(())
     }
 

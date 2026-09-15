@@ -1718,11 +1718,36 @@ fn build_aerodynamics(groups: &std::collections::HashMap<String, Vec<&Value>>) -
 fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
     let mut output_nodes = groups.get("output").cloned().unwrap_or_default();
     output_nodes.extend(groups.get("uavcan").cloned().unwrap_or_default());
-    if output_nodes.is_empty() {
+    if output_nodes.is_empty() && groups.get("serial_hil").map_or(true, |nodes| nodes.is_empty()) {
         return String::new();
     }
 
     let mut blocks = vec![];
+    for serial in groups.get("serial_hil").cloned().unwrap_or_default() {
+        let p = get_params(serial);
+        for (message_type, rate_key, properties_key) in [
+            ("HIL_SENSOR", "sensor_rate", "sensor_properties"),
+            ("HIL_GPS", "gps_rate", "gps_properties"),
+        ] {
+            let mut attrs = vec![
+                ("name".to_string(), val_to_str(p.get("name").unwrap_or(&Value::Null))),
+                ("type".to_string(), message_type.to_string()),
+                ("transport".to_string(), "SERIAL".to_string()),
+            ];
+            for key in ["device", "baud", "data_bits", "parity", "stop_bits", "flow_control",
+                        "mavlink_version", "system_id", "component_id"] {
+                if let Some(value) = p.get(key) { attrs.push((key.to_string(), val_to_str(value))); }
+            }
+            if let Some(value) = p.get(rate_key) { attrs.push(("rate".to_string(), val_to_str(value))); }
+            let lines = p.get(properties_key).and_then(Value::as_str).unwrap_or("")
+                .split(',').map(str::trim).filter(|value| !value.is_empty())
+                .map(|property| xml_element("property", &[], Some(property), 1))
+                .collect::<Vec<_>>().join("\n");
+            let refs = attrs.iter().filter(|(_, value)| !value.is_empty())
+                .map(|(key, value)| (key.as_str(), value.as_str())).collect::<Vec<_>>();
+            blocks.push(xml_element_raw("output", &refs, Some(&lines), 0));
+        }
+    }
     for out in output_nodes {
         let p = get_params(out);
         let mut out_lines = vec![];
@@ -1830,6 +1855,24 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
 fn build_input(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
     let input_nodes = groups.get("input").cloned().unwrap_or_default();
     let mut blocks = Vec::new();
+    for serial in groups.get("serial_hil").cloned().unwrap_or_default() {
+        let p = get_params(serial);
+        let mut attrs = vec![
+            ("name".to_string(), val_to_str(p.get("name").unwrap_or(&Value::Null))),
+            ("type".to_string(), "HIL_ACTUATOR_CONTROLS".to_string()),
+            ("transport".to_string(), "SERIAL".to_string()),
+        ];
+        for key in ["device", "baud", "data_bits", "parity", "stop_bits", "flow_control", "mavlink_version"] {
+            if let Some(value) = p.get(key) { attrs.push((key.to_string(), val_to_str(value))); }
+        }
+        let lines = p.get("actuator_properties").and_then(Value::as_str).unwrap_or("")
+            .split(',').map(str::trim).filter(|value| !value.is_empty())
+            .map(|property| xml_element("property", &[], Some(property), 1))
+            .collect::<Vec<_>>().join("\n");
+        let refs = attrs.iter().filter(|(_, value)| !value.is_empty())
+            .map(|(key, value)| (key.as_str(), value.as_str())).collect::<Vec<_>>();
+        blocks.push(xml_element_raw("input", &refs, Some(&lines), 0));
+    }
     for input in input_nodes {
         let params = get_params(input);
         let mut attrs: Vec<(String, String)> = Vec::new();
