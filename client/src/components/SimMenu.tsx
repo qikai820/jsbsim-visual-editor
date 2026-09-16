@@ -344,7 +344,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
        * may bypass the local command grace period; otherwise that stale
        * snapshot makes the Start button flash back after one status poll. */
       const remoteCrashed = status.taskAlive === false || status.state === 'crashed';
-      if (remoteCrashed || Date.now() >= localLifecycleControlUntilRef.current) {
+      /* A stopped state has already passed the backend's command-handshake
+       * resolution and now comes from the periodic board heartbeat. Let it
+       * end the local start grace period immediately when a script finishes. */
+      const heartbeatStopped = status.state === 'stopped';
+      if (remoteCrashed || heartbeatStopped || Date.now() >= localLifecycleControlUntilRef.current) {
+        if (heartbeatStopped) localLifecycleControlUntilRef.current = 0;
         setRunning(status.running);
         setPaused(!!status.paused);
         setPhase(status.state === 'paused' ? 'paused' :
@@ -380,7 +385,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // closed or the bridge state is changed by another client.
   useEffect(() => {
     checkStatus();
-    const id = setInterval(checkStatus, 1000);
+    // Match the board's stopped/paused task_top telemetry rate so CPU, RAM
+    // and FDM timing continue to visibly refresh when the model is idle.
+    const id = setInterval(checkStatus, 100);
     return () => clearInterval(id);
   }, [checkStatus]);
 
@@ -782,7 +789,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {connectionLabel}
           {external && cpuCores.length > 0 && (
             <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
-              CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(0)}%`).join(' · ')}
+              CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')}
             </button>
           )}
           {external && memory && (

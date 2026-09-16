@@ -459,7 +459,7 @@ fn sim_pause(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("paused");
-        client.send_lifecycle_command(3).map_err(|e| e.to_string())?;
+        client.send_lifecycle_command(3, "paused", std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("paused", std::time::Duration::from_secs(3)) {
             // A script may finish between opening the menu and sending PAUSE.
             // In that case the bridge correctly reports stopped, not paused.
@@ -493,7 +493,7 @@ fn sim_resume(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("running");
-        client.send_lifecycle_command(4).map_err(|e| e.to_string())?;
+        client.send_lifecycle_command(4, "running", std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("running", std::time::Duration::from_secs(3)) {
             client.clear_lifecycle_request("running");
             return Err("仿真机未确认继续，请检查 UDP 控制与回传连接".to_string());
@@ -527,7 +527,7 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("stopped");
-        client.send_lifecycle_command(2).map_err(|e| e.to_string())?;
+        client.send_lifecycle_command(2, "stopped", std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("stopped", std::time::Duration::from_secs(3))
             && client.simulation_is_advancing()
         {
@@ -620,8 +620,19 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
          * STOP acknowledgement cannot be overwritten by a later task_top
          * packet and make the Start/Stop control flicker. */
         let latest = client.latest_sim_status();
+        /* Pending lifecycle requests take precedence over old packets. Once
+         * a matching heartbeat acknowledges the request, the heartbeat state
+         * becomes authoritative for natural completion and pause/stop. */
+        let lifecycle_state = client.lifecycle_state();
         let remote_state = if task_alive == Some(false) {
             "crashed".to_owned()
+        } else if lifecycle_state.as_deref() == Some("stopped") {
+            /* The periodic communication-task heartbeat is authoritative.
+             * A recently advancing timestamp remains true briefly after a
+             * script ends and must not keep the Stop button selected. */
+            "stopped".to_owned()
+        } else if lifecycle_state.as_deref() == Some("paused") {
+            "paused".to_owned()
         } else if client.simulation_is_advancing() {
             /* Timestamp progression proves the FDM is executing.  Prefer it
              * to any lifecycle label that could have been queued before a
@@ -631,17 +642,12 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             // A naturally completed script publishes `stopped` and then no
             // longer advances its simulation clock. Do not let an old
             // optimistic `running` request mask that terminal state.
-            let latest_state = latest.as_ref()
-                .and_then(|value| value.get("state"))
-                .and_then(|value| value.as_str());
-            if latest_state == Some("stopped") {
-                "stopped".to_owned()
-            } else { client.lifecycle_state()
+            lifecycle_state
                 .unwrap_or_else(|| if connected {
                     "waiting".to_owned()
                 } else {
                     "disconnected".to_owned()
-                }) }
+                })
         };
         let model = latest.as_ref()
             .and_then(|value| value.get("model"))

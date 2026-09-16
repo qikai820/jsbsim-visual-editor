@@ -6,7 +6,7 @@
 //!   - Sends 72-byte VisControlFrame (magic "VCTL" + override + 16×f32) back
 //!     to the simulation host.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -50,6 +50,10 @@ struct SimClientInner {
     /// lifecycle frame may arrive immediately afterwards and must not make
     /// the toolbar CPU indicator disappear.
     latest_task_top: Option<Value>,
+    /// Task-list slices are assembled by generation before being exposed to
+    /// the UI. Metrics packets remain independent and cannot erase the list.
+    task_list_generation: Option<u64>,
+    task_list: Vec<Value>,
     /// The last lifecycle command issued by this editor.  It remains
     /// authoritative until another lifecycle command is issued; telemetry is
     /// observational and may arrive delayed or out of order over UDP.
@@ -102,6 +106,38 @@ fn combined_telemetry(
         object.insert("task_top".to_owned(), task_top.clone());
     }
     Some(snapshot)
+}
+
+fn merge_task_top_packet(existing: &mut Option<Value>, incoming: &Value) {
+    let mut frame = existing.take()
+        .unwrap_or_else(|| json!({"kind":"task_top","task_top":{}}));
+    if !frame.is_object() {
+        frame = json!({"kind":"task_top","task_top":{}});
+    }
+    let Some(source) = incoming.get("task_top").and_then(Value::as_object) else {
+        *existing = Some(frame);
+        return;
+    };
+    let target = frame.as_object_mut().unwrap()
+        .entry("task_top".to_owned())
+        .or_insert_with(|| json!({}));
+    if !target.is_object() {
+        *target = json!({});
+    }
+    let target = target.as_object_mut().unwrap();
+    for (key, value) in source {
+        /* Compact 10 Hz health frames intentionally contain no task list.
+         * If an older board sends an empty list, retain the independently
+         * assembled 1 Hz table instead of flashing it blank. */
+        if key == "tasks" && value.as_array().is_some_and(Vec::is_empty)
+            && target.get("tasks").and_then(Value::as_array)
+                .is_some_and(|tasks| !tasks.is_empty())
+        {
+            continue;
+        }
+        target.insert(key.clone(), value.clone());
+    }
+    *existing = Some(frame);
 }
 
 // Compile-time assertion: SimClient must be Clone + Send + Sync for Tauri.
@@ -169,6 +205,8 @@ impl SimClient {
                 latest: None,
                 latest_sim_status: None,
                 latest_task_top: None,
+                task_list_generation: None,
+                task_list: Vec::new(),
                 commanded_lifecycle_state: None,
                 last_simulation_progress: None,
                 last_simulation_timestamp: None,
@@ -206,10 +244,10 @@ impl SimClient {
                                             if let Some(remote_state) = val.get("state").and_then(Value::as_str) {
                                                 let control_ack = val.get("kind")
                                                     .and_then(Value::as_str) == Some("control_ack");
-                                                if control_ack {
-                                                    // ACK frames contain only lifecycle state. Merge
-                                                    // that state into the full visual frame so model,
-                                                    // timestamp and wall_time_s remain available.
+                                                if control_ack || heartbeat {
+                                                    // ACK/heartbeat frames contain lifecycle state
+                                                    // but no model payload. Merge the state into the
+                                                    // visual frame so model and timestamp survive.
                                                     if let Some(status) = state.latest_sim_status.as_mut()
                                                         .and_then(Value::as_object_mut)
                                                     {
@@ -256,7 +294,46 @@ impl SimClient {
                                                 }
                                             }
                                             if val.get("task_top").is_some() {
-                                                state.latest_task_top = Some(val.clone());
+                                                let task_slice = val.get("kind")
+                                                    .and_then(Value::as_str) == Some("task_top_tasks");
+                                                if task_slice {
+                                                    let generation = val.get("task_generation")
+                                                        .and_then(Value::as_u64).unwrap_or(0);
+                                                    let offset = val.get("task_offset")
+                                                        .and_then(Value::as_u64).unwrap_or(0);
+                                                    if state.task_list_generation != Some(generation)
+                                                        || offset == 0
+                                                    {
+                                                        state.task_list_generation = Some(generation);
+                                                        state.task_list.clear();
+                                                    }
+                                                    if state.task_list_generation == Some(generation) {
+                                                        if let Some(tasks) = val.get("task_top")
+                                                            .and_then(|top| top.get("tasks"))
+                                                            .and_then(Value::as_array)
+                                                        {
+                                                            for task in tasks {
+                                                                let pid = task.get("pid").and_then(Value::as_i64);
+                                                                if let Some(position) = state.task_list.iter().position(|old| {
+                                                                    old.get("pid").and_then(Value::as_i64) == pid
+                                                                }) {
+                                                                    state.task_list[position] = task.clone();
+                                                                } else {
+                                                                    state.task_list.push(task.clone());
+                                                                }
+                                                            }
+                                                        }
+                                                        let assembled = json!({
+                                                            "kind":"task_top_tasks",
+                                                            "task_top":{"tasks":state.task_list.clone()}
+                                                        });
+                                                        merge_task_top_packet(
+                                                            &mut state.latest_task_top, &assembled);
+                                                    }
+                                                } else {
+                                                    merge_task_top_packet(
+                                                        &mut state.latest_task_top, &val);
+                                                }
                                             }
                                             /* Heartbeat acknowledgements prove board reachability
                                              * but carry no model data and must not replace the
@@ -443,8 +520,12 @@ impl SimClient {
     /// task on an N-core target has a maximum load of 100/N percent.
     pub fn cpu_core_loads(&self) -> Option<Vec<f64>> {
         let state = self.inner.lock().unwrap();
-        let tasks = state.latest_task_top.as_ref()?
-            .get("task_top")?.get("tasks")?.as_array()?;
+        let task_top = state.latest_task_top.as_ref()?.get("task_top")?;
+        if let Some(cores) = task_top.get("cpu_cores").and_then(Value::as_array) {
+            let values: Vec<f64> = cores.iter().filter_map(Value::as_f64).collect();
+            if !values.is_empty() { return Some(values); }
+        }
+        let tasks = task_top.get("tasks")?.as_array()?;
         let mut idle = Vec::<(usize, f64)>::new();
         for task in tasks {
             let name = task.get("name").and_then(Value::as_str)?;
@@ -519,25 +600,22 @@ impl SimClient {
         Ok(())
     }
 
-    /// Send a lifecycle command redundantly.  UDP `send_to` only means the
-    /// local OS accepted the datagram; it does not mean the NuttX bridge saw
-    /// it.  START/STOP/PAUSE/RESUME are idempotent, so retries are safe.
-    pub fn send_lifecycle_command(&self, command: u8) -> std::io::Result<()> {
+    /// Send a lifecycle command using the bridge's state acknowledgement as a
+    /// handshake.  Retransmit only when the acknowledgement has not arrived
+    /// by the next polling deadline; never send a fixed burst of copies.
+    pub fn send_lifecycle_command(&self, command: u8, expected: &str, timeout: Duration) -> std::io::Result<()> {
         let packet = lifecycle_packet(command);
         let (addr, fallback) = self.control_addresses()?;
         eprintln!("[sim-control] VCMD {} -> {}{}", command, addr,
                   fallback.map(|value| format!(" and {}", value)).unwrap_or_default());
-        // Spread retries across multiple bridge polling cycles. Bursting all
-        // copies within 40 ms was ineffective when NuttX was busy flushing
-        // MCAP or completing a model/script transition.
-        for attempt in 0..5 {
+        let deadline = Instant::now() + timeout;
+        loop {
             self.send_socket.send_to(&packet, addr)?;
             if let Some(fallback) = fallback {
                 self.send_socket.send_to(&packet, fallback)?;
             }
-            if attempt != 4 {
-                std::thread::sleep(Duration::from_millis(100));
-            }
+            if self.wait_for_lifecycle_state(expected, Duration::from_millis(100))
+                || Instant::now() >= deadline { break; }
         }
         Ok(())
     }
@@ -553,12 +631,7 @@ impl SimClient {
         packet[4] = 6; // VCMD_RESTART
         packet[5..9].copy_from_slice(&request.to_le_bytes());
 
-        for attempt in 0..3 {
-            self.send_to_control_addresses(&packet)?;
-            if attempt != 2 {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
+        self.send_to_control_addresses(&packet)?;
         Ok(())
     }
 
@@ -579,12 +652,7 @@ impl SimClient {
         packet[0..4].copy_from_slice(b"VCMD");
         packet[4] = 9; // VCMD_SET_WALL_CLOCK
         packet[5..13].copy_from_slice(&local.to_le_bytes());
-        for attempt in 0..3 {
-            self.send_to_control_addresses(&packet)?;
-            if attempt != 2 {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
+        self.send_to_control_addresses(&packet)?;
         Ok(())
     }
 
@@ -614,9 +682,7 @@ impl SimClient {
          * does not leave the desktop UI believing a model switch succeeded.
          * The bridge treats a duplicate request for its active model as a
          * start, rather than reconstructing it a second time. */
-        for _ in 0..3 {
-            self.send_to_control_addresses(&packet)?;
-        }
+        self.send_to_control_addresses(&packet)?;
         Ok(())
     }
 
@@ -721,5 +787,21 @@ mod tests {
                 .and_then(Value::as_array).map(Vec::len),
             Some(1),
         );
+    }
+
+    #[test]
+    fn health_packet_does_not_erase_assembled_task_list() {
+        let mut stored = Some(serde_json::json!({
+            "kind":"task_top_tasks",
+            "task_top":{"tasks":[{"pid":8,"name":"jsbsim"}]}
+        }));
+        let health = serde_json::json!({
+            "kind":"task_top",
+            "task_top":{"fdm_run_ms":0.0,"cpu_cores":[55.4,0.0]}
+        });
+        merge_task_top_packet(&mut stored, &health);
+        let top = stored.as_ref().unwrap().get("task_top").unwrap();
+        assert_eq!(top.get("tasks").and_then(Value::as_array).map(Vec::len), Some(1));
+        assert_eq!(top.get("cpu_cores").and_then(Value::as_array).map(Vec::len), Some(2));
     }
 }
