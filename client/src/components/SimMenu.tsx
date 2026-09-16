@@ -791,9 +791,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             </span>
           )}
           {external && fdmRunMs != null && (
-            <span className="sim-connection-fdm" role="button" tabIndex={0} title="单击查看 FDM 运行时间曲线" onClick={() => setFdmPopupOpen(open => !open)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setFdmPopupOpen(open => !open); }}>
+            <button type="button" className="sim-connection-fdm" title="单击查看 FDM 运行时间曲线" onClick={event => { event.stopPropagation(); setFdmPopupOpen(open => !open); }}>
               FDM {fdmRunMs.toFixed(3)} ms <small>⌁</small>
-            </span>
+            </button>
           )}
         </span>
       )}
