@@ -1,14 +1,34 @@
 import { useState } from 'react';
 import { type Language, useLanguage } from '../i18n';
-import { isRemoteUploadEnabled, setRemoteUploadEnabled } from '../utils/tauriApi';
+import {
+  getSimulatorTransportMode,
+  isRemoteUploadEnabled,
+  setRemoteUploadEnabled,
+  setSimulatorTransportMode,
+  type SimulatorTransportMode,
+} from '../utils/tauriApi';
 
 export default function LocalSettingsDialog({ onClose }: { onClose: () => void }) {
   const { language, setLanguage, isZh } = useLanguage();
   const [remoteUpload, setRemoteUpload] = useState(() => isRemoteUploadEnabled());
+  const [transportMode, setTransportMode] = useState<SimulatorTransportMode>(() => getSimulatorTransportMode());
+  const [transportError, setTransportError] = useState('');
   const [timeThreshold, setTimeThreshold] = useState(() => Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
   const [logDirectory, setLogDirectory] = useState(() => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
   const saveRemoteUpload = (value: boolean) => {
     setRemoteUpload(value); setRemoteUploadEnabled(value);
+  };
+  const saveTransportMode = async (value: SimulatorTransportMode) => {
+    const previous = transportMode;
+    setTransportMode(value);
+    setTransportError('');
+    try {
+      await setSimulatorTransportMode(value);
+      window.dispatchEvent(new Event('jsbsim-local-settings-changed'));
+    } catch (error: any) {
+      setTransportMode(previous);
+      setTransportError(error?.message || String(error));
+    }
   };
   const saveTimeThreshold = (value: number) => {
     const next = Math.max(1, Math.min(86400, Number.isFinite(value) ? value : 60));
@@ -27,6 +47,14 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
           <select value={language} onChange={event => setLanguage(event.target.value as Language)}>
             <option value="zh-CN">中文</option>
             <option value="en-US">English</option>
+          </select>
+        </div>
+        <div className="local-settings-row">
+          <div><b>{isZh ? '仿真机通讯' : 'Simulator communication'}</b><small>{isZh ? '网络使用 UDP/FTP；自动模式在 USB 异常时继续使用网络' : 'Network uses UDP/FTP; Auto keeps network fallback available'}</small>{transportError && <small>{transportError}</small>}</div>
+          <select value={transportMode} onChange={event => void saveTransportMode(event.target.value as SimulatorTransportMode)}>
+            <option value="auto">{isZh ? '自动' : 'Auto'}</option>
+            <option value="network">{isZh ? '网络' : 'Network'}</option>
+            <option value="usb">USB</option>
           </select>
         </div>
         <div className="local-settings-row">

@@ -10,6 +10,8 @@ mod aircraft_library;
 mod dataflow;
 mod jsbsim_process;
 mod ftp_sync;
+mod usb_file;
+mod transport;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -91,6 +93,18 @@ fn external_sim_mode() -> bool {
         std::env::var("SIM_EXTERNAL").ok().as_deref(),
         Some("0") | Some("false") | Some("no") | Some("FALSE") | Some("NO")
     )
+}
+
+/* USB and FTP calls are blocking.  Execute them on the runtime's blocking
+ * pool so a device timeout cannot stop the desktop window from repainting. */
+async fn run_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("background I/O task failed: {error}"))?
 }
 
 // ── Tauri Commands ──────────────────────────────────────────────────────────
@@ -267,8 +281,9 @@ fn generate_aircraft(data: serde_json::Value) -> Result<serde_json::Value, Strin
 }
 
 #[tauri::command]
-fn get_aircraft_library() -> Result<serde_json::Value, String> {
-    if external_sim_mode() {
+async fn get_aircraft_library() -> Result<serde_json::Value, String> {
+    run_blocking(|| {
+      if external_sim_mode() {
         let library = ftp_sync::list_models()?.into_iter().map(|name| {
             serde_json::json!({
                 "id": name,
@@ -287,37 +302,42 @@ fn get_aircraft_library() -> Result<serde_json::Value, String> {
                 "remote": true
             })
         }).collect::<Vec<_>>();
-        return Ok(serde_json::json!({ "library": library, "source": "nuttx-ftp" }));
-    }
-    match aircraft_library::get_aircraft_library() {
+        return Ok(serde_json::json!({ "library": library, "source": ftp_sync::transport_source() }));
+      }
+      match aircraft_library::get_aircraft_library() {
         Ok(library) => Ok(serde_json::json!({ "library": library })),
         Err(e) => Err(e),
-    }
+      }
+    }).await
 }
 
 #[tauri::command]
-fn load_aircraft(
+async fn load_aircraft(
     app: tauri::AppHandle,
     aircraft_id: String,
 ) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
-        let xml = ftp_sync::download_model(&aircraft_id)?;
-        let mut refs: Vec<ReferenceFile> = Vec::new();
-        let mut cursor = xml.as_str();
-        while let Some(start) = cursor.find("file=\"") {
-            cursor = &cursor[start + 6..];
-            let Some(end) = cursor.find('"') else { break };
-            let value = &cursor[..end];
-            let stem = value.trim_end_matches(".xml");
-            let candidates = [format!("systems/{stem}.xml"), format!("engine/{stem}.xml"), format!("aircraft/{aircraft_id}/{stem}.xml")];
-            for path in candidates {
-                if let Ok(content) = ftp_sync::download_path(&path) {
-                    refs.push(ReferenceFile { name: path, xml: content });
-                    break;
+        let remote_aircraft_id = aircraft_id.clone();
+        let (xml, refs) = run_blocking(move || {
+            let xml = ftp_sync::download_model(&remote_aircraft_id)?;
+            let mut refs: Vec<ReferenceFile> = Vec::new();
+            let mut cursor = xml.as_str();
+            while let Some(start) = cursor.find("file=\"") {
+                cursor = &cursor[start + 6..];
+                let Some(end) = cursor.find('"') else { break };
+                let value = &cursor[..end];
+                let stem = value.trim_end_matches(".xml");
+                let candidates = [format!("systems/{stem}.xml"), format!("engine/{stem}.xml"), format!("aircraft/{remote_aircraft_id}/{stem}.xml")];
+                for path in candidates {
+                    if let Ok(content) = ftp_sync::download_path(&path) {
+                        refs.push(ReferenceFile { name: path, xml: content });
+                        break;
+                    }
                 }
+                cursor = &cursor[end + 1..];
             }
-            cursor = &cursor[end + 1..];
-        }
+            Ok((xml, refs))
+        }).await?;
         let result = parse_xml(app.clone(), xml, Some(refs))?;
         return Ok(result);
     }
@@ -688,8 +708,9 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn sim_list_tests() -> Result<serde_json::Value, String> {
-    if external_sim_mode() {
+async fn sim_list_tests() -> Result<serde_json::Value, String> {
+    run_blocking(|| {
+      if external_sim_mode() {
         let tests = ftp_sync::list_scripts()?.into_iter().map(|file| {
             let name = file.trim_end_matches(".xml");
             serde_json::json!({
@@ -699,15 +720,17 @@ fn sim_list_tests() -> Result<serde_json::Value, String> {
                 "remote": true
             })
         }).collect::<Vec<_>>();
-        return Ok(serde_json::json!({ "tests": tests, "source": "nuttx-ftp" }));
-    }
-    let tests = jsbsim_process::JsbsimManager::list_tests()?;
-    Ok(serde_json::json!({ "tests": tests }))
+        return Ok(serde_json::json!({ "tests": tests, "source": ftp_sync::transport_source() }));
+      }
+      let tests = jsbsim_process::JsbsimManager::list_tests()?;
+      Ok(serde_json::json!({ "tests": tests }))
+    }).await
 }
 
 #[tauri::command]
-fn sim_list_models() -> Result<serde_json::Value, String> {
-    if external_sim_mode() {
+async fn sim_list_models() -> Result<serde_json::Value, String> {
+    run_blocking(|| {
+      if external_sim_mode() {
         let models = ftp_sync::list_models()?.into_iter().map(|name| {
             serde_json::json!({
                 "name": name,
@@ -716,56 +739,68 @@ fn sim_list_models() -> Result<serde_json::Value, String> {
                 "remote": true
             })
         }).collect::<Vec<_>>();
-        return Ok(serde_json::json!({ "models": models, "source": "nuttx-ftp" }));
-    }
-    let models = jsbsim_process::JsbsimManager::list_models()?;
-    Ok(serde_json::json!({ "models": models }))
+        return Ok(serde_json::json!({ "models": models, "source": ftp_sync::transport_source() }));
+      }
+      let models = jsbsim_process::JsbsimManager::list_models()?;
+      Ok(serde_json::json!({ "models": models }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_download_model(model: String) -> Result<serde_json::Value, String> {
-    let xml = ftp_sync::download_model(&model)?;
-    Ok(serde_json::json!({ "model": model, "xml": xml, "source": "nuttx-ftp" }))
+async fn ftp_download_model(model: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let xml = ftp_sync::download_model(&model)?;
+        Ok(serde_json::json!({ "model": model, "xml": xml, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_download_xml(path: String) -> Result<serde_json::Value, String> {
-    let content = ftp_sync::download_path(&path)?;
-    Ok(serde_json::json!({ "path": path, "content": content, "source": "nuttx-ftp" }))
+async fn ftp_download_xml(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let content = ftp_sync::download_path(&path)?;
+        Ok(serde_json::json!({ "path": path, "content": content, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_get_simulator_version() -> Result<serde_json::Value, String> {
-    let content = ftp_sync::download_simulator_version()?;
-    let version: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("invalid simulator VERSION.json: {e}"))?;
-    Ok(serde_json::json!({ "version": version, "source": "nuttx-ftp" }))
+async fn ftp_get_simulator_version() -> Result<serde_json::Value, String> {
+    run_blocking(|| {
+        let content = ftp_sync::download_simulator_version()?;
+        let version: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("invalid simulator VERSION.json: {e}"))?;
+        Ok(serde_json::json!({ "version": version, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_list_systems() -> Result<serde_json::Value, String> {
-    let files = ftp_sync::list_systems()?;
-    Ok(serde_json::json!({ "files": files, "source": "nuttx-ftp" }))
+async fn ftp_list_systems() -> Result<serde_json::Value, String> {
+    run_blocking(|| {
+        let files = ftp_sync::list_systems()?;
+        Ok(serde_json::json!({ "files": files, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_list_engines() -> Result<serde_json::Value, String> {
-    let (engines, propellers) = ftp_sync::list_engine_catalog()?;
-    Ok(serde_json::json!({ "engines": engines, "propellers": propellers, "source": "nuttx-ftp" }))
+async fn ftp_list_engines() -> Result<serde_json::Value, String> {
+    run_blocking(|| {
+        let (engines, propellers) = ftp_sync::list_engine_catalog()?;
+        Ok(serde_json::json!({ "engines": engines, "propellers": propellers, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_list_dsdl() -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({ "files": ftp_sync::list_dsdl_files()?, "root": "/mnt/sdcard/dsdl/px4", "source": "nuttx-ftp" }))
+async fn ftp_list_dsdl() -> Result<serde_json::Value, String> {
+    run_blocking(|| Ok(serde_json::json!({ "files": ftp_sync::list_dsdl_files()?, "root": "/mnt/sdcard/dsdl/px4", "source": ftp_sync::transport_source() }))).await
 }
 
 #[tauri::command]
-fn ftp_list_logs() -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({ "files": ftp_sync::list_logs()?, "root": "/mnt/sdcard/LOG", "source": "nuttx-ftp" }))
+async fn ftp_list_logs() -> Result<serde_json::Value, String> {
+    run_blocking(|| Ok(serde_json::json!({ "files": ftp_sync::list_logs()?, "root": "/mnt/sdcard/LOG", "source": ftp_sync::transport_source() }))).await
 }
 
 #[tauri::command]
-fn ftp_download_log(file: String, directory: Option<String>) -> Result<serde_json::Value, String> {
+async fn ftp_download_log(file: String, directory: Option<String>) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
     let path = ftp_sync::download_log(&file, directory.as_deref())?;
     let metadata = std::fs::metadata(&path).map_err(|e| format!("cannot inspect downloaded log: {e}"))?;
     /* Returning the download bytes lets the WebView open the file immediately.
@@ -776,53 +811,142 @@ fn ftp_download_log(file: String, directory: Option<String>) -> Result<serde_jso
         Some(std::fs::read(&path).map_err(|e| format!("cannot read downloaded log: {e}"))?)
     } else { None };
     Ok(serde_json::json!({ "file": file, "path": path, "size": metadata.len(), "bytes": bytes }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_delete_log(file: String) -> Result<serde_json::Value, String> {
-    ftp_sync::delete_log(&file)?;
-    Ok(serde_json::json!({ "file": file, "deleted": true }))
+async fn ftp_delete_log(file: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        ftp_sync::delete_log(&file)?;
+        Ok(serde_json::json!({ "file": file, "deleted": true }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_download_dsdl(file: String) -> Result<serde_json::Value, String> {
-    let content = ftp_sync::download_dsdl(&file)?;
-    Ok(serde_json::json!({ "file": file, "content": content, "source": "nuttx-ftp" }))
+async fn ftp_download_dsdl(file: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let content = ftp_sync::download_dsdl(&file)?;
+        Ok(serde_json::json!({ "file": file, "content": content, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_upload_file(path: String, content: String) -> Result<serde_json::Value, String> {
-    ftp_sync::upload_file(&path, &content)?;
-    Ok(serde_json::json!({ "path": path, "uploaded": true, "source": "nuttx-ftp" }))
+async fn ftp_upload_file(path: String, content: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        ftp_sync::upload_file(&path, &content)?;
+        Ok(serde_json::json!({ "path": path, "uploaded": true, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_download_script(file: String) -> Result<serde_json::Value, String> {
-    let xml = ftp_sync::download_script(&file)?;
-    Ok(serde_json::json!({ "file": file, "xml": xml, "source": "nuttx-ftp" }))
+async fn ftp_download_script(file: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let xml = ftp_sync::download_script(&file)?;
+        Ok(serde_json::json!({ "file": file, "xml": xml, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_upload_model(model: String, xml: String) -> Result<serde_json::Value, String> {
-    ftp_sync::upload_model(&model, &xml)?;
-    Ok(serde_json::json!({ "model": model, "uploaded": true }))
+async fn ftp_upload_model(model: String, xml: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        ftp_sync::upload_model(&model, &xml)?;
+        Ok(serde_json::json!({ "model": model, "uploaded": true }))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_download_sim_config(path: String) -> Result<serde_json::Value, String> {
-    let content = ftp_sync::download_config(&path)?;
-    Ok(serde_json::json!({"path": path, "content": content}))
+async fn ftp_download_sim_config(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let content = ftp_sync::download_config(&path)?;
+        Ok(serde_json::json!({"path": path, "content": content}))
+    }).await
 }
 
 #[tauri::command]
-fn ftp_upload_sim_config(path: String, content: String) -> Result<serde_json::Value, String> {
-    ftp_sync::upload_config(&path, &content)?;
-    Ok(serde_json::json!({"path": path, "saved": true}))
+async fn ftp_upload_sim_config(path: String, content: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        ftp_sync::upload_config(&path, &content)?;
+        Ok(serde_json::json!({"path": path, "saved": true}))
+    }).await
+}
+
+#[tauri::command]
+async fn usb_file_status() -> Result<usb_file::UsbStatus, String> {
+    run_blocking(|| Ok(usb_file::status())).await
+}
+
+#[tauri::command]
+async fn usb_file_ping() -> Result<serde_json::Value, String> {
+    run_blocking(|| Ok(serde_json::json!({ "identity": usb_file::ping()?, "source": "usb-bulk" }))).await
+}
+
+#[tauri::command]
+async fn usb_file_list(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || Ok(serde_json::json!({ "path": path, "files": usb_file::list(&path)?, "source": "usb-bulk" }))).await
+}
+
+#[tauri::command]
+async fn usb_file_read(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let bytes = usb_file::read_all(&path)?;
+        Ok(serde_json::json!({ "path": path, "bytes": bytes, "source": "usb-bulk" }))
+    }).await
+}
+
+#[tauri::command]
+async fn usb_file_write(path: String, bytes: Vec<u8>) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        usb_file::write_all(&path, &bytes)?;
+        Ok(serde_json::json!({ "path": path, "size": bytes.len(), "saved": true, "source": "usb-bulk" }))
+    }).await
+}
+
+#[tauri::command]
+async fn usb_file_delete(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        usb_file::delete(&path)?;
+        Ok(serde_json::json!({ "path": path, "deleted": true, "source": "usb-bulk" }))
+    }).await
+}
+
+#[tauri::command]
+async fn usb_file_mkdir(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        usb_file::mkdir(&path)?;
+        Ok(serde_json::json!({ "path": path, "created": true, "source": "usb-bulk" }))
+    }).await
+}
+
+#[tauri::command]
+fn simulator_transport_get() -> String {
+    transport::mode().as_str().to_string()
+}
+
+#[tauri::command]
+fn simulator_transport_set(mode: String) -> Result<String, String> {
+    Ok(transport::set_mode(&mode)?.as_str().to_string())
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
 fn main() {
+    if std::env::args().any(|argument| argument == "--usb-self-test") {
+        match usb_file::ping().and_then(|identity| {
+            let entries = usb_file::list("jsbsim")?;
+            let simulation_state = usb_file::simulation_self_test()?;
+            Ok((identity, entries.len(), simulation_state))
+        }) {
+            Ok((identity, entry_count, simulation_state)) => {
+                println!("USB bulk self-test PASS: {identity}; jsbsim entries={entry_count}; simulation={simulation_state}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("USB bulk self-test FAIL: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -910,6 +1034,15 @@ fn main() {
             ftp_upload_model,
             ftp_download_sim_config,
             ftp_upload_sim_config,
+            usb_file_status,
+            usb_file_ping,
+            usb_file_list,
+            usb_file_read,
+            usb_file_write,
+            usb_file_delete,
+            usb_file_mkdir,
+            simulator_transport_get,
+            simulator_transport_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,6 +4,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Use the checkout-local Node.js and Rust toolchains when available, so this
+# launcher does not depend on globally installed npx/cargo binaries.
+if [ -f "${SCRIPT_DIR}/.toolchains/env.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/.toolchains/env.sh"
+fi
+
 # Keep the original Tauri entry point, but default it to the external HIL
 # setup: JSBSim is owned by px4-jsbsim-bridge, while this app is the ground
 # station.  All values remain overridable for local-only JSBSim testing.

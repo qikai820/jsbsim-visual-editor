@@ -14,7 +14,7 @@ import { useSimSocket } from './sim/useSimSocket';
 import { resolveNodeOwnedPath, useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
-import { isTauri, listenJsbsimLog, simSyncTime } from './utils/tauriApi';
+import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simSyncTime } from './utils/tauriApi';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -190,6 +190,11 @@ function AppContent() {
   useEffect(() => { localStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
   useEffect(() => { localStorage.setItem('jsbsim-hud-visible', String(hudVisible)); }, [hudVisible]);
   useEffect(() => { localStorage.setItem('jsbsim-log-position', JSON.stringify(logPos)); }, [logPos]);
+  useEffect(() => {
+    void initializeSimulatorTransport().catch(error => {
+      console.error('[transport] unable to apply saved simulator transport', error);
+    });
+  }, []);
   useEffect(() => {
     if (!isTauri) return;
     let active = true;

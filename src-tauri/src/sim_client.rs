@@ -158,12 +158,47 @@ impl SimClient {
     }
 
     fn send_to_control_addresses(&self, packet: &[u8]) -> std::io::Result<()> {
-        let (learned, fallback) = self.control_addresses()?;
-        self.send_socket.send_to(packet, learned)?;
-        if let Some(fallback) = fallback {
-            self.send_socket.send_to(packet, fallback)?;
+        let mode = crate::transport::mode();
+        let mut last_error = None;
+
+        /* Auto mode uses USB as the first complete transport.  Returning after
+         * a successful write avoids sending START/LOAD twice to the board;
+         * UDP remains a fallback when USB is absent or its endpoint fails. */
+        if mode != crate::transport::TransportMode::Network {
+            match crate::usb_file::sim_write(packet) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(std::io::Error::other(error)),
+            }
+            if mode == crate::transport::TransportMode::Usb {
+                return Err(last_error.unwrap_or_else(|| std::io::Error::other(
+                    "USB simulator communication is unavailable")));
+            }
         }
-        Ok(())
+
+        if mode != crate::transport::TransportMode::Usb {
+            match self.control_addresses() {
+                Ok((learned, fallback)) => {
+                    let mut sent = false;
+                    match self.send_socket.send_to(packet, learned) {
+                        Ok(_) => sent = true,
+                        Err(error) => last_error = Some(error),
+                    }
+                    if let Some(fallback) = fallback {
+                        match self.send_socket.send_to(packet, fallback) {
+                            Ok(_) => sent = true,
+                            Err(error) => last_error = Some(error),
+                        }
+                    }
+                    if sent {
+                        return Ok(());
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| std::io::Error::other(
+            "no simulator communication transport is available")))
     }
 
     /// Create a new `SimClient` and spawn background threads for receiving
@@ -227,6 +262,11 @@ impl SimClient {
                     loop {
                         match sock.recv_from(&mut buf) {
                             Ok((n, peer)) => {
+                                if !peer.ip().is_loopback() &&
+                                    !crate::transport::allows_network()
+                                {
+                                    continue;
+                                }
                                 if let Ok(text) = std::str::from_utf8(&buf[..n]) {
                                     if let Ok(val) = serde_json::from_str::<Value>(text) {
                                         if val.is_object() {
@@ -235,8 +275,10 @@ impl SimClient {
                                              * source IP: discovery packets or an outdated setting
                                              * must never leave the UI receiving telemetry from one
                                              * target while controlling another. */
-                                            if let Ok(mut address) = telemetry_ctrl_addr.lock() {
+                                            if !peer.ip().is_loopback() {
+                                              if let Ok(mut address) = telemetry_ctrl_addr.lock() {
                                                 *address = SocketAddr::new(peer.ip(), ctrl_port);
+                                              }
                                             }
                                             let mut state = inner.lock().unwrap();
                                             let heartbeat = val.get("kind")
@@ -252,6 +294,11 @@ impl SimClient {
                                                         .and_then(Value::as_object_mut)
                                                     {
                                                         status.insert("state".to_owned(), Value::String(remote_state.to_owned()));
+                                                        if heartbeat {
+                                                            if let Some(wall_time) = val.get("wall_time_s") {
+                                                                status.insert("wall_time_s".to_owned(), wall_time.clone());
+                                                            }
+                                                        }
                                                     } else {
                                                         state.latest_sim_status = Some(val.clone());
                                                     }
@@ -371,6 +418,31 @@ impl SimClient {
                 .expect("spawn recv thread");
         }
 
+        /* Feed USB telemetry into the same parser as UDP.  Loopback packets
+         * are deliberately excluded from UDP peer learning above, so the
+         * Ethernet control fallback keeps the configured board address. */
+        {
+            std::thread::Builder::new()
+                .name("sim-client-usb".into())
+                .spawn(move || {
+                    let injector = UdpSocket::bind("127.0.0.1:0")
+                        .expect("SimClient: bind USB telemetry injector");
+                    let destination = format!("127.0.0.1:{listen_port}");
+                    loop {
+                        if !crate::transport::allows_usb() {
+                            std::thread::sleep(Duration::from_millis(200));
+                            continue;
+                        }
+                        match crate::usb_file::sim_read() {
+                            Ok(Some(packet)) => { let _ = injector.send_to(&packet, &destination); }
+                            Ok(None) => {}
+                            Err(_) => std::thread::sleep(Duration::from_millis(200)),
+                        }
+                    }
+                })
+                .expect("spawn USB receiver thread");
+        }
+
         // Discovery is deliberately separate from telemetry so the editor can
         // find a board without asking the user for its IP address.
         {
@@ -385,6 +457,10 @@ impl SimClient {
                 .spawn(move || {
                     let mut buf = [0u8; 128];
                     loop {
+                        if !crate::transport::allows_network() {
+                            std::thread::sleep(Duration::from_secs(1));
+                            continue;
+                        }
                         let _ = discover_send.send_to(b"JSBSIM-DISCOVER", format!("255.255.255.255:{}", DISCOVERY_PORT));
                         let deadline = Instant::now() + Duration::from_millis(800);
                         while Instant::now() < deadline {
@@ -417,8 +493,13 @@ impl SimClient {
                 .name("sim-client-heartbeat".into())
                 .spawn(move || loop {
                     let packet = [b'V', b'C', b'M', b'D', 7u8];
-                    let addr = heartbeat_addr.lock().map(|a| *a).ok();
-                    if let Some(addr) = addr { let _ = sock.send_to(&packet, addr); }
+                    if crate::transport::allows_usb() {
+                        let _ = crate::usb_file::sim_write(&packet);
+                    }
+                    if crate::transport::allows_network() {
+                        let addr = heartbeat_addr.lock().map(|a| *a).ok();
+                        if let Some(addr) = addr { let _ = sock.send_to(&packet, addr); }
+                    }
                     std::thread::sleep(Duration::from_secs(1));
                 })
                 .expect("spawn heartbeat thread");
@@ -588,16 +669,12 @@ impl SimClient {
             buf[offset..offset + 4].copy_from_slice(&ch.to_le_bytes());
         }
 
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        self.send_socket.send_to(&buf, addr)?;
-        Ok(())
+        self.send_to_control_addresses(&buf)
     }
 
     pub fn send_command(&self, command: u8) -> std::io::Result<()> {
         let packet = [b'V', b'C', b'M', b'D', command];
-        let addr = *self.ctrl_addr.lock().map_err(|_| std::io::Error::other("control address lock"))?;
-        self.send_socket.send_to(&packet, addr)?;
-        Ok(())
+        self.send_to_control_addresses(&packet)
     }
 
     /// Send a lifecycle command using the bridge's state acknowledgement as a
@@ -605,15 +682,11 @@ impl SimClient {
     /// by the next polling deadline; never send a fixed burst of copies.
     pub fn send_lifecycle_command(&self, command: u8, expected: &str, timeout: Duration) -> std::io::Result<()> {
         let packet = lifecycle_packet(command);
-        let (addr, fallback) = self.control_addresses()?;
-        eprintln!("[sim-control] VCMD {} -> {}{}", command, addr,
-                  fallback.map(|value| format!(" and {}", value)).unwrap_or_default());
+        eprintln!("[sim-control] VCMD {} via {}", command,
+                  crate::transport::mode().as_str());
         let deadline = Instant::now() + timeout;
         loop {
-            self.send_socket.send_to(&packet, addr)?;
-            if let Some(fallback) = fallback {
-                self.send_socket.send_to(&packet, fallback)?;
-            }
+            self.send_to_control_addresses(&packet)?;
             if self.wait_for_lifecycle_state(expected, Duration::from_millis(100))
                 || Instant::now() >= deadline { break; }
         }

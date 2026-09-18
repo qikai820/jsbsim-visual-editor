@@ -4,6 +4,9 @@
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const REMOTE_UPLOAD_KEY = 'jsbsim-remote-upload-enabled';
+const SIMULATOR_TRANSPORT_KEY = 'jsbsim-simulator-transport';
+
+export type SimulatorTransportMode = 'auto' | 'network' | 'usb';
 
 // Writing to the NuttX SD card is opt-in. Until the user enables it in the
 // local settings the editor treats the simulator model data as read-only.
@@ -13,6 +16,11 @@ export function isRemoteUploadEnabled(): boolean {
 
 export function setRemoteUploadEnabled(enabled: boolean): void {
   localStorage.setItem(REMOTE_UPLOAD_KEY, String(enabled));
+}
+
+export function getSimulatorTransportMode(): SimulatorTransportMode {
+  const value = localStorage.getItem(SIMULATOR_TRANSPORT_KEY);
+  return value === 'network' || value === 'usb' ? value : 'auto';
 }
 
 // Lazy-load Tauri APIs (only available inside Tauri)
@@ -33,6 +41,16 @@ async function call(command: string, args: Record<string, any> = {}): Promise<an
   if (!isTauri) throw new Error('此编辑器仅支持 Tauri 桌面端运行。');
   await ensureTauri();
   return tauriInvoke(command, args);
+}
+
+export async function setSimulatorTransportMode(mode: SimulatorTransportMode): Promise<void> {
+  await call('simulator_transport_set', { mode });
+  localStorage.setItem(SIMULATOR_TRANSPORT_KEY, mode);
+}
+
+export async function initializeSimulatorTransport(): Promise<void> {
+  if (!isTauri) return;
+  await call('simulator_transport_set', { mode: getSimulatorTransportMode() });
 }
 
 // ── Typed API functions ─────────────────────────────────────────────────────
@@ -328,6 +346,49 @@ export interface SimulatorVersion {
 export async function ftpGetSimulatorVersion(): Promise<SimulatorVersion> {
   const result = await call('ftp_get_simulator_version');
   return result.version || {};
+}
+
+export interface UsbFileStatus {
+  connected: boolean;
+  identity?: string | null;
+  vid: number;
+  pid: number;
+}
+
+export interface UsbFileEntry {
+  name: string;
+  directory: boolean;
+  size: number;
+}
+
+export async function usbFileStatus(): Promise<UsbFileStatus> {
+  return call('usb_file_status');
+}
+
+export async function usbFilePing(): Promise<{ identity: string; source: string }> {
+  return call('usb_file_ping');
+}
+
+export async function usbFileList(path: string): Promise<UsbFileEntry[]> {
+  const result = await call('usb_file_list', { path });
+  return result.files || [];
+}
+
+export async function usbFileRead(path: string): Promise<Uint8Array> {
+  const result = await call('usb_file_read', { path });
+  return Uint8Array.from(result.bytes || []);
+}
+
+export async function usbFileWrite(path: string, bytes: Uint8Array | number[]): Promise<void> {
+  await call('usb_file_write', { path, bytes: Array.from(bytes) });
+}
+
+export async function usbFileDelete(path: string): Promise<void> {
+  await call('usb_file_delete', { path });
+}
+
+export async function usbFileMkdir(path: string): Promise<void> {
+  await call('usb_file_mkdir', { path });
 }
 
 // ── Tauri event listeners (for telemetry) ───────────────────────────────────

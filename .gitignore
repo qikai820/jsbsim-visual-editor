@@ -5,6 +5,7 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/.env
 .qwen/
+.toolchains/
 *.log
 .DS_Store
 test-*.mjs

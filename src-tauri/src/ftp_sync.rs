@@ -6,14 +6,55 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::collections::VecDeque;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use serde::Serialize;
+
+use crate::usb_file;
+use crate::transport::{self, TransportMode};
 
 // NuttX ftpd and its small TCP pool are easily exhausted by several curl
 // processes connecting at once.  Serialize every FTP transaction in this
 // module and leave a short interval for the server to reclaim the socket.
 static FTP_LOCK: Mutex<()> = Mutex::new(());
+
+struct UsbProbe {
+    usable: bool,
+    checked: Option<Instant>,
+}
+
+static USB_PROBE: OnceLock<Mutex<UsbProbe>> = OnceLock::new();
+
+fn auto_usb_available() -> bool {
+    let probe = USB_PROBE.get_or_init(|| Mutex::new(UsbProbe {
+        usable: false,
+        checked: None,
+    }));
+    let Ok(mut probe) = probe.lock() else {
+        return false;
+    };
+    if probe.checked.is_some_and(|checked| checked.elapsed() < Duration::from_secs(2)) {
+        return probe.usable;
+    }
+
+    probe.usable = usb_file::available();
+    probe.checked = Some(Instant::now());
+    probe.usable
+}
+
+/* In automatic mode, prefer USB only when the complete protocol responds.
+ * The explicit modes are shared with simulation telemetry and control. */
+fn use_usb() -> bool {
+    match transport::mode() {
+        TransportMode::Usb => true,
+        TransportMode::Network => false,
+        TransportMode::Auto => auto_usb_available(),
+    }
+}
+
+pub fn transport_source() -> &'static str {
+    if use_usb() { "usb-bulk" } else { "nuttx-ftp" }
+}
 
 #[derive(Serialize)]
 pub struct LogFileInfo {
@@ -48,12 +89,24 @@ fn safe_component(value: &str) -> Result<&str, String> {
 
 fn is_day_directory(value: &str) -> bool {
     let bytes = value.as_bytes();
-    bytes.len() == 10
+    let full_date = bytes.len() == 10
         && bytes[4] == b'-'
         && bytes[7] == b'-'
         && bytes.iter().enumerate().all(|(index, byte)| {
             index == 4 || index == 7 || byte.is_ascii_digit()
-        })
+        });
+
+    /* FAT 8.3 directory entries truncate "YYYY-MM-DD" to "YYYY-MM-".
+     * Treat that prefix as a date directory too, otherwise completed MCAP
+     * files nested under it are invisible to the log centre. */
+    let fat_date_prefix = bytes.len() == 8
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            index == 4 || index == 7 || byte.is_ascii_digit()
+        });
+
+    full_date || fat_date_prefix
 }
 
 fn safe_log_path(value: &str) -> Result<&str, String> {
@@ -134,6 +187,13 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
 }
 
 fn list_directory(path: &str) -> Result<Vec<String>, String> {
+    if use_usb() {
+        let mut entries: Vec<String> = usb_file::list(&format!("jsbsim/{path}"))?
+            .into_iter().map(|entry| entry.name).collect();
+        entries.sort();
+        entries.dedup();
+        return Ok(entries);
+    }
     let url = format!("{}/jsbsim/{}/", endpoint(), path);
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
@@ -165,6 +225,9 @@ fn safe_relative_path(path: &str) -> Result<&str, String> {
 
 fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
     safe_relative_path(path)?;
+    if use_usb() {
+        return Ok(usb_file::list(path)?.into_iter().map(|entry| entry.name).collect());
+    }
     let url = format!("{}/{}/", endpoint(), path.trim_matches('/'));
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
@@ -184,6 +247,10 @@ fn log_name_timestamp(name: &str) -> Option<String> {
 }
 
 fn log_info(name: String) -> LogFileInfo {
+    if use_usb() {
+        let size = usb_file::stat(&format!("LOG/{name}")).ok().map(|entry| entry.size);
+        return LogFileInfo { modified: log_name_timestamp(&name), name, size };
+    }
     let url = format!("{}/LOG/{}", endpoint(), name);
     let auth = credentials();
     let output = Command::new("curl")
@@ -226,7 +293,8 @@ pub fn list_logs() -> Result<Vec<LogFileInfo>, String> {
 pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<String, String> {
     let file = safe_log_path(file)?;
     if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
-    let home = std::env::var("HOME").map_err(|_| "HOME is not available")?;
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "user home directory is not available")?;
     let requested = configured_directory.unwrap_or("~/Downloads/JSBSim-Logs");
     let requested = requested.strip_prefix("~/").map(|tail| format!("{home}/{tail}"))
         .unwrap_or_else(|| requested.to_string());
@@ -238,15 +306,22 @@ pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<St
     let local_name = file.rsplit('/').next().ok_or("invalid remote log path")?;
     let target = directory.join(local_name);
     let partial = directory.join(format!(".{local_name}.part"));
-    let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
-    let status = Command::new("curl").args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--user", &auth, "--output"])
-        .arg(&partial).arg(&url).status().map_err(|e| format!("cannot start curl: {e}"))?;
-    if !status.success() { let _ = std::fs::remove_file(&partial); return Err("FTP log download failed".into()); }
-    let bytes = std::fs::read(&partial).map_err(|e| format!("cannot inspect downloaded log: {e}"))?;
+    if use_usb() {
+        usb_file::download_to(&format!("LOG/{file}"), &partial)?;
+    } else {
+        let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
+        let status = Command::new("curl").args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--user", &auth, "--output"])
+            .arg(&partial).arg(&url).status().map_err(|e| format!("cannot start curl: {e}"))?;
+        if !status.success() { let _ = std::fs::remove_file(&partial); return Err("FTP log download failed".into()); }
+    }
     const MCAP_MAGIC: [u8; 8] = [0x89, b'M', b'C', b'A', b'P', b'0', b'\r', b'\n'];
-    if bytes.len() < MCAP_MAGIC.len() || bytes[..MCAP_MAGIC.len()] != MCAP_MAGIC {
+    let mut prefix = [0u8; 8];
+    let prefix_ok = std::fs::File::open(&partial)
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut prefix)).is_ok();
+    let size = std::fs::metadata(&partial).map(|value| value.len()).unwrap_or(0);
+    if !prefix_ok || prefix != MCAP_MAGIC {
         let _ = std::fs::remove_file(&partial);
-        return Err(format!("downloaded log is empty or incomplete ({} bytes); wait for the simulation to finish and refresh", bytes.len()));
+        return Err(format!("downloaded log is empty or incomplete ({size} bytes); wait for the simulation to finish and refresh"));
     }
     std::fs::rename(&partial, &target).map_err(|e| format!("cannot finalize downloaded log: {e}"))?;
     Ok(target.to_string_lossy().to_string())
@@ -255,6 +330,9 @@ pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<St
 pub fn delete_log(file: &str) -> Result<(), String> {
     let file = safe_log_path(file)?;
     if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
+    if use_usb() {
+        return usb_file::delete(&format!("LOG/{file}"));
+    }
     /* curl sends --quote commands before navigating to the URL path.  The
      * old `DELE <file>` therefore ran in the FTP home directory rather than
      * LOG/, which NuttX reports as command-handler error -2 (ENOENT). */
@@ -307,6 +385,9 @@ pub fn download_dsdl(file: &str) -> Result<String, String> {
     if !lower.ends_with(".dsdl") && !lower.ends_with(".uavcan") {
         return Err("remote file is not DSDL".into());
     }
+    if use_usb() {
+        return usb_file::read_text(&format!("{}/{}", dsdl_root(), file));
+    }
     let url = format!("{}/{}/{}", endpoint(), dsdl_root(), file);
     let auth = credentials();
     String::from_utf8(curl_output(&["--user", &auth, &url])?)
@@ -318,6 +399,9 @@ pub fn download_path(path: &str) -> Result<String, String> {
     if path.is_empty() || !path.to_ascii_lowercase().ends_with(".xml") {
         return Err("invalid remote XML path".into());
     }
+    if use_usb() {
+        return usb_file::read_text(&format!("jsbsim/{path}"));
+    }
     let url = format!("{}/jsbsim/{}", endpoint(), path);
     let auth = credentials();
     String::from_utf8(curl_output(&["--user", &auth, &url])?)
@@ -325,6 +409,9 @@ pub fn download_path(path: &str) -> Result<String, String> {
 }
 
 pub fn download_simulator_version() -> Result<String, String> {
+    if use_usb() {
+        return usb_file::read_text("jsbsim/VERSION.json");
+    }
     let url = format!("{}/jsbsim/VERSION.json", endpoint());
     let auth = credentials();
     String::from_utf8(curl_output(&["--user", &auth, &url])?)
@@ -335,11 +422,14 @@ pub fn download_simulator_version() -> Result<String, String> {
 /// a relative path such as `systems/foo.xml`; traversal and absolute paths are
 /// rejected before curl is invoked.
 pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
-    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let path = safe_relative_path(path)?.trim_matches('/');
     if path.is_empty() || !path.to_ascii_lowercase().ends_with(".xml") {
         return Err("invalid remote XML path".into());
     }
+    if use_usb() {
+        return usb_file::write_all(&format!("jsbsim/{path}"), content.as_bytes());
+    }
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let remote = format!("/jsbsim/{}", path);
     let temporary = format!("{}.upload", remote);
     let backup = format!("{}.bak", remote);
@@ -367,6 +457,9 @@ fn safe_config_path(path: &str) -> Result<&str, String> {
 
 pub fn download_config(path: &str) -> Result<String, String> {
     let path = safe_config_path(path)?;
+    if use_usb() {
+        return usb_file::read_text(&format!("jsbsim/{path}"));
+    }
     let url = format!("{}/jsbsim/{}", endpoint(), path);
     let auth = credentials();
     String::from_utf8(curl_output(&["--user", &auth, &url])?)
@@ -374,10 +467,13 @@ pub fn download_config(path: &str) -> Result<String, String> {
 }
 
 pub fn upload_config(path: &str, content: &str) -> Result<(), String> {
-    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let path = safe_config_path(path)?;
     serde_json::from_str::<serde_json::Value>(content)
         .map_err(|e| format!("invalid config JSON: {e}"))?;
+    if use_usb() {
+        return usb_file::write_all(&format!("jsbsim/{path}"), content.as_bytes());
+    }
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let remote = format!("/jsbsim/{path}");
     let temporary = format!("{remote}.upload");
     let backup = format!("{remote}.bak");
@@ -421,9 +517,13 @@ pub fn list_engine_catalog() -> Result<(Vec<String>, Vec<String>), String> {
     let mut engines = Vec::new();
     let mut propellers = Vec::new();
     for name in list_engines()? {
-        let url = format!("{}/jsbsim/engine/{}", endpoint(), name);
-        let auth = credentials();
-        let xml = String::from_utf8_lossy(&curl_output(&["--user", &auth, &url])?).to_ascii_lowercase();
+        let xml = if use_usb() {
+            usb_file::read_text(&format!("jsbsim/engine/{name}"))?.to_ascii_lowercase()
+        } else {
+            let url = format!("{}/jsbsim/engine/{}", endpoint(), name);
+            let auth = credentials();
+            String::from_utf8_lossy(&curl_output(&["--user", &auth, &url])?).to_ascii_lowercase()
+        };
         if xml.contains("<propeller") {
             propellers.push(name);
         } else if xml.contains("<piston_engine") || xml.contains("<turbine_engine")
@@ -437,6 +537,9 @@ pub fn list_engine_catalog() -> Result<(Vec<String>, Vec<String>), String> {
 
 pub fn download_model(model: &str) -> Result<String, String> {
     let model = safe_component(model)?;
+    if use_usb() {
+        return usb_file::read_text(&format!("jsbsim/aircraft/{model}/{model}.xml"));
+    }
     let url = format!("{}/jsbsim/aircraft/{}/{}.xml", endpoint(), model, model);
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, &url])?;
@@ -449,6 +552,10 @@ pub fn download_script(file: &str) -> Result<String, String> {
         return Err("invalid remote script name".into());
     }
 
+    if use_usb() {
+        return usb_file::read_text(&format!("jsbsim/scripts/{file}"));
+    }
+
     let url = format!("{}/jsbsim/scripts/{}", endpoint(), file);
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, &url])?;
@@ -456,8 +563,12 @@ pub fn download_script(file: &str) -> Result<String, String> {
 }
 
 pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
-    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let model = safe_component(model)?;
+    if use_usb() {
+        return usb_file::write_all(
+            &format!("jsbsim/aircraft/{model}/{model}.xml"), xml.as_bytes());
+    }
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let remote_dir = format!("/jsbsim/aircraft/{}", model);
     let target = format!("{}/{}.xml", remote_dir, model);
     let backup = format!("{}.bak", target);
@@ -484,4 +595,17 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
 
     commit_uploaded_file(&auth, &temporary, &target, &backup)
         .map_err(|e| format!("cannot commit remote model: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_day_directory;
+
+    #[test]
+    fn recognizes_complete_and_fat_truncated_log_dates() {
+        assert!(is_day_directory("2026-09-18"));
+        assert!(is_day_directory("2026-09-"));
+        assert!(!is_day_directory("2026-9-18"));
+        assert!(!is_day_directory("logs"));
+    }
 }
