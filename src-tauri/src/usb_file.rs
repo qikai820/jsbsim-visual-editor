@@ -47,6 +47,8 @@ const DELETE: u16 = 8;
 const MKDIR: u16 = 9;
 const WRITE_ABORT: u16 = 10;
 const UPDATE: u16 = 11;
+const NSH_EXEC: u16 = 12;
+const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(4);
 
 static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static USB_LOCK: Mutex<()> = Mutex::new(());
@@ -260,6 +262,21 @@ pub fn status() -> UsbStatus {
 pub fn ping() -> Result<String, String> {
     with_device(|handle| {
         let response = transaction_locked(handle, PING, 0, 0, &[])?;
+        Ok(String::from_utf8_lossy(&response.payload).into_owned())
+    })
+}
+
+/// Execute one non-interactive NSH command through EP3.  The board runs it
+/// in a short-lived shell task and returns its stdout/stderr in the matching
+/// response frame, so USB mode does not depend on Ethernet Telnet.
+pub fn nsh_execute(command: &str) -> Result<String, String> {
+    if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
+        return Err("NSH command must be one non-empty line of at most 512 bytes".into());
+    }
+    with_device(|handle| {
+        let response = transaction_locked_with_timeout(
+            handle, NSH_EXEC, 0, 0, command.as_bytes(), NSH_EXEC_TIMEOUT,
+        )?;
         Ok(String::from_utf8_lossy(&response.payload).into_owned())
     })
 }

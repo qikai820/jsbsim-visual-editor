@@ -563,12 +563,7 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "running": false }))
 }
 
-#[tauri::command]
-fn nsh_execute(command: String) -> Result<String, String> {
-    let command = command.trim();
-    if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
-        return Err("NSH command must be one non-empty line of at most 512 bytes".to_owned());
-    }
+fn nsh_execute_tcp(command: &str) -> Result<String, String> {
     let host = std::env::var("SIM_UDP_HOST")
         .unwrap_or_else(|_| "192.168.101.81".to_owned());
     let port = std::env::var("NSH_TELNET_PORT")
@@ -626,6 +621,23 @@ fn nsh_execute(command: String) -> Result<String, String> {
         text.push_str("\n[continuous output stopped after 2 seconds; Ctrl+C sent]\n");
     }
     Ok(text)
+}
+
+#[tauri::command]
+fn nsh_execute(command: String) -> Result<String, String> {
+    let command = command.trim();
+    if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
+        return Err("NSH command must be one non-empty line of at most 512 bytes".to_owned());
+    }
+
+    match transport::mode() {
+        transport::TransportMode::Usb => usb_file::nsh_execute(command),
+        transport::TransportMode::Network => nsh_execute_tcp(command),
+        transport::TransportMode::Auto => usb_file::nsh_execute(command)
+            .or_else(|usb_error| nsh_execute_tcp(command).map_err(|network_error| {
+                format!("USB NSH unavailable ({usb_error}); network NSH unavailable ({network_error})")
+            })),
+    }
 }
 
 #[tauri::command]

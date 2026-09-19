@@ -7,7 +7,7 @@ const cleanTerminalOutput = (value: string) => value
 
 export default function NshConsoleDialog({ onClose }: { onClose: () => void }) {
   const [command, setCommand] = useState('');
-  const [output, setOutput] = useState('NuttX NSH console · 192.168.101.81:23\n');
+  const [output, setOutput] = useState('NuttX NSH console · USB / TCP 自动选择\n');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [running, setRunning] = useState(false);
@@ -70,7 +70,7 @@ export default function NshConsoleDialog({ onClose }: { onClose: () => void }) {
 
   return <div className="nsh-console-overlay" role="dialog" aria-modal="true" aria-label="NuttX NSH 控制台" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="nsh-console" style={position ? { position: 'fixed', left: position.left, top: position.top, margin: 0 } : undefined} onMouseDown={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onPointerMove={event => event.stopPropagation()}>
-      <header onPointerDown={beginDrag} onPointerMove={drag} onPointerUp={endDrag} onPointerCancel={endDrag}><div><b>⌨ NuttX NSH 控制台</b><small>TCP 23 · 回车执行 · ↑↓ 历史命令 · 标题栏拖动 · 右下角缩放</small></div><div className="nsh-console-actions"><button onClick={() => setOutput('')}>清屏</button><button onClick={onClose}>×</button></div></header>
+      <header onPointerDown={beginDrag} onPointerMove={drag} onPointerUp={endDrag} onPointerCancel={endDrag}><div><b>⌨ NuttX NSH 控制台</b><small>USB / TCP 自动选择 · 回车执行 · ↑↓ 历史命令 · 标题栏拖动 · 右下角缩放</small></div><div className="nsh-console-actions"><button onClick={() => setOutput('')}>清屏</button><button onClick={onClose}>×</button></div></header>
       <div className="nsh-terminal" ref={terminalRef} onMouseDown={() => inputRef.current?.focus()}>
         <pre>{output}</pre>
         <div className="nsh-prompt"><span>nsh&gt;</span><input ref={inputRef} value={command} disabled={running} spellCheck={false} onChange={event => { setCommand(event.target.value); setHistoryIndex(-1); }} onKeyDown={event => {
