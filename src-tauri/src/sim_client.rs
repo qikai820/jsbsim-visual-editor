@@ -435,7 +435,13 @@ impl SimClient {
                         }
                         match crate::usb_file::sim_read() {
                             Ok(Some(packet)) => { let _ = injector.send_to(&packet, &destination); }
-                            Ok(None) => {}
+                            /* sim_read holds the shared libusb interface for
+                             * one short bulk-read timeout.  Yield before the
+                             * next probe so the heartbeat writer can claim
+                             * it after a hot-plug; without this, the reader
+                             * could repeatedly reacquire the lock and the
+                             * board would receive only the first heartbeat. */
+                            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                             Err(_) => std::thread::sleep(Duration::from_millis(200)),
                         }
                     }

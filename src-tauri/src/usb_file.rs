@@ -23,6 +23,11 @@ const VERSION: u16 = 1;
 const HEADER_SIZE: usize = 32;
 const MAX_PAYLOAD: usize = 16 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(3);
+/* The simulation connection is a live UI transport, not a file transfer.
+ * Keep disconnect/re-enumeration failures short so they can never stall a
+ * heartbeat or occupy the desktop runtime's blocking pool for seconds. */
+const SIM_TIMEOUT: Duration = Duration::from_millis(250);
+const SIM_READ_TIMEOUT: Duration = Duration::from_millis(100);
 
 const PING: u16 = 1;
 const LIST: u16 = 2;
@@ -321,18 +326,21 @@ pub fn sim_write(payload: &[u8]) -> Result<(), String> {
     if payload.len() > 4096 {
         return Err("simulation USB record is too large".into());
     }
-    with_device(|handle| {
-        let mut frame = Vec::with_capacity(payload.len() + 8);
-        frame.extend_from_slice(b"SIM1");
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(payload);
-        let count = handle.write_bulk(SIM_OUT, &frame, TIMEOUT)
-            .map_err(|error| format!("simulation USB write failed: {error}"))?;
-        if count != frame.len() {
-            return Err(format!("short simulation USB write: {count}/{}", frame.len()));
-        }
-        Ok(())
-    })
+    /* Do not queue a simulation heartbeat behind a slow file operation.
+     * Auto mode falls back to UDP, and USB mode retries at the next beat. */
+    let _guard = USB_LOCK.try_lock()
+        .map_err(|_| "simulation USB transport is busy".to_string())?;
+    let handle = open()?;
+    let mut frame = Vec::with_capacity(payload.len() + 8);
+    frame.extend_from_slice(b"SIM1");
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    let count = handle.write_bulk(SIM_OUT, &frame, SIM_TIMEOUT)
+        .map_err(|error| format!("simulation USB write failed: {error}"))?;
+    if count != frame.len() {
+        return Err(format!("short simulation USB write: {count}/{}", frame.len()));
+    }
+    Ok(())
 }
 
 fn take_sim_frame(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, String> {
@@ -374,10 +382,35 @@ fn read_sim_frame(handle: &DeviceHandle<Context>, buffer: &mut Vec<u8>,
 }
 
 pub fn sim_read() -> Result<Option<Vec<u8>>, String> {
-    let _guard = USB_LOCK.lock().map_err(|_| "USB transport lock poisoned".to_string())?;
-    let handle = open()?;
+    let _guard = USB_LOCK.try_lock()
+        .map_err(|_| "simulation USB transport is busy".to_string())?;
     let mut buffer = SIM_RX.lock().map_err(|_| "simulation USB receive lock poisoned".to_string())?;
-    read_sim_frame(&handle, &mut buffer, Duration::from_millis(300))
+    let handle = match open() {
+        Ok(handle) => handle,
+        Err(error) => {
+            /* A disconnect may occur after a partial multi-packet record.
+             * Never join that stale prefix to data from the next device. */
+            buffer.clear();
+            return Err(error);
+        }
+    };
+    let prior_length = buffer.len();
+    match read_sim_frame(&handle, &mut buffer, SIM_READ_TIMEOUT) {
+        Ok(Some(frame)) => Ok(Some(frame)),
+        Ok(None) => {
+            /* Bulk packets for one record arrive back-to-back.  A timeout
+             * after an unchanged partial prefix means the cable was removed
+             * or that transfer was abandoned; discard it before replug. */
+            if !buffer.is_empty() && buffer.len() == prior_length {
+                buffer.clear();
+            }
+            Ok(None)
+        }
+        Err(error) => {
+            buffer.clear();
+            Err(error)
+        }
+    }
 }
 
 /// Verify the complete simulation transport, not merely the independent
