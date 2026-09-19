@@ -37,7 +37,10 @@ fn auto_usb_available() -> bool {
         return probe.usable;
     }
 
-    probe.usable = usb_file::available();
+    /* Do not make an Auto-mode UI action wait for a file PING while EP2 is
+     * serving telemetry.  USB will be retried from the cached probe shortly;
+     * network remains the immediate fallback. */
+    probe.usable = usb_file::available_quick();
     probe.checked = Some(Instant::now());
     probe.usable
 }
@@ -188,11 +191,19 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
 
 fn list_directory(path: &str) -> Result<Vec<String>, String> {
     if use_usb() {
-        let mut entries: Vec<String> = usb_file::list(&format!("jsbsim/{path}"))?
-            .into_iter().map(|entry| entry.name).collect();
-        entries.sort();
-        entries.dedup();
-        return Ok(entries);
+        let usb_entries = match transport::mode() {
+            TransportMode::Auto => usb_file::list_quick(&format!("jsbsim/{path}")),
+            TransportMode::Usb => usb_file::list(&format!("jsbsim/{path}")),
+            TransportMode::Network => unreachable!(),
+        };
+        if let Ok(entries) = usb_entries {
+            let mut entries: Vec<String> = entries.into_iter().map(|entry| entry.name).collect();
+            entries.sort();
+            entries.dedup();
+            return Ok(entries);
+        } else if !matches!(transport::mode(), TransportMode::Auto) {
+            return Err(usb_entries.unwrap_err());
+        }
     }
     let url = format!("{}/jsbsim/{}/", endpoint(), path);
     let auth = credentials();
@@ -226,7 +237,16 @@ fn safe_relative_path(path: &str) -> Result<&str, String> {
 fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
     safe_relative_path(path)?;
     if use_usb() {
-        return Ok(usb_file::list(path)?.into_iter().map(|entry| entry.name).collect());
+        let usb_entries = match transport::mode() {
+            TransportMode::Auto => usb_file::list_quick(path),
+            TransportMode::Usb => usb_file::list(path),
+            TransportMode::Network => unreachable!(),
+        };
+        if let Ok(entries) = usb_entries {
+            return Ok(entries.into_iter().map(|entry| entry.name).collect());
+        } else if !matches!(transport::mode(), TransportMode::Auto) {
+            return Err(usb_entries.unwrap_err());
+        }
     }
     let url = format!("{}/{}/", endpoint(), path.trim_matches('/'));
     let auth = credentials();

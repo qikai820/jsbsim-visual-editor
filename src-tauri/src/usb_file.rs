@@ -23,6 +23,12 @@ const VERSION: u16 = 1;
 const HEADER_SIZE: usize = 32;
 const MAX_PAYLOAD: usize = 16 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(3);
+/* Automatic transport selection must never hold the live simulation link for
+ * a file-service timeout.  A healthy vendor endpoint replies to PING/LIST in
+ * a few milliseconds; use this small budget only when the caller may fall
+ * back to Ethernet. */
+const AUTO_FILE_TIMEOUT: Duration = Duration::from_millis(300);
+const AUTO_LOCK_WAIT: Duration = Duration::from_millis(150);
 /* The simulation connection is a live UI transport, not a file transfer.
  * Keep disconnect/re-enumeration failures short so they can never stall a
  * heartbeat or occupy the desktop runtime's blocking pool for seconds. */
@@ -93,17 +99,10 @@ fn open() -> Result<DeviceHandle<Context>, String> {
     Ok(handle)
 }
 
-/// True only when the complete private file protocol is operational.
-/// A successful claim is insufficient: an endpoint can enumerate while its
-/// device-side IN queue is broken, which previously selected a dead transport.
-pub fn available() -> bool {
-    ping().is_ok()
-}
-
-fn write_exact(handle: &DeviceHandle<Context>, mut data: &[u8]) -> Result<(), String> {
+fn write_exact(handle: &DeviceHandle<Context>, mut data: &[u8], timeout: Duration) -> Result<(), String> {
     while !data.is_empty() {
         let count = handle
-            .write_bulk(FILE_OUT, data, TIMEOUT)
+            .write_bulk(FILE_OUT, data, timeout)
             .map_err(|error| format!("USB bulk write failed: {error}"))?;
         if count == 0 {
             return Err("USB bulk write returned zero bytes".into());
@@ -116,10 +115,11 @@ fn write_exact(handle: &DeviceHandle<Context>, mut data: &[u8]) -> Result<(), St
 fn read_exact(
     handle: &DeviceHandle<Context>,
     mut data: &mut [u8],
+    timeout: Duration,
 ) -> Result<(), String> {
     while !data.is_empty() {
         let count = handle
-            .read_bulk(FILE_IN, data, TIMEOUT)
+            .read_bulk(FILE_IN, data, timeout)
             .map_err(|error| format!("USB bulk read failed: {error}"))?;
         if count == 0 {
             return Err("USB bulk read returned zero bytes".into());
@@ -129,12 +129,13 @@ fn read_exact(
     Ok(())
 }
 
-fn transaction_locked(
+fn transaction_locked_with_timeout(
     handle: &DeviceHandle<Context>,
     opcode: u16,
     status: i32,
     offset: u64,
     payload: &[u8],
+    timeout: Duration,
 ) -> Result<Response, String> {
     if payload.len() > MAX_PAYLOAD {
         return Err(format!("USB payload exceeds {MAX_PAYLOAD} bytes"));
@@ -151,13 +152,13 @@ fn transaction_locked(
     header[20..28].copy_from_slice(&offset.to_le_bytes());
     header[28..32].copy_from_slice(&if payload.is_empty() { 0 } else { crc32(payload) }.to_le_bytes());
 
-    write_exact(handle, &header)?;
+    write_exact(handle, &header, timeout)?;
     if !payload.is_empty() {
-        write_exact(handle, payload)?;
+        write_exact(handle, payload, timeout)?;
     }
 
     let mut response_header = [0u8; HEADER_SIZE];
-    read_exact(handle, &mut response_header)?;
+    read_exact(handle, &mut response_header, timeout)?;
     let response_magic = u32::from_le_bytes(response_header[0..4].try_into().unwrap());
     let response_version = u16::from_le_bytes(response_header[4..6].try_into().unwrap());
     let response_opcode = u16::from_le_bytes(response_header[6..8].try_into().unwrap());
@@ -177,7 +178,7 @@ fn transaction_locked(
 
     let mut response_payload = vec![0u8; response_length];
     if response_length > 0 {
-        read_exact(handle, &mut response_payload)?;
+        read_exact(handle, &mut response_payload, timeout)?;
         if crc32(&response_payload) != response_crc {
             return Err("USB response CRC32 mismatch".into());
         }
@@ -194,8 +195,37 @@ fn transaction_locked(
     Ok(response)
 }
 
+fn transaction_locked(
+    handle: &DeviceHandle<Context>, opcode: u16, status: i32, offset: u64,
+    payload: &[u8],
+) -> Result<Response, String> {
+    transaction_locked_with_timeout(handle, opcode, status, offset, payload, TIMEOUT)
+}
+
 fn with_device<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
     let _guard = USB_LOCK.lock().map_err(|_| "USB transport lock poisoned".to_string())?;
+    let handle = open()?;
+    operation(&handle)
+}
+
+/* Used only by Auto-mode library discovery.  Leave the receiver one short
+ * read interval to release EP2, but never queue behind it for seconds. */
+fn with_device_quick<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
+    let deadline = std::time::Instant::now() + AUTO_LOCK_WAIT;
+    let _guard = loop {
+        match USB_LOCK.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err("USB interface remained busy with simulation telemetry".into());
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("USB transport lock poisoned".into());
+            }
+        }
+    };
     let handle = open()?;
     operation(&handle)
 }
@@ -219,9 +249,40 @@ pub fn ping() -> Result<String, String> {
     })
 }
 
+/// Probe USB without letting a missing or occupied endpoint suspend the
+/// realtime transport.  It is intentionally not used for explicit USB mode.
+pub fn available_quick() -> bool {
+    with_device_quick(|handle| {
+        let response = transaction_locked_with_timeout(
+            handle, PING, 0, 0, &[], AUTO_FILE_TIMEOUT,
+        )?;
+        Ok(String::from_utf8_lossy(&response.payload).into_owned())
+    }).is_ok()
+}
+
 pub fn list(path: &str) -> Result<Vec<UsbFileEntry>, String> {
     with_device(|handle| {
         let response = transaction_locked(handle, LIST, 0, 0, path.as_bytes())?;
+        let text = std::str::from_utf8(&response.payload)
+            .map_err(|_| "board returned a non-UTF-8 directory listing")?;
+        text.lines().map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let kind = fields.next().ok_or("directory entry has no type")?;
+            let name = fields.next().ok_or("directory entry has no name")?;
+            let size = fields.next().ok_or("directory entry has no size")?
+                .parse::<u64>().map_err(|_| "directory entry has invalid size")?;
+            Ok(UsbFileEntry { name: name.to_owned(), directory: kind == "D", size })
+        }).collect()
+    })
+}
+
+/// Short, non-queuing directory request for Auto mode.  A caller can safely
+/// use network FTP when this returns an error.
+pub fn list_quick(path: &str) -> Result<Vec<UsbFileEntry>, String> {
+    with_device_quick(|handle| {
+        let response = transaction_locked_with_timeout(
+            handle, LIST, 0, 0, path.as_bytes(), AUTO_FILE_TIMEOUT,
+        )?;
         let text = std::str::from_utf8(&response.payload)
             .map_err(|_| "board returned a non-UTF-8 directory listing")?;
         text.lines().map(|line| {

@@ -54,13 +54,24 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   useEffect(() => {
-    Promise.all([getAircraftLibrary(), simListTests()])
-      .then(([data, tests]) => { setLibrary(data); setScripts(tests); setLoadError(''); setLoading(false); })
-      .catch(err => {
+    let active = true;
+    /* Both lists use the board's same USB vendor interface.  Load them in
+     * sequence so opening this dialog never creates competing file requests
+     * that could delay the real-time EP2 telemetry reader. */
+    (async () => {
+      try {
+        const data = await getAircraftLibrary();
+        const tests = await simListTests();
+        if (!active) return;
+        setLibrary(data); setScripts(tests); setLoadError(''); setLoading(false);
+      } catch (err: any) {
+        if (!active) return;
         console.error(err);
         setLoadError(err?.message || String(err) || '无法读取 NuttX 模型库');
         setLoading(false);
-      });
+      }
+    })();
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
