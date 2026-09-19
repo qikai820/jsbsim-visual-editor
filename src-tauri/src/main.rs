@@ -923,6 +923,7 @@ const FIRMWARE_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 #[tauri::command]
 async fn firmware_stage(
+    app: tauri::AppHandle,
     file_name: String,
     bytes: Vec<u8>,
 ) -> Result<serde_json::Value, String> {
@@ -938,7 +939,19 @@ async fn firmware_stage(
         }
 
         let crc32 = usb_file::crc32(&bytes);
-        usb_file::write_all(FIRMWARE_REMOTE_PATH, &bytes)?;
+        let _ = app.emit("firmware-progress", serde_json::json!({
+            "stage": "upload",
+            "completed": 0,
+            "total": bytes.len()
+        }));
+        usb_file::write_all_with_progress(FIRMWARE_REMOTE_PATH, &bytes,
+            |completed, total| {
+                let _ = app.emit("firmware-progress", serde_json::json!({
+                    "stage": "upload",
+                    "completed": completed,
+                    "total": total
+                }));
+            })?;
         let remote = usb_file::stat(FIRMWARE_REMOTE_PATH)?;
         if remote.directory || remote.size != bytes.len() as u64 {
             return Err(format!(
@@ -960,11 +973,30 @@ async fn firmware_stage(
 
 #[tauri::command]
 async fn firmware_apply(
+    app: tauri::AppHandle,
     expected_size: u64,
     expected_crc32: u32,
 ) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        let verification = usb_file::apply_firmware(FIRMWARE_REMOTE_PATH)?;
+        let _ = app.emit("firmware-progress", serde_json::json!({
+            "stage": "write",
+            "completed": 0,
+            "total": expected_size
+        }));
+        let verification = usb_file::apply_firmware_with_progress(
+            FIRMWARE_REMOTE_PATH,
+            |progress| {
+                let stage = match progress.phase {
+                    usb_file::FirmwareUpdatePhase::Write => "write",
+                    usb_file::FirmwareUpdatePhase::Verify => "verify",
+                };
+                let _ = app.emit("firmware-progress", serde_json::json!({
+                    "stage": stage,
+                    "completed": progress.completed,
+                    "total": progress.total
+                }));
+            },
+        )?;
         let expected = format!("size={expected_size} crc32={expected_crc32:08x}");
         if verification.trim() != expected {
             return Err(format!(

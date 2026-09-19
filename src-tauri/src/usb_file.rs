@@ -78,6 +78,19 @@ pub struct UsbStatus {
     pub pid: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum FirmwareUpdatePhase {
+    Write,
+    Verify,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FirmwareUpdateProgress {
+    pub phase: FirmwareUpdatePhase,
+    pub completed: u64,
+    pub total: u64,
+}
+
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for byte in data {
@@ -352,11 +365,20 @@ pub fn download_to(path: &str, target: &Path) -> Result<u64, String> {
 }
 
 pub fn write_all(path: &str, data: &[u8]) -> Result<(), String> {
+    write_all_with_progress(path, data, |_, _| {})
+}
+
+pub fn write_all_with_progress(
+    path: &str,
+    data: &[u8],
+    mut progress: impl FnMut(u64, u64),
+) -> Result<(), String> {
     if path.len() > u16::MAX as usize { return Err("remote path is too long".into()); }
     with_device(|handle| {
         transaction_locked(handle, WRITE_BEGIN, 0, 0, path.as_bytes())?;
         let chunk_size = MAX_PAYLOAD.saturating_sub(path.len() + 2);
         let mut offset = 0usize;
+        progress(0, data.len() as u64);
         let result = (|| {
             while offset < data.len() {
                 let count = chunk_size.min(data.len() - offset);
@@ -366,6 +388,7 @@ pub fn write_all(path: &str, data: &[u8]) -> Result<(), String> {
                 payload.extend_from_slice(&data[offset..offset + count]);
                 transaction_locked(handle, WRITE_DATA, 0, offset as u64, &payload)?;
                 offset += count;
+                progress(offset as u64, data.len() as u64);
             }
             transaction_locked(handle, WRITE_COMMIT, 0, offset as u64, path.as_bytes())?;
             Ok(())
@@ -385,19 +408,87 @@ pub fn mkdir(path: &str) -> Result<(), String> {
     with_device(|handle| transaction_locked(handle, MKDIR, 0, 0, path.as_bytes()).map(|_| ()))
 }
 
-/// Ask the board to install a completely staged firmware file.  The long
-/// response timeout covers eMMC write and full readback verification.
-pub fn apply_firmware(path: &str) -> Result<String, String> {
+/// Ask the board to install a staged firmware file and report eMMC write and
+/// readback verification progress frames sent by the board.
+pub fn apply_firmware_with_progress(
+    path: &str,
+    mut progress: impl FnMut(FirmwareUpdateProgress),
+) -> Result<String, String> {
     with_device(|handle| {
-        let response = transaction_locked_with_timeout(
-            handle,
-            UPDATE,
-            0,
-            0,
-            path.as_bytes(),
-            FIRMWARE_UPDATE_TIMEOUT,
-        )?;
-        Ok(String::from_utf8_lossy(&response.payload).into_owned())
+        let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let mut header = [0u8; HEADER_SIZE];
+        header[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        header[4..6].copy_from_slice(&VERSION.to_le_bytes());
+        header[6..8].copy_from_slice(&UPDATE.to_le_bytes());
+        header[8..12].copy_from_slice(&request_id.to_le_bytes());
+        header[16..20].copy_from_slice(&(path.len() as u32).to_le_bytes());
+        header[28..32].copy_from_slice(&crc32(path.as_bytes()).to_le_bytes());
+
+        write_exact(handle, &header, FIRMWARE_UPDATE_TIMEOUT)?;
+        write_exact(handle, path.as_bytes(), FIRMWARE_UPDATE_TIMEOUT)?;
+
+        loop {
+            let mut response_header = [0u8; HEADER_SIZE];
+            read_exact(handle, &mut response_header, FIRMWARE_UPDATE_TIMEOUT)?;
+            let response_magic = u32::from_le_bytes(response_header[0..4].try_into().unwrap());
+            let response_version = u16::from_le_bytes(response_header[4..6].try_into().unwrap());
+            let response_opcode = u16::from_le_bytes(response_header[6..8].try_into().unwrap());
+            let response_id = u32::from_le_bytes(response_header[8..12].try_into().unwrap());
+            let response_status = i32::from_le_bytes(response_header[12..16].try_into().unwrap());
+            let response_length = u32::from_le_bytes(response_header[16..20].try_into().unwrap()) as usize;
+            let response_offset = u64::from_le_bytes(response_header[20..28].try_into().unwrap());
+            let response_crc = u32::from_le_bytes(response_header[28..32].try_into().unwrap());
+
+            if response_magic != MAGIC || response_version != VERSION ||
+                response_opcode != (UPDATE | 0x8000) || response_id != request_id {
+                return Err("invalid or out-of-sequence firmware update response".into());
+            }
+            if response_length > MAX_PAYLOAD {
+                return Err("firmware update response payload is too large".into());
+            }
+
+            let mut payload = vec![0u8; response_length];
+            if response_length > 0 {
+                read_exact(handle, &mut payload, FIRMWARE_UPDATE_TIMEOUT)?;
+                if crc32(&payload) != response_crc {
+                    return Err("firmware update response CRC32 mismatch".into());
+                }
+            }
+
+            if response_status == -libc::EINPROGRESS {
+                let text = std::str::from_utf8(&payload)
+                    .map_err(|_| "firmware progress is not UTF-8")?;
+                let mut fields = text.split('\t');
+                if fields.next() != Some("progress") {
+                    return Err("invalid firmware progress response".into());
+                }
+                let phase = match fields.next() {
+                    Some("write") => FirmwareUpdatePhase::Write,
+                    Some("verify") => FirmwareUpdatePhase::Verify,
+                    _ => return Err("firmware progress has an unknown phase".into()),
+                };
+                let completed = fields.next()
+                    .ok_or("firmware progress has no completed byte count")?
+                    .parse::<u64>()
+                    .map_err(|_| "firmware progress has an invalid completed byte count")?;
+                let total = fields.next()
+                    .ok_or("firmware progress has no total byte count")?
+                    .parse::<u64>()
+                    .map_err(|_| "firmware progress has an invalid total byte count")?;
+                if fields.next().is_some() || completed != response_offset || completed > total {
+                    return Err("firmware progress response is inconsistent".into());
+                }
+
+                progress(FirmwareUpdateProgress { phase, completed, total });
+                continue;
+            }
+
+            if response_status < 0 {
+                return Err(format!("board firmware update failed: errno {}", -response_status));
+            }
+
+            return Ok(String::from_utf8_lossy(&payload).into_owned());
+        }
     })
 }
 

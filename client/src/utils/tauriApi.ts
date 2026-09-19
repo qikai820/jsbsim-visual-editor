@@ -408,6 +408,12 @@ export interface FirmwareApplyResult {
   source: string;
 }
 
+export interface FirmwareProgress {
+  stage: 'upload' | 'write' | 'verify';
+  completed: number;
+  total: number;
+}
+
 export async function firmwareStage(fileName: string, bytes: Uint8Array): Promise<FirmwareStageResult> {
   return call('firmware_stage', { fileName, bytes: Array.from(bytes) });
 }
@@ -427,6 +433,14 @@ export async function listenSimProcessStatus(callback: EventCallback): Promise<(
   const unlisten = await tauriListen('sim-process-status', (event: any) => {
     callback(event.payload);
   });
+  unlistenFns.push(unlisten);
+  return unlisten;
+}
+
+export async function listenFirmwareProgress(callback: (progress: FirmwareProgress) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  await ensureTauri();
+  const unlisten = await tauriListen('firmware-progress', (event: any) => callback(event.payload as FirmwareProgress));
   unlistenFns.push(unlisten);
   return unlisten;
 }
