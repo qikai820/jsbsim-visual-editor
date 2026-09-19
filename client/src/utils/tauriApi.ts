@@ -391,6 +391,31 @@ export async function usbFileMkdir(path: string): Promise<void> {
   await call('usb_file_mkdir', { path });
 }
 
+export interface FirmwareStageResult {
+  fileName: string;
+  path: string;
+  size: number;
+  crc32: number;
+  staged: boolean;
+  source: string;
+}
+
+export interface FirmwareApplyResult {
+  path: string;
+  installed: boolean;
+  verification: string;
+  rebootRequired: boolean;
+  source: string;
+}
+
+export async function firmwareStage(fileName: string, bytes: Uint8Array): Promise<FirmwareStageResult> {
+  return call('firmware_stage', { fileName, bytes: Array.from(bytes) });
+}
+
+export async function firmwareApply(expectedSize: number, expectedCrc32: number): Promise<FirmwareApplyResult> {
+  return call('firmware_apply', { expectedSize, expectedCrc32 });
+}
+
 // ── Tauri event listeners (for telemetry) ───────────────────────────────────
 
 type EventCallback = (payload: any) => void;

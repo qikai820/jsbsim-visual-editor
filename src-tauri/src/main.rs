@@ -917,6 +917,72 @@ async fn usb_file_mkdir(path: String) -> Result<serde_json::Value, String> {
     }).await
 }
 
+const FIRMWARE_REMOTE_PATH: &str = "fireware/nuttx.bin";
+const FIRMWARE_MIN_SIZE: usize = 64 * 1024;
+const FIRMWARE_MAX_SIZE: usize = 64 * 1024 * 1024;
+
+#[tauri::command]
+async fn firmware_stage(
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        if !file_name.to_ascii_lowercase().ends_with(".bin") {
+            return Err("firmware file must have a .bin extension".to_owned());
+        }
+        if bytes.len() < FIRMWARE_MIN_SIZE || bytes.len() > FIRMWARE_MAX_SIZE {
+            return Err(format!(
+                "firmware size must be between {} and {} bytes",
+                FIRMWARE_MIN_SIZE, FIRMWARE_MAX_SIZE
+            ));
+        }
+
+        let crc32 = usb_file::crc32(&bytes);
+        usb_file::write_all(FIRMWARE_REMOTE_PATH, &bytes)?;
+        let remote = usb_file::stat(FIRMWARE_REMOTE_PATH)?;
+        if remote.directory || remote.size != bytes.len() as u64 {
+            return Err(format!(
+                "staged firmware size mismatch: local={} remote={}",
+                bytes.len(), remote.size
+            ));
+        }
+
+        Ok(serde_json::json!({
+            "fileName": file_name,
+            "path": format!("/data/{}", FIRMWARE_REMOTE_PATH),
+            "size": remote.size,
+            "crc32": crc32,
+            "staged": true,
+            "source": "usb-bulk"
+        }))
+    }).await
+}
+
+#[tauri::command]
+async fn firmware_apply(
+    expected_size: u64,
+    expected_crc32: u32,
+) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let verification = usb_file::apply_firmware(FIRMWARE_REMOTE_PATH)?;
+        let expected = format!("size={expected_size} crc32={expected_crc32:08x}");
+        if verification.trim() != expected {
+            return Err(format!(
+                "installed firmware verification mismatch: expected '{expected}', board returned '{}'",
+                verification.trim()
+            ));
+        }
+
+        Ok(serde_json::json!({
+            "path": format!("/data/{}", FIRMWARE_REMOTE_PATH),
+            "installed": true,
+            "verification": verification,
+            "rebootRequired": true,
+            "source": "usb-bulk"
+        }))
+    }).await
+}
+
 #[tauri::command]
 fn simulator_transport_get() -> String {
     transport::mode().as_str().to_string()
@@ -1041,6 +1107,8 @@ fn main() {
             usb_file_write,
             usb_file_delete,
             usb_file_mkdir,
+            firmware_stage,
+            firmware_apply,
             simulator_transport_get,
             simulator_transport_set,
         ])

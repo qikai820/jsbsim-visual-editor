@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, SimulatorVersion } from '../utils/tauriApi';
+import { firmwareApply, firmwareStage, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, SimulatorVersion } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 
 type Tab = '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全';
@@ -58,6 +58,9 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   const [simulatorVersion, setSimulatorVersion] = useState<SimulatorVersion | null>(null);
   const [versionStatus, setVersionStatus] = useState(tr('正在读取仿真机版本…', 'Reading simulator version…'));
   const [showVersionManager, setShowVersionManager] = useState(false);
+  const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
+  const [firmwareUpdating, setFirmwareUpdating] = useState(false);
+  const [firmwareStatus, setFirmwareStatus] = useState(tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image'));
   const [versionSnapshots, setVersionSnapshots] = useState<Array<SimulatorVersion & { savedAt: string }>>(() => {
     try { const saved = JSON.parse(localStorage.getItem('jsbsim-simulator-version-snapshots') || '[]'); return Array.isArray(saved) ? saved : []; } catch { return []; }
   });
@@ -120,6 +123,36 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     const next = [{ ...simulatorVersion, savedAt: new Date().toISOString() }, ...versionSnapshots].slice(0, 20);
     setVersionSnapshots(next);
     localStorage.setItem('jsbsim-simulator-version-snapshots', JSON.stringify(next));
+  };
+
+  const updateFirmware = async () => {
+    if (!firmwareFile || firmwareUpdating) return;
+    if (!firmwareFile.name.toLowerCase().endsWith('.bin')) {
+      setFirmwareStatus(tr('请选择 .bin 固件文件', 'Select a .bin firmware file'));
+      return;
+    }
+    if (firmwareFile.size < 64 * 1024 || firmwareFile.size > 64 * 1024 * 1024) {
+      setFirmwareStatus(tr('固件大小必须在 64 KiB 到 64 MiB 之间', 'Firmware size must be between 64 KiB and 64 MiB'));
+      return;
+    }
+    if (!window.confirm(tr(
+      `即将升级仿真机固件：\n${firmwareFile.name}\n${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB\n\n文件将先完整上传到 /data/fireware/nuttx.bin，校验后写入 eMMC。写入期间不要断电或拔除USB。确认继续吗？`,
+      `Upgrade simulator firmware?\n${firmwareFile.name}\n${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB\n\nThe complete file is staged at /data/fireware/nuttx.bin before verified eMMC installation. Do not remove power or USB during installation.`
+    ))) return;
+
+    setFirmwareUpdating(true);
+    try {
+      setFirmwareStatus(tr('正在通过USB上传到 /data/fireware…', 'Uploading to /data/fireware over USB…'));
+      const bytes = new Uint8Array(await firmwareFile.arrayBuffer());
+      const staged = await firmwareStage(firmwareFile.name, bytes);
+      setFirmwareStatus(tr('上传完成，仿真机正在写入并回读校验 eMMC…', 'Upload complete; simulator is writing and verifying eMMC…'));
+      const result = await firmwareApply(staged.size, staged.crc32);
+      setFirmwareStatus(`${tr('升级成功，重启仿真机后生效', 'Upgrade successful; reboot the simulator to activate')} · ${result.verification}`);
+    } catch (error: any) {
+      setFirmwareStatus(`${tr('升级失败', 'Upgrade failed')}: ${error?.message || error}`);
+    } finally {
+      setFirmwareUpdating(false);
+    }
   };
 
   useEffect(() => { void refreshSimulatorVersion(); }, []);
@@ -188,7 +221,20 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
         </main>
       </div>
       <footer><span>{status}</span><div><button onClick={()=>setConfig(defaults)}>{tr('恢复默认值','Restore Defaults')}</button><button className="primary" disabled={saving || serialized === baseline} onClick={()=>void save()}>{saving?tr('保存中…','Saving…'):tr('保存到仿真机','Save to Simulator')}</button></div></footer>
-      {showVersionManager && <div className="sim-config-version-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setShowVersionManager(false); }}><section className="sim-config-version-manager"><header><b>{tr('仿真机版本管理', 'Simulator Version Manager')}</b><button type="button" onClick={() => setShowVersionManager(false)}>×</button></header><p>{tr('版本来自仿真机只读 VERSION.json；快照保存在本机，便于记录每次固件和航空库组合。', 'The version comes from the simulator read-only VERSION.json. Snapshots are stored locally to track firmware and aviation-library combinations.')}</p><div className="sim-config-version-actions"><button type="button" onClick={() => void refreshSimulatorVersion()}>{tr('重新读取仿真机', 'Read simulator')}</button><button type="button" disabled={!simulatorVersion} onClick={saveVersionSnapshot}>{tr('保存当前快照', 'Save snapshot')}</button></div><div className="sim-config-version-list">{versionSnapshots.length === 0 ? <span>{tr('暂无版本快照', 'No version snapshots')}</span> : versionSnapshots.map((item, index) => <article key={`${item.savedAt}-${index}`}><b>{item.product || 'JSBSim Realtime'} {item.version || '—'}</b><span>{item.firmware || '—'} · JSBSim {item.jsbsim || '—'} · {new Date(item.savedAt).toLocaleString()}</span></article>)}</div></section></div>}
+      {showVersionManager && <div className="sim-config-version-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !firmwareUpdating) setShowVersionManager(false); }}>
+        <section className="sim-config-version-manager">
+          <header><b>{tr('仿真机版本管理', 'Simulator Version Manager')}</b><button type="button" disabled={firmwareUpdating} onClick={() => setShowVersionManager(false)}>×</button></header>
+          <p>{tr('版本来自仿真机只读 VERSION.json；快照保存在本机，便于记录每次固件和航空库组合。', 'The version comes from the simulator read-only VERSION.json. Snapshots are stored locally to track firmware and aviation-library combinations.')}</p>
+          <div className="sim-config-version-actions"><button type="button" disabled={firmwareUpdating} onClick={() => void refreshSimulatorVersion()}>{tr('重新读取仿真机', 'Read simulator')}</button><button type="button" disabled={!simulatorVersion || firmwareUpdating} onClick={saveVersionSnapshot}>{tr('保存当前快照', 'Save snapshot')}</button></div>
+          <div className="sim-config-version-list">{versionSnapshots.length === 0 ? <span>{tr('暂无版本快照', 'No version snapshots')}</span> : versionSnapshots.map((item, index) => <article key={`${item.savedAt}-${index}`}><b>{item.product || 'JSBSim Realtime'} {item.version || '—'}</b><span>{item.firmware || '—'} · JSBSim {item.jsbsim || '—'} · {new Date(item.savedAt).toLocaleString()}</span></article>)}</div>
+          <section className="firmware-update-panel">
+            <div><b>{tr('固件升级', 'Firmware Upgrade')}</b><span>{tr('先完整上传，再由仿真机执行 update 写入 eMMC', 'Stage completely, then let the simulator run update and verify eMMC')}</span></div>
+            <label className="firmware-file-picker"><input type="file" accept=".bin,application/octet-stream" disabled={firmwareUpdating} onChange={event => { const file = event.target.files?.[0] || null; setFirmwareFile(file); setFirmwareStatus(file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MiB` : tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image')); }} /><span>{firmwareFile ? firmwareFile.name : tr('选择固件', 'Choose Firmware')}</span></label>
+            <button type="button" className="firmware-update-button" disabled={!firmwareFile || firmwareUpdating} onClick={() => void updateFirmware()}>{firmwareUpdating ? tr('升级中…', 'Updating…') : tr('升级', 'Upgrade')}</button>
+            <p className={firmwareStatus.includes(tr('失败', 'failed')) ? 'error' : ''}>{firmwareStatus}</p>
+          </section>
+        </section>
+      </div>}
     </div>
   </div>;
 }

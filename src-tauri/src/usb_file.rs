@@ -23,6 +23,7 @@ const VERSION: u16 = 1;
 const HEADER_SIZE: usize = 32;
 const MAX_PAYLOAD: usize = 16 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(3);
+const FIRMWARE_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 /* Automatic transport selection must never hold the live simulation link for
  * a file-service timeout.  A healthy vendor endpoint replies to PING/LIST in
  * a few milliseconds; use this small budget only when the caller may fall
@@ -45,6 +46,7 @@ const WRITE_COMMIT: u16 = 7;
 const DELETE: u16 = 8;
 const MKDIR: u16 = 9;
 const WRITE_ABORT: u16 = 10;
+const UPDATE: u16 = 11;
 
 static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static USB_LOCK: Mutex<()> = Mutex::new(());
@@ -76,7 +78,7 @@ pub struct UsbStatus {
     pub pid: u16,
 }
 
-fn crc32(data: &[u8]) -> u32 {
+pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for byte in data {
         crc ^= u32::from(*byte);
@@ -381,6 +383,22 @@ pub fn delete(path: &str) -> Result<(), String> {
 
 pub fn mkdir(path: &str) -> Result<(), String> {
     with_device(|handle| transaction_locked(handle, MKDIR, 0, 0, path.as_bytes()).map(|_| ()))
+}
+
+/// Ask the board to install a completely staged firmware file.  The long
+/// response timeout covers eMMC write and full readback verification.
+pub fn apply_firmware(path: &str) -> Result<String, String> {
+    with_device(|handle| {
+        let response = transaction_locked_with_timeout(
+            handle,
+            UPDATE,
+            0,
+            0,
+            path.as_bytes(),
+            FIRMWARE_UPDATE_TIMEOUT,
+        )?;
+        Ok(String::from_utf8_lossy(&response.payload).into_owned())
+    })
 }
 
 pub fn sim_write(payload: &[u8]) -> Result<(), String> {
