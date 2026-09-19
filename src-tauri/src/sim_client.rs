@@ -165,7 +165,12 @@ impl SimClient {
          * a successful write avoids sending START/LOAD twice to the board;
          * UDP remains a fallback when USB is absent or its endpoint fails. */
         if mode != crate::transport::TransportMode::Network {
-            match crate::usb_file::sim_write(packet) {
+            /* Lifecycle and actuator commands must not be discarded merely
+             * because the receiver currently owns the vendor interface for
+             * one short bulk-read timeout.  The periodic heartbeat below
+             * remains non-blocking; this bounded wait is only for an actual
+             * user command such as START or LOAD. */
+            match crate::usb_file::sim_write_control(packet) {
                 Ok(()) => return Ok(()),
                 Err(error) => last_error = Some(std::io::Error::other(error)),
             }

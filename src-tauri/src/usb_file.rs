@@ -404,6 +404,28 @@ pub fn sim_write(payload: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Send a user-requested control/lifecycle frame.  Unlike the periodic
+/// heartbeat, losing START/LOAD because the receiver owns the interface for
+/// its 100 ms read window is not acceptable.  Wait only for that short window
+/// and still leave Auto mode free to fall back to UDP on a real USB failure.
+pub fn sim_write_control(payload: &[u8]) -> Result<(), String> {
+    if payload.len() > 4096 {
+        return Err("simulation USB record is too large".into());
+    }
+    with_device_quick(|handle| {
+        let mut frame = Vec::with_capacity(payload.len() + 8);
+        frame.extend_from_slice(b"SIM1");
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        let count = handle.write_bulk(SIM_OUT, &frame, SIM_TIMEOUT)
+            .map_err(|error| format!("simulation USB write failed: {error}"))?;
+        if count != frame.len() {
+            return Err(format!("short simulation USB write: {count}/{}", frame.len()));
+        }
+        Ok(())
+    })
+}
+
 fn take_sim_frame(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, String> {
     if buffer.len() < 8 {
         return Ok(None);
