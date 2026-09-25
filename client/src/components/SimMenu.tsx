@@ -213,6 +213,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [connected, setConnected] = useState(false);
   const [cpuLoad, setCpuLoad] = useState<number | null>(null);
   const [cpuCores, setCpuCores] = useState<number[]>([]);
+  const [healthFresh, setHealthFresh] = useState(false);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
   const [simulationDt, setSimulationDt] = useState<number | null>(null);
@@ -267,6 +268,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
    * authoritative.  The NuttX bridge reports asynchronously over UDP and a
    * status poll must never alternate the Start/Stop button with stale frames. */
   const localLifecycleControlUntilRef = useRef(0);
+  const launchInProgressRef = useRef(false);
   const crashReportedRef = useRef(false);
   const appendLog = useCallback((message: string) => {
     const stamp = new Date().toLocaleTimeString();
@@ -318,6 +320,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         ? status.cpuCores.map((value: unknown) => Number(value)).filter(Number.isFinite)
         : [];
       setCpuCores(cores);
+      const fresh = !!status.connected && typeof status.healthAgeMs === 'number' &&
+        status.healthAgeMs <= 1500;
+      setHealthFresh(fresh);
       const remoteMemory = status.memory;
       setMemory(remoteMemory && Number.isFinite(Number(remoteMemory.percent)) ? {
         total: Number(remoteMemory.total) || 0,
@@ -325,17 +330,19 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         free: Number(remoteMemory.free) || 0,
         percent: Number(remoteMemory.percent) || 0,
       } : null);
-      const remoteFdmRunMs = Number(status.fdmRunMs);
-      if (Number.isFinite(remoteFdmRunMs) && remoteFdmRunMs >= 0) {
+      const remoteFdmRunMs = typeof status.fdmRunMs === 'number' ? status.fdmRunMs : null;
+      if (remoteFdmRunMs != null && Number.isFinite(remoteFdmRunMs) && remoteFdmRunMs >= 0) {
         setFdmRunMs(remoteFdmRunMs);
-        const now = Date.now();
-        setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs }]
-          .filter(sample => now - sample.at <= 30000));
+        if (status.connected && status.state === 'running' && !launchInProgressRef.current) {
+          const now = Date.now();
+          setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs }]
+            .filter(sample => now - sample.at <= 30000));
+        }
       }
       const remoteSimulationDt = Number(status.simulationDt);
       setSimulationDt(Number.isFinite(remoteSimulationDt) && remoteSimulationDt > 0
         ? remoteSimulationDt : null);
-      if (cores.length) {
+      if (fresh && cores.length) {
         setCpuHistory(history => [...history, cores].slice(-100));
       }
       setRemoteState(status.state || (status.connected ? 'waiting' : 'disconnected'));
@@ -343,19 +350,23 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
        * `stopped` snapshot or report disconnected.  Only a confirmed crash
        * may bypass the local command grace period; otherwise that stale
        * snapshot makes the Start button flash back after one status poll. */
-      const remoteCrashed = status.taskAlive === false || status.state === 'crashed';
+      const remoteCrashed = status.state !== 'loading' &&
+        (status.taskAlive === false || status.state === 'crashed');
       /* A stopped state has already passed the backend's command-handshake
        * resolution and now comes from the periodic board heartbeat. Let it
        * end the local start grace period immediately when a script finishes. */
       const heartbeatStopped = status.state === 'stopped';
-      if (remoteCrashed || heartbeatStopped || Date.now() >= localLifecycleControlUntilRef.current) {
+      if (!launchInProgressRef.current &&
+          (remoteCrashed || heartbeatStopped || status.state === 'loading' ||
+           Date.now() >= localLifecycleControlUntilRef.current)) {
         if (heartbeatStopped) localLifecycleControlUntilRef.current = 0;
         setRunning(status.running);
         setPaused(!!status.paused);
-        setPhase(status.state === 'paused' ? 'paused' :
+        setPhase(status.state === 'loading' ? 'loading' :
+          status.state === 'paused' ? 'paused' :
           status.state === 'running' ? 'running' : 'idle');
       }
-      if (status.taskAlive === false || status.state === 'crashed') {
+      if (!launchInProgressRef.current && remoteCrashed) {
         if (!crashReportedRef.current) {
           crashReportedRef.current = true;
           setError('JSBSim 任务异常退出');
@@ -430,7 +441,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
-  const runBusy = parentLoading || loading;
+  const runBusy = parentLoading || loading ||
+    (external && connected && remoteState === 'loading');
   const phaseText: Record<SimPhase, string> = {
     idle: '已停止', starting: '正在启动', running: '运行中', stopping: '正在停止',
     restarting: '正在重新运行', pausing: '正在暂停', paused: '已暂停', resuming: '正在继续', loading: '正在加载模型',
@@ -454,6 +466,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     const model = !script ? (selectedModel || preparedTarget.model || undefined) : undefined;
     const modelToSync = selectedModel || preparedTarget.model || undefined;
     if (!script && !model) return;
+    launchInProgressRef.current = true;
     setLoading(true);
     setPhase('starting');
     appendLog(`启动请求: ${selectedModel || selectedTest || '当前选择'}`);
@@ -483,9 +496,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setPhase('running');
     } catch (err: any) {
       const message = err?.message || String(err || '启动失败');
+      localLifecycleControlUntilRef.current = 0;
       setError(message);
       appendLog(`启动失败: ${message}`);
     }
+    launchInProgressRef.current = false;
     setLoading(false);
   }, [selectedTest, selectedModel, preparedTarget, onSyncRemoteModel]);
 
@@ -643,6 +658,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   }, [preparedTarget, paused, appendLog]);
 
   const handleRestart = useCallback(async () => {
+    launchInProgressRef.current = true;
     setLoading(true);
     setPhase('restarting');
     appendLog(`重新运行当前模型: ${displayName || '当前模型'}`);
@@ -656,6 +672,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     } catch (err: any) {
       setError(err.message || '重新运行失败');
     }
+    launchInProgressRef.current = false;
     setLoading(false);
   }, [appendLog, displayName]);
 
@@ -724,6 +741,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // timing visible while the model is stopped so board health remains
   // observable between runs and reloads.
   const showRuntimeStatus = external || running || phase !== 'idle';
+  const fdmLoading = external && (launchInProgressRef.current || remoteState === 'loading');
   const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
   const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.value)) * 1.1;
   const fdmValues = fdmVisibleHistory.map(sample => sample.value);
@@ -787,17 +805,21 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         <span className={`sim-connection-chip ${connectionClass}`} title="仿真机连接状态">
           <span className="sim-connection-dot" />
           {connectionLabel}
-          {external && cpuCores.length > 0 && (
+          {external && (
             <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
-              CPU {cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')}
+              CPU {healthFresh && cpuCores.length > 0
+                ? cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')
+                : '等待更新'}
             </button>
           )}
           {external && memory && (
             <span className="sim-connection-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
-              RAM {memory.percent.toFixed(1)}%
+              RAM {healthFresh ? `${memory.percent.toFixed(1)}%` : '等待更新'}
             </span>
           )}
-          {external && fdmRunMs != null && (
+          {fdmLoading ? (
+            <span className="sim-connection-fdm sim-connection-fdm-loading" title="模型正在加载，FDM 尚未开始执行">FDM 加载中</span>
+          ) : external && fdmRunMs != null && (
             <button type="button" className="sim-connection-fdm" title="单击查看 FDM 运行时间曲线" onClick={event => { event.stopPropagation(); setFdmPopupOpen(open => !open); }}>
               FDM {fdmRunMs.toFixed(3)} ms <small>⌁</small>
             </button>
@@ -806,7 +828,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       )}
       {showRuntimeStatus && cpuPopupOpen && cpuCores.length > 0 && (
         <div className="sim-cpu-popup">
-          <div className="sim-cpu-popup-head"><b>双核 CPU 利用率</b><span>10 Hz</span></div>
+          <div className="sim-cpu-popup-head"><b>双核 CPU 利用率</b><span>{healthFresh ? '10 Hz' : '等待更新'}</span></div>
           <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
             {[25, 50, 75].map(value => <line key={value} x1="0" x2="240" y1={92-value*.92} y2={92-value*.92} className="sim-cpu-grid" />)}
             {cpuCores.map((_, core) => {
@@ -815,11 +837,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             })}
           </svg>
           <div className="sim-cpu-legend">
-            {cpuCores.map((value, core) => <span key={core} className={`core-${core}`}>CPU{core} <b>{value.toFixed(1)}%</b></span>)}
+            {cpuCores.map((value, core) => <span key={core} className={`core-${core}`}>CPU{core} <b>{healthFresh ? `${value.toFixed(1)}%` : '--'}</b></span>)}
           </div>
         </div>
       )}
-      {showRuntimeStatus && fdmPopupOpen && fdmRunMs != null && (
+      {showRuntimeStatus && !fdmLoading && fdmPopupOpen && fdmRunMs != null && (
         <div className="sim-fdm-popup">
           <div className="sim-cpu-popup-head"><b>FDM 单步运行时间</b><span>{fdmRunMs.toFixed(3)} ms</span></div>
           <div className="sim-fdm-window-picker">

@@ -423,14 +423,24 @@ struct SimStartRequest {
 }
 
 #[tauri::command]
-fn sim_start(
+async fn sim_start(
+    app: tauri::AppHandle,
+    script: Option<String>,
+    model: Option<String>,
+) -> Result<serde_json::Value, String> {
+    run_blocking(move || sim_start_blocking(app, script, model)).await
+}
+
+fn sim_start_blocking(
     app: tauri::AppHandle,
     script: Option<String>,
     model: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
-        let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+        /* Model load can take 30 seconds.  Do not hold this shared mutex
+         * while the background command waits for board confirmation. */
+        let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         // MCAP chooses its directory and filename as soon as the bridge loads
         // a model. Synchronize the board clock first so a stale boot clock
         // cannot create logs under an old date such as 2022-03-01.
@@ -449,6 +459,7 @@ fn sim_start(
             .or_else(|| script.as_deref())
             .ok_or("The selected launch has no model")?;
         if !client.wait_for_running_model(expected_model, std::time::Duration::from_secs(30)) {
+            client.clear_lifecycle_request("running");
             return Err(format!(
                 "NuttX did not confirm model '{}' running within 30 seconds",
                 expected_model
@@ -477,7 +488,7 @@ fn sim_start(
 fn sim_pause(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
-        let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+        let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         client.request_lifecycle_state("paused");
         client.send_lifecycle_command(3, "paused", std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("paused", std::time::Duration::from_secs(3)) {
@@ -511,7 +522,7 @@ fn sim_pause(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 fn sim_resume(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
-        let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+        let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         client.request_lifecycle_state("running");
         client.send_lifecycle_command(4, "running", std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("running", std::time::Duration::from_secs(3)) {
@@ -530,7 +541,7 @@ fn sim_resume(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 fn sim_restart(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
-        let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+        let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         client.send_restart().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("running");
         return Ok(serde_json::json!({"running": true, "restarting": true, "external": true}));
@@ -545,7 +556,7 @@ fn sim_restart(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
-        let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+        let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         client.request_lifecycle_state("stopped");
         client.send_lifecycle_command(2, "stopped", std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if !client.wait_for_lifecycle_state("stopped", std::time::Duration::from_secs(3))
@@ -656,7 +667,15 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
          * a matching heartbeat acknowledges the request, the heartbeat state
          * becomes authoritative for natural completion and pause/stop. */
         let lifecycle_state = client.lifecycle_state();
-        let remote_state = if task_alive == Some(false) {
+        /* START/LOAD is acknowledged before XML and RunIC finish.  Expose
+         * the board's explicit loading heartbeat even while the local
+         * running request is pending. */
+        let board_loading = connected && latest.as_ref()
+            .and_then(|frame| frame.get("state"))
+            .and_then(|state| state.as_str()) == Some("loading");
+        let remote_state = if board_loading {
+            "loading".to_owned()
+        } else if task_alive == Some(false) {
             "crashed".to_owned()
         } else if lifecycle_state.as_deref() == Some("stopped") {
             /* The periodic communication-task heartbeat is authoritative.
@@ -686,6 +705,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             .and_then(|value| value.as_str());
         let cpu = client.jsbsim_cpu_load();
         let cpu_cores = client.cpu_core_loads();
+        let health_age_ms = client.health_packet_age_ms();
         let memory = client.memory_usage();
         let fdm_run_ms = client.fdm_run_ms();
         let simulation_dt = client.simulation_dt();
@@ -704,6 +724,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "packets": client.packet_count(),
             "cpu": cpu,
             "cpuCores": cpu_cores,
+            "healthAgeMs": health_age_ms,
             "memory": memory,
             "fdmRunMs": fdm_run_ms,
             "simulationDt": simulation_dt,

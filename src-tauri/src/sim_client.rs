@@ -50,6 +50,9 @@ struct SimClientInner {
     /// lifecycle frame may arrive immediately afterwards and must not make
     /// the toolbar CPU indicator disappear.
     latest_task_top: Option<Value>,
+    /// Receipt time of the latest CPU/RAM/FDM health frame, excluding task
+    /// table slices which can arrive even when live CPU samples have stopped.
+    last_health_packet_time: Option<Instant>,
     /// Task-list slices are assembled by generation before being exposed to
     /// the UI. Metrics packets remain independent and cannot erase the list.
     task_list_generation: Option<u64>,
@@ -245,6 +248,7 @@ impl SimClient {
                 latest: None,
                 latest_sim_status: None,
                 latest_task_top: None,
+                last_health_packet_time: None,
                 task_list_generation: None,
                 task_list: Vec::new(),
                 commanded_lifecycle_state: None,
@@ -346,6 +350,11 @@ impl SimClient {
                                                 }
                                             }
                                             if val.get("task_top").is_some() {
+                                                if val.get("kind").and_then(Value::as_str) == Some("task_top")
+                                                    && val.get("task_top").and_then(|top| top.get("cpu_cores")).is_some()
+                                                {
+                                                    state.last_health_packet_time = Some(Instant::now());
+                                                }
                                                 let task_slice = val.get("kind")
                                                     .and_then(Value::as_str) == Some("task_top_tasks");
                                                 if task_slice {
@@ -577,6 +586,13 @@ impl SimClient {
     /// Total number of telemetry packets received since startup.
     pub fn packet_count(&self) -> u64 {
         self.inner.lock().unwrap().packets
+    }
+
+    /// Age of the latest live performance sample, independent of heartbeat
+    /// and task-list packets that can keep the transport connected.
+    pub fn health_packet_age_ms(&self) -> Option<u64> {
+        self.inner.lock().unwrap().last_health_packet_time
+            .map(|at| at.elapsed().as_millis().min(u64::MAX as u128) as u64)
     }
 
     /// Whether the reported JSBSim simulation clock advanced in the recent
