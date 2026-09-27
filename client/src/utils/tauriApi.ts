@@ -446,6 +446,8 @@ export interface UsbEditorSession {
   remotePath: string;
   localPath: string;
   application: string;
+  modified: boolean;
+  localError: string | null;
 }
 
 export async function usbFileOpenEditor(path: string, directory: string): Promise<UsbEditorSession | null> {

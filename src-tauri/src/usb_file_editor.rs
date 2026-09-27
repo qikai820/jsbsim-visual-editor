@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,12 +13,15 @@ pub struct EditorSessionInfo {
     pub remote_path: String,
     pub local_path: String,
     pub application: String,
+    pub modified: bool,
+    pub local_error: Option<String>,
 }
 
 #[derive(Clone)]
 struct EditorSession {
     info: EditorSessionInfo,
     baseline: (u64, u32),
+    observed: Option<(u64, Option<SystemTime>)>,
 }
 
 #[derive(Serialize)]
@@ -50,8 +54,38 @@ fn local_fingerprint(path: &Path) -> Result<(u64, u32), String> {
 }
 
 pub fn sessions() -> Result<Vec<EditorSessionInfo>, String> {
-    let entries = registry().lock().map_err(|_| "编辑会话锁已损坏")?;
-    let mut result = entries.values().map(|session| session.info.clone()).collect::<Vec<_>>();
+    let mut entries = registry().lock().map_err(|_| "编辑会话锁已损坏")?;
+    let mut result = Vec::with_capacity(entries.len());
+    for session in entries.values_mut() {
+        let path = Path::new(&session.info.local_path);
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                let stamp = (metadata.len(), metadata.modified().ok());
+                if session.observed != Some(stamp) || session.info.local_error.is_some() {
+                    match local_fingerprint(path) {
+                        Ok(fingerprint) => {
+                            session.info.modified = fingerprint != session.baseline;
+                            session.info.local_error = None;
+                            let current_stamp = std::fs::metadata(path).ok()
+                                .map(|current| (current.len(), current.modified().ok()));
+                            session.observed = current_stamp.filter(|current| *current == stamp);
+                        }
+                        Err(error) => {
+                            session.info.modified = false;
+                            session.info.local_error = Some(error);
+                            session.observed = None;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                session.info.modified = false;
+                session.info.local_error = Some(format!("本地编辑副本无法读取: {error}"));
+                session.observed = None;
+            }
+        }
+        result.push(session.info.clone());
+    }
     result.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(result)
 }
@@ -61,6 +95,11 @@ pub fn save(id: &str) -> Result<EditorSaveResult, String> {
         .get(id).cloned().ok_or("编辑会话已结束")?;
     let local = local_fingerprint(Path::new(&session.info.local_path))?;
     if local == session.baseline {
+        if let Some(current) = registry().lock().map_err(|_| "编辑会话锁已损坏")?.get_mut(id) {
+            current.info.modified = false;
+            current.info.local_error = None;
+            current.observed = None;
+        }
         return Ok(EditorSaveResult { changed: false, size: local.0 });
     }
     let remote = crate::usb_file::fingerprint(&session.info.remote_path)?;
@@ -88,6 +127,9 @@ pub fn save(id: &str) -> Result<EditorSaveResult, String> {
     let copied = result?;
     if let Some(current) = registry().lock().map_err(|_| "编辑会话锁已损坏")?.get_mut(id) {
         current.baseline = copied;
+        current.info.modified = false;
+        current.info.local_error = None;
+        current.observed = None;
     }
     Ok(EditorSaveResult { changed: true, size: copied.0 })
 }
@@ -165,9 +207,11 @@ pub async fn open(window: tauri::WebviewWindow, path: String, directory: String)
         remote_path: path,
         local_path: local_path.to_string_lossy().into_owned(),
         application,
+        modified: false,
+        local_error: None,
     };
     registry().lock().map_err(|_| "编辑会话锁已损坏")?.insert(info.id.clone(), EditorSession {
-        info: info.clone(), baseline: (size, checksum),
+        info: info.clone(), baseline: (size, checksum), observed: None,
     });
     Ok(Some(info))
 }

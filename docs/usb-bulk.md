@@ -48,8 +48,8 @@ The in-app file manager can rename, copy, and move files and directories.
 Right-click a file or folder for its actions; right-click an empty area to
 paste into the current directory, or right-click a folder to paste into it.
 On Linux, **Open with computer editor** downloads a local copy and opens the
-system's application chooser. The file manager keeps an edit session so the
-user can explicitly **Save to simulator** after editing. Saving checks whether
+system's application chooser. The file manager checks the local copy and only
+offers **Save to simulator** when its contents have changed. Saving checks whether
 the device file changed in the meantime; removing the session keeps the local
 copy in the configured download directory.
 Copy stages content in the destination volume and publishes it after USB

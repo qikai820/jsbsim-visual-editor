@@ -50,6 +50,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const refreshNotice = useRef('');
+  const editorRevision = useRef(0);
   const directory = [volume, ...segments].join('/');
   useEffect(() => { setRenameName(null); setContextMenu(null); }, [directory]);
   useEffect(() => {
@@ -63,8 +64,23 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     if (!isTauri) return;
-    void usbFileEditSessions().then(setEditorSessions).catch(error =>
-      setStatus(`${isZh ? '读取编辑会话失败' : 'Could not restore editor sessions'}: ${errorText(error)}`));
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let first = true;
+    const poll = async () => {
+      const revision = editorRevision.current;
+      try {
+        const sessions = await usbFileEditSessions();
+        if (!cancelled && revision === editorRevision.current) setEditorSessions(sessions);
+      } catch (error) {
+        if (!cancelled && first) setStatus(`${isZh ? '读取编辑会话失败' : 'Could not restore editor sessions'}: ${errorText(error)}`);
+      } finally {
+        first = false;
+        if (!cancelled) timer = setTimeout(() => { void poll(); }, 2000);
+      }
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [isZh]);
 
   const refresh = useCallback((notice = '') => {
@@ -161,10 +177,11 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       const target = localStorage.getItem(DOWNLOAD_DIRECTORY_KEY) || '~/Downloads/JSBSim-Files';
       const session = await usbFileOpenEditor(`${directory}/${entry.name}`, target);
       if (session) {
-        setEditorSessions(previous => [...previous, session]);
+        editorRevision.current += 1;
+        setEditorSessions(previous => [...previous.filter(item => item.id !== session.id), session]);
         setStatus(isZh
-          ? `已使用 ${session.application} 打开本地副本；编辑后点“保存回仿真机”`
-          : `Opened a local copy with ${session.application}; save it back after editing`);
+          ? `已使用 ${session.application} 打开本地副本`
+          : `Opened a local copy with ${session.application}`);
       } else setStatus('');
     } catch (error) { setStatus(`${isZh ? '打开失败' : 'Could not open'}: ${errorText(error)}`); }
     finally { setBusy(false); }
@@ -174,6 +191,8 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     setStatus(isZh ? `正在保存 ${session.remotePath}…` : `Saving ${session.remotePath}…`);
     try {
       const result = await usbFileSaveEditor(session.id);
+      editorRevision.current += 1;
+      setEditorSessions(previous => previous.map(item => item.id === session.id ? { ...item, modified: false, localError: null } : item));
       if (result.changed) refresh(isZh ? `已保存回 ${session.remotePath}` : `Saved back to ${session.remotePath}`);
       else setStatus(isZh ? '本地副本尚未修改' : 'Local copy has not changed');
     } catch (error) { setStatus(`${isZh ? '保存失败' : 'Save failed'}: ${errorText(error)}`); }
@@ -183,6 +202,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       await usbFileFinishEditor(session.id);
+      editorRevision.current += 1;
       setEditorSessions(previous => previous.filter(item => item.id !== session.id));
       setStatus(isZh ? '编辑记录已移除；本地副本仍保留' : 'Editor session removed; local copy remains');
     } catch (error) { setStatus(`${isZh ? '结束编辑失败' : 'Could not finish editing'}: ${errorText(error)}`); }
@@ -307,11 +327,13 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     </div>}
     {editorSessions.length > 0 && <div className="usb-fm-edit-sessions" aria-label={isZh ? '电脑编辑记录' : 'Computer editor sessions'}>
       {editorSessions.map(session => <div className="usb-fm-edit-session" key={session.id}>
-        <div><strong>{session.remotePath}</strong><small>{session.application} · {session.localPath}</small></div>
-        <button onClick={() => void saveEditor(session)} disabled={busy}>{isZh ? '保存回仿真机' : 'Save to simulator'}</button>
+        <div><strong>{session.remotePath}</strong><small>{session.application} · {session.localPath}</small>
+          {session.localError && <small role="alert">{session.localError}</small>}</div>
+        {session.modified
+          ? <button onClick={() => void saveEditor(session)} disabled={busy}>{isZh ? '保存回仿真机' : 'Save to simulator'}</button>
+          : !session.localError && <small>{isZh ? '未修改' : 'Unchanged'}</small>}
         <button onClick={() => void finishEditor(session)} disabled={busy} title={isZh ? '只移除记录，本地副本保留' : 'Remove session; keep local copy'}>{isZh ? '移除记录' : 'Remove session'}</button>
       </div>)}
-      <small>{isZh ? '电脑编辑器保存的是本地副本；点“保存回仿真机”才会更新设备文件。' : 'The editor saves a local copy; use “Save to simulator” to update the device.'}</small>
     </div>}
     <div className="usb-fm-list" role="listbox" aria-label={isZh ? '文件列表' : 'Files'} onContextMenu={event => showContextMenu(event, null)}>
       {segments.length > 0 && <button className="usb-fm-row" onClick={() => setSegments(value => value.slice(0, -1))} disabled={busy}><span>↰</span><strong>..</strong><small /></button>}

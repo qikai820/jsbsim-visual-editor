@@ -1093,7 +1093,7 @@ async fn usb_file_open_editor(window: tauri::WebviewWindow, path: String, direct
 
 #[tauri::command]
 async fn usb_file_edit_sessions() -> Result<Vec<usb_file_editor::EditorSessionInfo>, String> {
-    usb_file_editor::sessions()
+    run_blocking(usb_file_editor::sessions).await
 }
 
 #[tauri::command]
