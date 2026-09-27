@@ -45,6 +45,8 @@ The selected mode is stored on the desktop computer and restored when the
 application starts.
 
 The in-app file manager can rename, copy, and move files and directories.
+Right-click a file or folder for its actions; right-click an empty area to
+paste into the current directory, or right-click a folder to paste into it.
 Copy stages content in the destination volume and publishes it after USB
 readback verification. A move within one volume uses board rename; a move
 between SD and data copies and verifies first, then removes the source. An

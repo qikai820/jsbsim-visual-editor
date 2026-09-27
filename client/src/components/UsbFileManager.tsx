@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useLanguage } from '../i18n';
 import {
   isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileMkdir,
@@ -27,6 +27,7 @@ function validName(name: string): boolean {
 }
 
 type Clipboard = { source: string; move: boolean };
+type ContextMenu = { x: number; y: number; entry: UsbFileEntry | null };
 
 export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const { isZh } = useLanguage();
@@ -39,14 +40,22 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [renameSource, setRenameSource] = useState('');
   const [clipboard, setClipboard] = useState<Clipboard | null>(null);
   const [pasteName, setPasteName] = useState('');
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
   const refreshNotice = useRef('');
   const directory = [volume, ...segments].join('/');
-  useEffect(() => setRenameName(null), [directory]);
+  useEffect(() => { setRenameName(null); setContextMenu(null); }, [directory]);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setContextMenu(null); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [contextMenu]);
   const selectedEntry = entries.find(entry => entry.name === selected);
   const nativePicker = isTauri && /Linux/i.test(navigator.userAgent);
 
@@ -125,26 +134,26 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     } catch (error) { setStatus(`${isZh ? '上传失败' : 'Upload failed'}: ${errorText(error)}`); }
     finally { setBusy(false); if (fileInput.current) fileInput.current.value = ''; }
   };
-  const download = async () => {
-    if (!selectedEntry || selectedEntry.directory) return;
+  const download = async (entry = selectedEntry) => {
+    if (!entry || entry.directory) return;
     setBusy(true);
-    setStatus(isZh ? `正在下载 ${selectedEntry.name}…` : `Downloading ${selectedEntry.name}…`);
+    setStatus(isZh ? `正在下载 ${entry.name}…` : `Downloading ${entry.name}…`);
     try {
       const target = localStorage.getItem(DOWNLOAD_DIRECTORY_KEY) || '~/Downloads/JSBSim-Files';
-      const result = await usbFileDownload(`${directory}/${selectedEntry.name}`, target);
+      const result = await usbFileDownload(`${directory}/${entry.name}`, target);
       setStatus(`${isZh ? '已保存到' : 'Saved to'} ${result.localPath}`);
     } catch (error) { setStatus(`${isZh ? '下载失败' : 'Download failed'}: ${errorText(error)}`); }
     finally { setBusy(false); }
   };
-  const remove = async () => {
-    if (!selectedEntry) return;
-    const question = selectedEntry.directory
-      ? (isZh ? `删除空目录“${selectedEntry.name}”？` : `Delete empty folder “${selectedEntry.name}”?`)
-      : (isZh ? `永久删除文件“${selectedEntry.name}”？` : `Permanently delete “${selectedEntry.name}”?`);
+  const remove = async (entry = selectedEntry) => {
+    if (!entry) return;
+    const question = entry.directory
+      ? (isZh ? `删除空目录“${entry.name}”？` : `Delete empty folder “${entry.name}”?`)
+      : (isZh ? `永久删除文件“${entry.name}”？` : `Permanently delete “${entry.name}”?`);
     if (!window.confirm(question)) return;
     setBusy(true);
     try {
-      await usbFileDelete(`${directory}/${selectedEntry.name}`);
+      await usbFileDelete(`${directory}/${entry.name}`);
       setSelected('');
       refresh(isZh ? '已删除' : 'Deleted');
     } catch (error) { setStatus(`${isZh ? '删除失败' : 'Delete failed'}: ${errorText(error)}`); }
@@ -168,24 +177,28 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     } catch (error) { setStatus(`${isZh ? '重命名失败' : 'Rename failed'}: ${errorText(error)}`); }
     finally { setBusy(false); }
   };
-  const markTransfer = (move: boolean) => {
-    if (!selectedEntry) return;
-    setClipboard({ source: `${directory}/${selectedEntry.name}`, move });
-    setPasteName(selectedEntry.name);
+  const beginRename = (entry: UsbFileEntry) => {
+    setRenameName(entry.name);
+    setRenameSource(`${directory}/${entry.name}`);
+  };
+  const markTransfer = (move: boolean, entry = selectedEntry) => {
+    if (!entry) return;
+    setClipboard({ source: `${directory}/${entry.name}`, move });
+    setPasteName(entry.name);
     setRenameName(null);
     setStatus(move
       ? (isZh ? '已选择移动；进入目标目录后点“粘贴”' : 'Move selected; open the destination and paste')
       : (isZh ? '已选择拷贝；进入目标目录后点“粘贴”' : 'Copy selected; open the destination and paste'));
   };
-  const paste = async () => {
+  const paste = async (targetDirectory = directory) => {
     if (!clipboard) return;
     const name = pasteName.trim();
     if (!validName(name)) {
       setStatus(isZh ? '目标名称需为 1–32 字节，且不能包含斜杠' : 'Target name must be 1–32 bytes without slashes');
       return;
     }
-    const destination = `${directory}/${name}`;
-    if (entries.some(entry => entry.name === name)) {
+    const destination = `${targetDirectory}/${name}`;
+    if (targetDirectory === directory && entries.some(entry => entry.name === name)) {
       setStatus(isZh ? '目标位置已有同名文件或目录' : 'A file or folder with that name already exists');
       return;
     }
@@ -199,6 +212,17 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       refresh(notice);
     } catch (error) { setStatus(`${isZh ? '操作失败' : 'Operation failed'}: ${errorText(error)}`); }
     finally { setBusy(false); }
+  };
+  const showContextMenu = (event: MouseEvent, entry: UsbFileEntry | null) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (busy) return;
+    if (entry) setSelected(entry.name);
+    setContextMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 208)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 260)),
+      entry,
+    });
   };
 
   return <div className="usb-fm" role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
@@ -220,7 +244,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       <button onClick={() => refresh()} disabled={busy || loading}>↻ {isZh ? '刷新' : 'Refresh'}</button>
       <button onClick={() => void upload()} disabled={busy || loading}>↑ {isZh ? '上传文件' : 'Upload'}</button>
       <button onClick={() => void download()} disabled={busy || !selectedEntry || selectedEntry.directory}>↓ {isZh ? '下载' : 'Download'}</button>
-      <button onClick={() => { setRenameName(selectedEntry?.name || null); setRenameSource(selectedEntry ? `${directory}/${selectedEntry.name}` : ''); }} disabled={busy || !selectedEntry}>✎ {isZh ? '重命名' : 'Rename'}</button>
+      <button onClick={() => selectedEntry && beginRename(selectedEntry)} disabled={busy || !selectedEntry}>✎ {isZh ? '重命名' : 'Rename'}</button>
       <button onClick={() => markTransfer(false)} disabled={busy || !selectedEntry}>⧉ {isZh ? '拷贝' : 'Copy'}</button>
       <button onClick={() => markTransfer(true)} disabled={busy || !selectedEntry}>✂ {isZh ? '移动' : 'Move'}</button>
       <button onClick={() => void remove()} disabled={busy || !selectedEntry}>🗑 {isZh ? '删除' : 'Delete'}</button>
@@ -237,19 +261,39 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       <button onClick={() => void paste()} disabled={busy || loading || !validName(pasteName.trim())}>{isZh ? '粘贴' : 'Paste'}</button>
       <button onClick={() => setClipboard(null)} disabled={busy}>{isZh ? '取消' : 'Cancel'}</button>
     </div>}
-    <div className="usb-fm-list" role="listbox" aria-label={isZh ? '文件列表' : 'Files'}>
+    <div className="usb-fm-list" role="listbox" aria-label={isZh ? '文件列表' : 'Files'} onContextMenu={event => showContextMenu(event, null)}>
       {segments.length > 0 && <button className="usb-fm-row" onClick={() => setSegments(value => value.slice(0, -1))} disabled={busy}><span>↰</span><strong>..</strong><small /></button>}
       {entries.map(entry => <button key={entry.name} className={`usb-fm-row ${selected === entry.name ? 'selected' : ''}`}
-        onClick={() => setSelected(entry.name)} onDoubleClick={() => entry.directory && openDirectory(entry.name)} disabled={busy} role="option" aria-selected={selected === entry.name}>
+        onClick={() => setSelected(entry.name)} onDoubleClick={() => entry.directory && openDirectory(entry.name)} onContextMenu={event => showContextMenu(event, entry)} disabled={busy} role="option" aria-selected={selected === entry.name}>
         <span>{entry.directory ? '📁' : '📄'}</span><strong>{entry.name}</strong><small>{entry.directory ? '' : formatSize(entry.size)}</small>
         {entry.directory && <span className="usb-fm-open" onClick={event => { event.stopPropagation(); openDirectory(entry.name); }}>›</span>}
       </button>)}
       {!loading && entries.length === 0 && <div className="usb-fm-empty">{status || (isZh ? '目录为空' : 'Directory is empty')}</div>}
     </div>
     <footer className="usb-fm-footer">
-      <label>{isZh ? '新建目录' : 'New folder'} <input value={folderName} onChange={event => setFolderName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void createFolder(); }} placeholder={isZh ? '目录名' : 'Folder name'} disabled={busy} /></label>
+      <label>{isZh ? '新建目录' : 'New folder'} <input ref={folderInput} value={folderName} onChange={event => setFolderName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void createFolder(); }} placeholder={isZh ? '目录名' : 'Folder name'} disabled={busy} /></label>
       <button onClick={() => void createFolder()} disabled={busy || !folderName.trim()}>{isZh ? '创建' : 'Create'}</button>
       <span aria-live="polite">{loading ? (isZh ? '读取中…' : 'Loading…') : status}</span>
     </footer>
+    {contextMenu && <div className="usb-fm-context-overlay" onMouseDown={() => setContextMenu(null)} onContextMenu={event => { event.preventDefault(); setContextMenu(null); }}>
+      <div className="usb-fm-context" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={event => event.stopPropagation()}>
+        {contextMenu.entry ? <>
+          {contextMenu.entry.directory
+            ? <button role="menuitem" onClick={() => { openDirectory(contextMenu.entry!.name); setContextMenu(null); }}>{isZh ? '打开文件夹' : 'Open folder'}</button>
+            : <button role="menuitem" onClick={() => { void download(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '下载' : 'Download'}</button>}
+          <button role="menuitem" onClick={() => { beginRename(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '重命名' : 'Rename'}</button>
+          <button role="menuitem" onClick={() => { markTransfer(false, contextMenu.entry!); setContextMenu(null); }}>{isZh ? '拷贝' : 'Copy'}</button>
+          <button role="menuitem" onClick={() => { markTransfer(true, contextMenu.entry!); setContextMenu(null); }}>{isZh ? '移动' : 'Move'}</button>
+          {contextMenu.entry.directory && clipboard && <button role="menuitem" onClick={() => { void paste(`${directory}/${contextMenu.entry!.name}`); setContextMenu(null); }}>{isZh ? '粘贴到此文件夹' : 'Paste into folder'}</button>}
+          <div className="usb-fm-context-separator" />
+          <button role="menuitem" onClick={() => { void remove(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '删除' : 'Delete'}</button>
+        </> : <>
+          <button role="menuitem" onClick={() => { void paste(); setContextMenu(null); }} disabled={!clipboard || loading}>{isZh ? '粘贴到此目录' : 'Paste here'}</button>
+          <button role="menuitem" onClick={() => { folderInput.current?.focus(); setContextMenu(null); }}>{isZh ? '新建目录' : 'New folder'}</button>
+          <div className="usb-fm-context-separator" />
+          <button role="menuitem" onClick={() => { refresh(); setContextMenu(null); }}>{isZh ? '刷新' : 'Refresh'}</button>
+        </>}
+      </div>
+    </div>}
   </div>;
 }
