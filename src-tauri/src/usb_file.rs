@@ -379,6 +379,27 @@ pub fn read_all(path: &str) -> Result<Vec<u8>, String> {
     })
 }
 
+pub fn read_limited(path: &str, limit: usize) -> Result<Vec<u8>, String> {
+    with_device(|handle| {
+        let mut result = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let response = transaction_locked(handle, READ, MAX_PAYLOAD as i32, offset, path.as_bytes())?;
+            let count = response.payload.len();
+            if response.offset != offset + count as u64 {
+                return Err(format!("board returned wrong read offset at byte {offset}"));
+            }
+            if count > limit.saturating_sub(result.len()) {
+                return Err(format!("文件超过内置编辑器的 {} MiB 限制", limit / 1024 / 1024));
+            }
+            result.extend_from_slice(&response.payload);
+            offset = response.offset;
+            if count < MAX_PAYLOAD { break; }
+        }
+        Ok(result)
+    })
+}
+
 pub fn read_text(path: &str) -> Result<String, String> {
     String::from_utf8(read_all(path)?).map_err(|error| format!("remote file is not UTF-8: {error}"))
 }

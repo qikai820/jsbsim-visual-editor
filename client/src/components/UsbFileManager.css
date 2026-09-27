@@ -69,6 +69,33 @@
 .usb-fm-edit-session strong { font-size: 12px; }
 .usb-fm-edit-session small, .usb-fm-edit-sessions > small { color: #60778d; font-size: 11px; }
 .usb-fm-edit-session button { padding: 6px 9px; border: 1px solid #bfd0d5; border-radius: 6px; background: #fff; color: #276c69; }
+.usb-fm-builtin {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+}
+.usb-fm-builtin-header, .usb-fm-builtin-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #d5dee7;
+  background: #f4f7fa;
+}
+.usb-fm-builtin-header > div { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.usb-fm-builtin-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usb-fm-builtin-header small { color: #718398; }
+.usb-fm-builtin-header button { border: 0; background: none; color: #6f8195; font-size: 24px; }
+.usb-fm-code-editor { flex: 1; min-height: 0; overflow: auto; font-size: 13px; }
+.usb-fm-code-editor .cm-editor { height: 100%; }
+.usb-fm-code-editor .cm-scroller { font-family: "JetBrains Mono", "Noto Sans Mono", monospace; }
+.usb-fm-builtin-footer { flex-wrap: wrap; border-top: 1px solid #d5dee7; border-bottom: 0; }
+.usb-fm-builtin-footer [role="status"] { flex: 1; min-width: 100px; color: #52677d; font-size: 12px; }
+.usb-fm-builtin-footer button { padding: 8px 12px; border: 1px solid #cbd7e2; border-radius: 6px; background: #fff; color: #276c69; }
 .usb-fm-list { min-height: 0; flex: 1; overflow: auto; background: #fff; }
 .usb-fm-row {
   display: grid;

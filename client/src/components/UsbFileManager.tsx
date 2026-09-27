@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useLanguage } from '../i18n';
 import {
   isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileMkdir,
-  usbFileEditSessions, usbFileFinishEditor, usbFileOpenEditor, usbFileSaveEditor,
-  usbFileTransfer, usbFileUploadLocal, usbFileWrite, type UsbEditorSession, type UsbFileEntry,
+  usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn, usbFileOpenEditor,
+  usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer, usbFileUploadLocal, usbFileWrite,
+  type UsbBuiltInDocument, type UsbEditorSession, type UsbFileEntry,
 } from '../utils/tauriApi';
 import './UsbFileManager.css';
+
+const UsbTextEditor = lazy(() => import('./UsbTextEditor'));
 
 type Volume = 'sd' | 'data';
 const DOWNLOAD_DIRECTORY_KEY = 'jsbsim-usb-download-directory';
@@ -29,6 +32,7 @@ function validName(name: string): boolean {
 
 type Clipboard = { source: string; move: boolean };
 type ContextMenu = { x: number; y: number; entry: UsbFileEntry | null };
+type BuiltInEditorState = UsbBuiltInDocument & { original: string };
 
 export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const { isZh } = useLanguage();
@@ -43,6 +47,9 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [pasteName, setPasteName] = useState('');
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [editorSessions, setEditorSessions] = useState<UsbEditorSession[]>([]);
+  const [builtInEditor, setBuiltInEditor] = useState<BuiltInEditorState | null>(null);
+  const [builtInStatus, setBuiltInStatus] = useState('');
+  const [savingBuiltIn, setSavingBuiltIn] = useState(false);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -186,6 +193,55 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     } catch (error) { setStatus(`${isZh ? '打开失败' : 'Could not open'}: ${errorText(error)}`); }
     finally { setBusy(false); }
   };
+  const openBuiltIn = async (entry = selectedEntry) => {
+    if (!entry || entry.directory) return;
+    setBusy(true);
+    setStatus(isZh ? `正在打开 ${entry.name}…` : `Opening ${entry.name}…`);
+    try {
+      const document = await usbFileOpenBuiltIn(`${directory}/${entry.name}`);
+      setBuiltInEditor({ ...document, original: document.content });
+      setBuiltInStatus('');
+      setStatus('');
+    } catch (error) { setStatus(`${isZh ? '内置编辑器无法打开文件' : 'Could not open in built-in editor'}: ${errorText(error)}`); }
+    finally { setBusy(false); }
+  };
+  const closeBuiltIn = () => {
+    if (savingBuiltIn) return;
+    if (builtInEditor?.content !== builtInEditor?.original &&
+        !window.confirm(isZh ? '有未保存的修改，确定放弃吗？' : 'Discard unsaved changes?')) return;
+    setBuiltInEditor(null);
+    setBuiltInStatus('');
+  };
+  const saveBuiltIn = async () => {
+    const document = builtInEditor;
+    if (!document || document.content === document.original || savingBuiltIn) return;
+    const savedContent = document.content;
+    setSavingBuiltIn(true);
+    setBuiltInStatus(isZh ? '正在保存到仿真机…' : 'Saving to simulator…');
+    try {
+      const result = await usbFileSaveBuiltIn(document, savedContent);
+      setBuiltInEditor(current => current?.path === document.path
+        ? { ...current, original: savedContent, size: result.size, checksum: result.checksum }
+        : current);
+      setBuiltInStatus(result.changed
+        ? (isZh ? '已保存到仿真机' : 'Saved to simulator')
+        : (isZh ? '内容未变化' : 'No changes'));
+      if (result.changed) refresh();
+    } catch (error) {
+      setBuiltInStatus(`${isZh ? '保存失败' : 'Save failed'}: ${errorText(error)}`);
+    } finally { setSavingBuiltIn(false); }
+  };
+  useEffect(() => {
+    if (!builtInEditor) return;
+    const handleSave = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void saveBuiltIn();
+      }
+    };
+    window.addEventListener('keydown', handleSave);
+    return () => window.removeEventListener('keydown', handleSave);
+  }, [builtInEditor, savingBuiltIn, isZh]);
   const saveEditor = async (session: UsbEditorSession) => {
     setBusy(true);
     setStatus(isZh ? `正在保存 ${session.remotePath}…` : `Saving ${session.remotePath}…`);
@@ -306,7 +362,8 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     <div className="usb-fm-toolbar">
       <button onClick={() => refresh()} disabled={busy || loading}>↻ {isZh ? '刷新' : 'Refresh'}</button>
       <button onClick={() => void upload()} disabled={busy || loading}>↑ {isZh ? '上传文件' : 'Upload'}</button>
-      <button onClick={() => void openEditor()} disabled={busy || !selectedEntry || selectedEntry.directory}>↗ {isZh ? '打开' : 'Open'}</button>
+      <button onClick={() => void openBuiltIn()} disabled={busy || !selectedEntry || selectedEntry.directory}>✎ {isZh ? '内置编辑' : 'Edit here'}</button>
+      <button onClick={() => void openEditor()} disabled={busy || !selectedEntry || selectedEntry.directory}>↗ {isZh ? '电脑打开' : 'Open on computer'}</button>
       <button onClick={() => void download()} disabled={busy || !selectedEntry || selectedEntry.directory}>↓ {isZh ? '下载' : 'Download'}</button>
       <button onClick={() => selectedEntry && beginRename(selectedEntry)} disabled={busy || !selectedEntry}>✎ {isZh ? '重命名' : 'Rename'}</button>
       <button onClick={() => markTransfer(false)} disabled={busy || !selectedEntry}>⧉ {isZh ? '拷贝' : 'Copy'}</button>
@@ -338,7 +395,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     <div className="usb-fm-list" role="listbox" aria-label={isZh ? '文件列表' : 'Files'} onContextMenu={event => showContextMenu(event, null)}>
       {segments.length > 0 && <button className="usb-fm-row" onClick={() => setSegments(value => value.slice(0, -1))} disabled={busy}><span>↰</span><strong>..</strong><small /></button>}
       {entries.map(entry => <button key={entry.name} className={`usb-fm-row ${selected === entry.name ? 'selected' : ''}`}
-        onClick={() => setSelected(entry.name)} onDoubleClick={() => entry.directory && openDirectory(entry.name)} onContextMenu={event => showContextMenu(event, entry)} disabled={busy} role="option" aria-selected={selected === entry.name}>
+        onClick={() => setSelected(entry.name)} onDoubleClick={() => entry.directory ? openDirectory(entry.name) : void openBuiltIn(entry)} onContextMenu={event => showContextMenu(event, entry)} disabled={busy} role="option" aria-selected={selected === entry.name}>
         <span>{entry.directory ? '📁' : '📄'}</span><strong>{entry.name}</strong><small>{entry.directory ? '' : formatSize(entry.size)}</small>
         {entry.directory && <span className="usb-fm-open" onClick={event => { event.stopPropagation(); openDirectory(entry.name); }}>›</span>}
       </button>)}
@@ -355,6 +412,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
           {contextMenu.entry.directory
             ? <button role="menuitem" onClick={() => { openDirectory(contextMenu.entry!.name); setContextMenu(null); }}>{isZh ? '打开文件夹' : 'Open folder'}</button>
             : <>
+              <button role="menuitem" onClick={() => { void openBuiltIn(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '使用内置编辑器打开' : 'Open in built-in editor'}</button>
               <button role="menuitem" onClick={() => { void openEditor(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '使用电脑编辑器打开…' : 'Open with computer editor…'}</button>
               <button role="menuitem" onClick={() => { void download(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '下载' : 'Download'}</button>
             </>}
@@ -371,6 +429,27 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
           <button role="menuitem" onClick={() => { refresh(); setContextMenu(null); }}>{isZh ? '刷新' : 'Refresh'}</button>
         </>}
       </div>
+    </div>}
+    {builtInEditor && <div className="usb-fm-builtin" role="dialog" aria-modal="true" aria-label={isZh ? '内置文件编辑器' : 'Built-in file editor'}>
+      <header className="usb-fm-builtin-header">
+        <div><strong>{builtInEditor.path}</strong><small>{isZh ? '内置文本编辑器 · CodeMirror' : 'Built-in text editor · CodeMirror'}</small></div>
+        <button onClick={closeBuiltIn} disabled={savingBuiltIn} aria-label={isZh ? '关闭编辑器' : 'Close editor'}>×</button>
+      </header>
+      <Suspense fallback={<div className="usb-fm-code-editor">{isZh ? '正在加载编辑器…' : 'Loading editor…'}</div>}>
+        <UsbTextEditor path={builtInEditor.path} content={builtInEditor.original}
+          onChange={content => {
+            setBuiltInEditor(current => current ? { ...current, content } : current);
+            setBuiltInStatus('');
+          }} />
+      </Suspense>
+      <footer className="usb-fm-builtin-footer">
+        <span>{builtInEditor.content === builtInEditor.original ? (isZh ? '未修改' : 'Unchanged') : (isZh ? '有未保存的修改' : 'Unsaved changes')}</span>
+        <span role="status">{builtInStatus}</span>
+        {builtInEditor.content !== builtInEditor.original && <button onClick={() => void saveBuiltIn()} disabled={savingBuiltIn}>
+          {isZh ? '保存回仿真机' : 'Save to simulator'}
+        </button>}
+        <button onClick={closeBuiltIn} disabled={savingBuiltIn}>{isZh ? '关闭' : 'Close'}</button>
+      </footer>
     </div>}
   </div>;
 }

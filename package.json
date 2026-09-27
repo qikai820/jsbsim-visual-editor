@@ -13,12 +13,16 @@
     "package:appimage": "tauri build --bundles appimage"
   },
   "dependencies": {
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-xml": "^6.1.0",
+    "@codemirror/view": "^6.43.13",
     "@react-three/drei": "^9.93.0",
     "@react-three/fiber": "^8.15.0",
     "@tauri-apps/api": "^2.0.0",
     "@types/dagre": "^0.7.54",
     "@types/three": "^0.160.0",
     "@xyflow/react": "^12.6.0",
+    "codemirror": "^6.0.2",
     "dagre": "^0.8.5",
     "fast-xml-parser": "^4.5.0",
     "react": "^18.3.1",

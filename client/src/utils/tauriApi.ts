@@ -450,6 +450,23 @@ export interface UsbEditorSession {
   localError: string | null;
 }
 
+export interface UsbBuiltInDocument {
+  path: string;
+  content: string;
+  size: number;
+  checksum: number;
+}
+
+export async function usbFileOpenBuiltIn(path: string): Promise<UsbBuiltInDocument> {
+  return call('usb_file_open_builtin', { path });
+}
+
+export async function usbFileSaveBuiltIn(document: UsbBuiltInDocument, content: string): Promise<{ changed: boolean; size: number; checksum: number }> {
+  return call('usb_file_save_builtin', {
+    path: document.path, content, expectedSize: document.size, expectedChecksum: document.checksum,
+  });
+}
+
 export async function usbFileOpenEditor(path: string, directory: string): Promise<UsbEditorSession | null> {
   return call('usb_file_open_editor', { path, directory });
 }

@@ -33,6 +33,58 @@ pub struct EditorSaveResult {
 
 static SESSIONS: OnceLock<Mutex<HashMap<String, EditorSession>>> = OnceLock::new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+const BUILTIN_TEXT_LIMIT: usize = 4 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltInDocument {
+    pub path: String,
+    pub content: String,
+    pub size: u64,
+    pub checksum: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltInSaveResult {
+    pub changed: bool,
+    pub size: u64,
+    pub checksum: u32,
+}
+
+pub fn open_builtin(path: &str) -> Result<BuiltInDocument, String> {
+    crate::usb_file::validate_editable_file(path)?;
+    if crate::usb_file::stat(path)?.size > BUILTIN_TEXT_LIMIT as u64 {
+        return Err("文件超过内置编辑器的 4 MiB 限制".into());
+    }
+    let bytes = crate::usb_file::read_limited(path, BUILTIN_TEXT_LIMIT)?;
+    if bytes.contains(&0) {
+        return Err("内置编辑器仅支持 UTF-8 文本文件".into());
+    }
+    let size = bytes.len() as u64;
+    let checksum = crate::usb_file::crc32(&bytes);
+    let content = String::from_utf8(bytes).map_err(|_| "内置编辑器仅支持 UTF-8 文本文件")?;
+    Ok(BuiltInDocument { path: path.to_owned(), content, size, checksum })
+}
+
+pub fn save_builtin(path: &str, content: String, expected_size: u64, expected_checksum: u32)
+    -> Result<BuiltInSaveResult, String> {
+    crate::usb_file::validate_editable_file(path)?;
+    let bytes = content.as_bytes();
+    if bytes.len() > BUILTIN_TEXT_LIMIT {
+        return Err("文件超过内置编辑器的 4 MiB 限制".into());
+    }
+    let size = bytes.len() as u64;
+    let checksum = crate::usb_file::crc32(bytes);
+    if (size, checksum) == (expected_size, expected_checksum) {
+        return Ok(BuiltInSaveResult { changed: false, size, checksum });
+    }
+    if crate::usb_file::fingerprint(path)? != (expected_size, expected_checksum) {
+        return Err("设备上的文件已发生变化，未覆盖设备文件；请复制当前编辑内容后重新打开".into());
+    }
+    crate::usb_file::write_all(path, bytes)?;
+    Ok(BuiltInSaveResult { changed: true, size, checksum })
+}
 
 fn registry() -> &'static Mutex<HashMap<String, EditorSession>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))

@@ -47,6 +47,11 @@ application starts.
 The in-app file manager can rename, copy, and move files and directories.
 Right-click a file or folder for its actions; right-click an empty area to
 paste into the current directory, or right-click a folder to paste into it.
+The built-in editor uses the MIT-licensed CodeMirror 6 component for UTF-8
+text files up to 4 MiB, with XML/JSON highlighting and Ctrl+S. It only shows
+**Save to simulator** after the content changes. Before saving, the app checks
+that the device copy still matches the opened version and refuses to overwrite
+an externally changed file. Closing with unsaved edits asks for confirmation.
 On Linux, **Open with computer editor** downloads a local copy and opens the
 system's application chooser. The file manager checks the local copy and only
 offers **Save to simulator** when its contents have changed. Saving checks whether

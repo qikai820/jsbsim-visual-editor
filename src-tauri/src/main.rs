@@ -1092,6 +1092,17 @@ async fn usb_file_open_editor(window: tauri::WebviewWindow, path: String, direct
 }
 
 #[tauri::command]
+async fn usb_file_open_builtin(path: String) -> Result<usb_file_editor::BuiltInDocument, String> {
+    run_blocking(move || usb_file_editor::open_builtin(&path)).await
+}
+
+#[tauri::command]
+async fn usb_file_save_builtin(path: String, content: String, expected_size: u64, expected_checksum: u32)
+    -> Result<usb_file_editor::BuiltInSaveResult, String> {
+    run_blocking(move || usb_file_editor::save_builtin(&path, content, expected_size, expected_checksum)).await
+}
+
+#[tauri::command]
 async fn usb_file_edit_sessions() -> Result<Vec<usb_file_editor::EditorSessionInfo>, String> {
     run_blocking(usb_file_editor::sessions).await
 }
@@ -1387,6 +1398,8 @@ fn main() {
             usb_file_transfer,
             usb_file_download,
             usb_file_open_editor,
+            usb_file_open_builtin,
+            usb_file_save_builtin,
             usb_file_edit_sessions,
             usb_file_save_editor,
             usb_file_finish_editor,
