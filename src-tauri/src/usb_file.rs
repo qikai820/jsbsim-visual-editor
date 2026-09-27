@@ -111,7 +111,7 @@ pub fn crc32(data: &[u8]) -> u32 {
     !crc32_fold(u32::MAX, data)
 }
 
-fn crc32_fold(mut crc: u32, data: &[u8]) -> u32 {
+pub(crate) fn crc32_fold(mut crc: u32, data: &[u8]) -> u32 {
     for byte in data {
         crc ^= u32::from(*byte);
         for _ in 0..8 {
@@ -384,10 +384,15 @@ pub fn read_text(path: &str) -> Result<String, String> {
 }
 
 pub fn download_to(path: &str, target: &Path) -> Result<u64, String> {
+    download_to_fingerprint(path, target).map(|(size, _)| size)
+}
+
+pub fn download_to_fingerprint(path: &str, target: &Path) -> Result<(u64, u32), String> {
     with_device(|handle| {
         let mut file = std::fs::File::create(target)
             .map_err(|error| format!("cannot create download file: {error}"))?;
         let mut offset = 0u64;
+        let mut checksum = u32::MAX;
         loop {
             let response = transaction_locked(handle, READ, MAX_PAYLOAD as i32, offset, path.as_bytes())?;
             let count = response.payload.len();
@@ -396,12 +401,39 @@ pub fn download_to(path: &str, target: &Path) -> Result<u64, String> {
             }
             file.write_all(&response.payload)
                 .map_err(|error| format!("cannot write download file: {error}"))?;
+            checksum = crc32_fold(checksum, &response.payload);
             offset = response.offset;
             if count < MAX_PAYLOAD { break; }
         }
         file.sync_all().map_err(|error| format!("cannot flush download file: {error}"))?;
-        Ok(offset)
+        Ok((offset, !checksum))
     })
+}
+
+pub fn fingerprint(path: &str) -> Result<(u64, u32), String> {
+    with_device(|handle| {
+        let mut offset = 0u64;
+        let mut checksum = u32::MAX;
+        loop {
+            let response = transaction_locked(handle, READ, MAX_PAYLOAD as i32, offset, path.as_bytes())?;
+            let count = response.payload.len();
+            if response.offset != offset + count as u64 {
+                return Err(format!("board returned wrong read offset at byte {offset}"));
+            }
+            checksum = crc32_fold(checksum, &response.payload);
+            offset = response.offset;
+            if count < MAX_PAYLOAD { break; }
+        }
+        Ok((offset, !checksum))
+    })
+}
+
+pub fn validate_editable_file(path: &str) -> Result<(), String> {
+    managed_volume(path)?;
+    if stat(path)?.directory {
+        return Err("只能使用电脑编辑器打开文件".into());
+    }
+    Ok(())
 }
 
 pub fn write_all(path: &str, data: &[u8]) -> Result<(), String> {

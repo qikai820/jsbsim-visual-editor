@@ -441,6 +441,29 @@ export async function usbFileDownload(path: string, directory: string): Promise<
   return call('usb_file_download', { path, directory });
 }
 
+export interface UsbEditorSession {
+  id: string;
+  remotePath: string;
+  localPath: string;
+  application: string;
+}
+
+export async function usbFileOpenEditor(path: string, directory: string): Promise<UsbEditorSession | null> {
+  return call('usb_file_open_editor', { path, directory });
+}
+
+export async function usbFileEditSessions(): Promise<UsbEditorSession[]> {
+  return call('usb_file_edit_sessions');
+}
+
+export async function usbFileSaveEditor(id: string): Promise<{ changed: boolean; size: number }> {
+  return call('usb_file_save_editor', { id });
+}
+
+export async function usbFileFinishEditor(id: string): Promise<void> {
+  await call('usb_file_finish_editor', { id });
+}
+
 export async function usbFileUploadLocal(directory: string, previousPath?: string): Promise<{ localPath: string; remotePath: string; size: number } | null> {
   return call('usb_file_upload_local', { directory, previousPath: previousPath || null });
 }

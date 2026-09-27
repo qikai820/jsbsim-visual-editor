@@ -63,6 +63,12 @@
 .usb-fm-action input { width: 180px; padding: 7px; border: 1px solid #bfd0d5; border-radius: 6px; background: #fff; }
 .usb-fm-action button { padding: 7px 11px; border: 1px solid #bfd0d5; border-radius: 6px; background: #fff; color: #276c69; }
 .usb-fm-action button:disabled { opacity: .5; }
+.usb-fm-edit-sessions { display: flex; flex-direction: column; gap: 5px; max-height: 180px; overflow: auto; padding: 8px 18px; border-bottom: 1px solid #d5dee7; background: #eef8f7; }
+.usb-fm-edit-session { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.usb-fm-edit-session > div { display: flex; flex: 1; min-width: 180px; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.usb-fm-edit-session strong { font-size: 12px; }
+.usb-fm-edit-session small, .usb-fm-edit-sessions > small { color: #60778d; font-size: 11px; }
+.usb-fm-edit-session button { padding: 6px 9px; border: 1px solid #bfd0d5; border-radius: 6px; background: #fff; color: #276c69; }
 .usb-fm-list { min-height: 0; flex: 1; overflow: auto; background: #fff; }
 .usb-fm-row {
   display: grid;

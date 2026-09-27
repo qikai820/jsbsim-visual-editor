@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react
 import { useLanguage } from '../i18n';
 import {
   isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileMkdir,
-  usbFileTransfer, usbFileUploadLocal, usbFileWrite, type UsbFileEntry,
+  usbFileEditSessions, usbFileFinishEditor, usbFileOpenEditor, usbFileSaveEditor,
+  usbFileTransfer, usbFileUploadLocal, usbFileWrite, type UsbEditorSession, type UsbFileEntry,
 } from '../utils/tauriApi';
 import './UsbFileManager.css';
 
@@ -41,6 +42,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [clipboard, setClipboard] = useState<Clipboard | null>(null);
   const [pasteName, setPasteName] = useState('');
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [editorSessions, setEditorSessions] = useState<UsbEditorSession[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -58,6 +60,12 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   }, [contextMenu]);
   const selectedEntry = entries.find(entry => entry.name === selected);
   const nativePicker = isTauri && /Linux/i.test(navigator.userAgent);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void usbFileEditSessions().then(setEditorSessions).catch(error =>
+      setStatus(`${isZh ? '读取编辑会话失败' : 'Could not restore editor sessions'}: ${errorText(error)}`));
+  }, [isZh]);
 
   const refresh = useCallback((notice = '') => {
     refreshNotice.current = notice;
@@ -143,6 +151,41 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       const result = await usbFileDownload(`${directory}/${entry.name}`, target);
       setStatus(`${isZh ? '已保存到' : 'Saved to'} ${result.localPath}`);
     } catch (error) { setStatus(`${isZh ? '下载失败' : 'Download failed'}: ${errorText(error)}`); }
+    finally { setBusy(false); }
+  };
+  const openEditor = async (entry = selectedEntry) => {
+    if (!entry || entry.directory) return;
+    setBusy(true);
+    setStatus(isZh ? `正在准备 ${entry.name}…` : `Preparing ${entry.name}…`);
+    try {
+      const target = localStorage.getItem(DOWNLOAD_DIRECTORY_KEY) || '~/Downloads/JSBSim-Files';
+      const session = await usbFileOpenEditor(`${directory}/${entry.name}`, target);
+      if (session) {
+        setEditorSessions(previous => [...previous, session]);
+        setStatus(isZh
+          ? `已使用 ${session.application} 打开本地副本；编辑后点“保存回仿真机”`
+          : `Opened a local copy with ${session.application}; save it back after editing`);
+      } else setStatus('');
+    } catch (error) { setStatus(`${isZh ? '打开失败' : 'Could not open'}: ${errorText(error)}`); }
+    finally { setBusy(false); }
+  };
+  const saveEditor = async (session: UsbEditorSession) => {
+    setBusy(true);
+    setStatus(isZh ? `正在保存 ${session.remotePath}…` : `Saving ${session.remotePath}…`);
+    try {
+      const result = await usbFileSaveEditor(session.id);
+      if (result.changed) refresh(isZh ? `已保存回 ${session.remotePath}` : `Saved back to ${session.remotePath}`);
+      else setStatus(isZh ? '本地副本尚未修改' : 'Local copy has not changed');
+    } catch (error) { setStatus(`${isZh ? '保存失败' : 'Save failed'}: ${errorText(error)}`); }
+    finally { setBusy(false); }
+  };
+  const finishEditor = async (session: UsbEditorSession) => {
+    setBusy(true);
+    try {
+      await usbFileFinishEditor(session.id);
+      setEditorSessions(previous => previous.filter(item => item.id !== session.id));
+      setStatus(isZh ? '编辑记录已移除；本地副本仍保留' : 'Editor session removed; local copy remains');
+    } catch (error) { setStatus(`${isZh ? '结束编辑失败' : 'Could not finish editing'}: ${errorText(error)}`); }
     finally { setBusy(false); }
   };
   const remove = async (entry = selectedEntry) => {
@@ -243,6 +286,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     <div className="usb-fm-toolbar">
       <button onClick={() => refresh()} disabled={busy || loading}>↻ {isZh ? '刷新' : 'Refresh'}</button>
       <button onClick={() => void upload()} disabled={busy || loading}>↑ {isZh ? '上传文件' : 'Upload'}</button>
+      <button onClick={() => void openEditor()} disabled={busy || !selectedEntry || selectedEntry.directory}>↗ {isZh ? '打开' : 'Open'}</button>
       <button onClick={() => void download()} disabled={busy || !selectedEntry || selectedEntry.directory}>↓ {isZh ? '下载' : 'Download'}</button>
       <button onClick={() => selectedEntry && beginRename(selectedEntry)} disabled={busy || !selectedEntry}>✎ {isZh ? '重命名' : 'Rename'}</button>
       <button onClick={() => markTransfer(false)} disabled={busy || !selectedEntry}>⧉ {isZh ? '拷贝' : 'Copy'}</button>
@@ -260,6 +304,14 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       <label>{isZh ? '目标名称' : 'Target name'} <input value={pasteName} onChange={event => setPasteName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void paste(); }} disabled={busy} /></label>
       <button onClick={() => void paste()} disabled={busy || loading || !validName(pasteName.trim())}>{isZh ? '粘贴' : 'Paste'}</button>
       <button onClick={() => setClipboard(null)} disabled={busy}>{isZh ? '取消' : 'Cancel'}</button>
+    </div>}
+    {editorSessions.length > 0 && <div className="usb-fm-edit-sessions" aria-label={isZh ? '电脑编辑记录' : 'Computer editor sessions'}>
+      {editorSessions.map(session => <div className="usb-fm-edit-session" key={session.id}>
+        <div><strong>{session.remotePath}</strong><small>{session.application} · {session.localPath}</small></div>
+        <button onClick={() => void saveEditor(session)} disabled={busy}>{isZh ? '保存回仿真机' : 'Save to simulator'}</button>
+        <button onClick={() => void finishEditor(session)} disabled={busy} title={isZh ? '只移除记录，本地副本保留' : 'Remove session; keep local copy'}>{isZh ? '移除记录' : 'Remove session'}</button>
+      </div>)}
+      <small>{isZh ? '电脑编辑器保存的是本地副本；点“保存回仿真机”才会更新设备文件。' : 'The editor saves a local copy; use “Save to simulator” to update the device.'}</small>
     </div>}
     <div className="usb-fm-list" role="listbox" aria-label={isZh ? '文件列表' : 'Files'} onContextMenu={event => showContextMenu(event, null)}>
       {segments.length > 0 && <button className="usb-fm-row" onClick={() => setSegments(value => value.slice(0, -1))} disabled={busy}><span>↰</span><strong>..</strong><small /></button>}
@@ -280,7 +332,10 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
         {contextMenu.entry ? <>
           {contextMenu.entry.directory
             ? <button role="menuitem" onClick={() => { openDirectory(contextMenu.entry!.name); setContextMenu(null); }}>{isZh ? '打开文件夹' : 'Open folder'}</button>
-            : <button role="menuitem" onClick={() => { void download(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '下载' : 'Download'}</button>}
+            : <>
+              <button role="menuitem" onClick={() => { void openEditor(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '使用电脑编辑器打开…' : 'Open with computer editor…'}</button>
+              <button role="menuitem" onClick={() => { void download(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '下载' : 'Download'}</button>
+            </>}
           <button role="menuitem" onClick={() => { beginRename(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '重命名' : 'Rename'}</button>
           <button role="menuitem" onClick={() => { markTransfer(false, contextMenu.entry!); setContextMenu(null); }}>{isZh ? '拷贝' : 'Copy'}</button>
           <button role="menuitem" onClick={() => { markTransfer(true, contextMenu.entry!); setContextMenu(null); }}>{isZh ? '移动' : 'Move'}</button>

@@ -16,6 +16,7 @@ mod transport;
 mod model_import;
 mod firmware_picker;
 mod usb_file_picker;
+mod usb_file_editor;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -1020,57 +1021,89 @@ async fn usb_file_transfer(source: String, destination: String, move_source: boo
     }).await
 }
 
+static USB_DOWNLOAD_LOCK: Mutex<()> = Mutex::new(());
+
+fn download_usb_file(path: &str, directory: &str) -> Result<(std::path::PathBuf, u64, u32), String> {
+    let _download_guard = USB_DOWNLOAD_LOCK.lock().map_err(|_| "下载锁已损坏")?;
+    let name = path.rsplit('/').next().ok_or("文件名无效")?;
+    if name.is_empty() || name == "." || name == ".." || name.contains('\\') {
+        return Err("文件名无效".into());
+    }
+
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "无法确定当前用户主目录")?;
+    let requested = directory.strip_prefix("~/")
+        .map(|tail| std::path::PathBuf::from(&home).join(tail))
+        .unwrap_or_else(|| std::path::PathBuf::from(&directory));
+    if !requested.is_absolute() || !requested.starts_with(&home) {
+        return Err("下载目录必须位于当前用户主目录内".into());
+    }
+    if requested.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err("下载目录不能包含上级路径".into());
+    }
+    std::fs::create_dir_all(&requested).map_err(|e| format!("创建下载目录失败: {e}"))?;
+    let requested = requested.canonicalize().map_err(|e| e.to_string())?;
+    let home = std::path::Path::new(&home).canonicalize().map_err(|e| e.to_string())?;
+    if !requested.starts_with(home) {
+        return Err("下载目录必须位于当前用户主目录内".into());
+    }
+
+    let original = std::path::Path::new(name);
+    let stem = original.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
+    let extension = original.extension().and_then(|value| value.to_str());
+    let mut target = requested.join(name);
+    for number in 1..=1000 {
+        if !target.exists() { break; }
+        let candidate = match extension {
+            Some(ext) => format!("{stem} ({number}).{ext}"),
+            None => format!("{stem} ({number})"),
+        };
+        target = requested.join(candidate);
+    }
+    if target.exists() { return Err("下载目录中已有过多同名文件".into()); }
+
+    let partial = requested.join(format!(".{}.usbpart", target.file_name().unwrap().to_string_lossy()));
+    let (size, checksum) = match usb_file::download_to_fingerprint(path, &partial) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(error);
+        }
+    };
+    if let Err(error) = std::fs::rename(&partial, &target) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("保存下载文件失败: {error}"));
+    }
+    Ok((target, size, checksum))
+}
+
 #[tauri::command]
 async fn usb_file_download(path: String, directory: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        let name = path.rsplit('/').next().ok_or("文件名无效")?;
-        if name.is_empty() || name == "." || name == ".." || name.contains('\\') {
-            return Err("文件名无效".into());
-        }
-
-        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
-            .map_err(|_| "无法确定当前用户主目录")?;
-        let requested = directory.strip_prefix("~/")
-            .map(|tail| std::path::PathBuf::from(&home).join(tail))
-            .unwrap_or_else(|| std::path::PathBuf::from(&directory));
-        if !requested.is_absolute() || !requested.starts_with(&home) {
-            return Err("下载目录必须位于当前用户主目录内".into());
-        }
-        if requested.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
-            return Err("下载目录不能包含上级路径".into());
-        }
-        std::fs::create_dir_all(&requested).map_err(|e| format!("创建下载目录失败: {e}"))?;
-        let requested = requested.canonicalize().map_err(|e| e.to_string())?;
-        let home = std::path::Path::new(&home).canonicalize().map_err(|e| e.to_string())?;
-        if !requested.starts_with(home) {
-            return Err("下载目录必须位于当前用户主目录内".into());
-        }
-
-        let original = std::path::Path::new(name);
-        let stem = original.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
-        let extension = original.extension().and_then(|value| value.to_str());
-        let mut target = requested.join(name);
-        for number in 1..=1000 {
-            if !target.exists() { break; }
-            let candidate = match extension {
-                Some(ext) => format!("{stem} ({number}).{ext}"),
-                None => format!("{stem} ({number})"),
-            };
-            target = requested.join(candidate);
-        }
-        if target.exists() { return Err("下载目录中已有过多同名文件".into()); }
-
-        let partial = requested.join(format!(".{}.usbpart", target.file_name().unwrap().to_string_lossy()));
-        let size = match usb_file::download_to(&path, &partial) {
-            Ok(size) => size,
-            Err(error) => {
-                let _ = std::fs::remove_file(&partial);
-                return Err(error);
-            }
-        };
-        std::fs::rename(&partial, &target).map_err(|e| format!("保存下载文件失败: {e}"))?;
+        let (target, size, _) = download_usb_file(&path, &directory)?;
         Ok(serde_json::json!({ "path": path, "localPath": target.to_string_lossy(), "size": size }))
     }).await
+}
+
+#[tauri::command]
+async fn usb_file_open_editor(window: tauri::WebviewWindow, path: String, directory: String)
+    -> Result<Option<usb_file_editor::EditorSessionInfo>, String> {
+    usb_file_editor::open(window, path, directory).await
+}
+
+#[tauri::command]
+async fn usb_file_edit_sessions() -> Result<Vec<usb_file_editor::EditorSessionInfo>, String> {
+    usb_file_editor::sessions()
+}
+
+#[tauri::command]
+async fn usb_file_save_editor(id: String) -> Result<usb_file_editor::EditorSaveResult, String> {
+    run_blocking(move || usb_file_editor::save(&id)).await
+}
+
+#[tauri::command]
+async fn usb_file_finish_editor(id: String) -> Result<(), String> {
+    usb_file_editor::finish(&id)
 }
 
 #[tauri::command]
@@ -1353,6 +1386,10 @@ fn main() {
             usb_file_mkdir,
             usb_file_transfer,
             usb_file_download,
+            usb_file_open_editor,
+            usb_file_edit_sessions,
+            usb_file_save_editor,
+            usb_file_finish_editor,
             usb_file_upload_local,
             select_firmware_file,
             firmware_stage_file,
