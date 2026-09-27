@@ -279,6 +279,7 @@ impl SimClient {
                                 if let Ok(text) = std::str::from_utf8(&buf[..n]) {
                                     if let Ok(val) = serde_json::from_str::<Value>(text) {
                                         if val.is_object() {
+                                            crate::telemetry_recorder::global().record(&peer.to_string(), &val);
                                             /* Telemetry is authoritative proof of which board is
                                              * connected.  Route subsequent control packets to its
                                              * source IP: discovery packets or an outdated setting
@@ -623,34 +624,16 @@ impl SimClient {
             .get("load")?.as_f64()
     }
 
-    /// Per-core busy percentage reconstructed from the SMP idle tasks.  The
-    /// NuttX cpuload values are percentages of total machine time, so an idle
-    /// task on an N-core target has a maximum load of 100/N percent.
+    /// Per-core busy percentage calculated by the board's SMP counters.
+    /// The task list uses a decaying average while this field measures a
+    /// recent interval, so prefer the board's explicit per-core readings.
     pub fn cpu_core_loads(&self) -> Option<Vec<f64>> {
         let state = self.inner.lock().unwrap();
         let task_top = state.latest_task_top.as_ref()?.get("task_top")?;
-        if let Some(cores) = task_top.get("cpu_cores").and_then(Value::as_array) {
-            let values: Vec<f64> = cores.iter().filter_map(Value::as_f64).collect();
-            if !values.is_empty() { return Some(values); }
-        }
-        let tasks = task_top.get("tasks")?.as_array()?;
-        let mut idle = Vec::<(usize, f64)>::new();
-        for task in tasks {
-            let name = task.get("name").and_then(Value::as_str)?;
-            let upper = name.to_ascii_uppercase();
-            if !upper.starts_with("CPU") || !upper.ends_with(" IDLE") {
-                continue;
-            }
-            let core = upper[3..upper.len() - 5].trim().parse::<usize>().ok()?;
-            idle.push((core, task.get("load")?.as_f64()?));
-        }
-        if idle.is_empty() { return None; }
-        let core_count = idle.iter().map(|(core, _)| *core).max()? + 1;
-        let mut loads = vec![0.0; core_count];
-        for (core, idle_load) in idle {
-            loads[core] = (100.0 - idle_load * core_count as f64).clamp(0.0, 100.0);
-        }
-        Some(loads)
+        let cores = task_top.get("cpu_cores")?.as_array()?;
+        let values: Vec<f64> = cores.iter().map(Value::as_f64).collect::<Option<_>>()?;
+        (!values.is_empty() && values.iter().all(|value| value.is_finite() &&
+            (0.0..=100.0).contains(value))).then_some(values)
     }
 
     /// Current NuttX user-heap usage reported alongside the task snapshot.
@@ -665,6 +648,17 @@ impl SimClient {
         let state = self.inner.lock().unwrap();
         state.latest_task_top.as_ref()?
             .get("task_top")?.get("fdm_run_ms")?.as_f64()
+    }
+
+    /// Board-side window statistics; older firmware may omit these fields.
+    pub fn fdm_window_stats(&self) -> Option<Value> {
+        let state = self.inner.lock().unwrap();
+        let top = state.latest_task_top.as_ref()?.get("task_top")?;
+        Some(serde_json::json!({
+            "averageMs": top.get("fdm_avg_ms")?,
+            "maxMs": top.get("fdm_max_ms")?,
+            "samples": top.get("fdm_samples")?,
+        }))
     }
 
     /// Effective JSBSim integration step reported by the running FDM.

@@ -58,6 +58,19 @@ export async function initializeSimulatorTransport(): Promise<void> {
 export interface ReferenceFile {
   name: string;
   xml: string;
+  /** User-confirmed import classification for package-only XML files. */
+  category?: 'initialization' | 'model-config' | 'system' | 'engine' | 'companion';
+}
+
+export async function selectModelImport(directory: boolean): Promise<{
+  directory: string; mainFile: string | null; files: Array<{ name: string; xml: string }>;
+  assets: Array<{ name: string; size: number }>;
+} | null> {
+  const preferenceKey = 'jsbsim-last-model-import-directory';
+  const initialDirectory = localStorage.getItem(preferenceKey);
+  const selected = await call('select_model_import', { directory, initialDirectory });
+  if (selected?.directory) localStorage.setItem(preferenceKey, selected.directory);
+  return selected;
 }
 
 export async function generateXml(data: any): Promise<string> {
@@ -178,7 +191,7 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; fdmRunMs?: number; simulationDt?: number }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; fdmRunMs?: number; fdmWindow?: { averageMs: number; maxMs: number; samples: number }; simulationDt?: number }> {
   return call('sim_status');
 }
 
@@ -204,6 +217,17 @@ export async function ftpListSystems(): Promise<string[]> {
   const result = await call('ftp_list_systems');
   if (Array.isArray(result.files) && typeof result.files[0] === 'string') return result.files;
   return (result.files || []).map((file: any) => String(file.path || '').replace(/^systems\//, ''));
+}
+
+export async function listRemoteXmlParent(parent: string): Promise<{ exists: boolean; files: string[] }> {
+  const result = await call('ftp_list_xml_parent', { parent });
+  return { exists: result.exists === true, files: (result.files || []).map((file: unknown) => String(file)) };
+}
+
+async function remoteXmlOrNew(parent: string, name: string, loadRemote: () => Promise<string>): Promise<string | null> {
+  const listing = await listRemoteXmlParent(parent);
+  if (!listing.exists || !listing.files.some(entry => entry.toLowerCase() === name.toLowerCase())) return null;
+  return loadRemote();
 }
 
 export async function ftpListEngines(): Promise<string[]> {
@@ -279,20 +303,27 @@ function xmlChangePreview(remoteXml: string, localXml: string): string {
   return `${changes.join('\n')}${omitted > 0 ? `\n…另有 ${omitted} 行差异` : ''}`;
 }
 
-async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote: () => Promise<string>): Promise<boolean> {
+async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote: () => Promise<string | null>): Promise<boolean> {
   if (!isRemoteUploadEnabled()) {
     throw new Error('仿真机 XML 上传已关闭，请先在“本地配置”中启用');
   }
-  let remoteXml: string;
+  let remoteXml: string | null;
   try {
     remoteXml = await loadRemote();
   } catch (error: any) {
     throw new Error(`无法读取仿真机原文件，不能比较变更，已禁止上传：${error?.message || error}`);
   }
+  if (remoteXml === null) {
+    const confirmed = window.confirm(
+      `仿真机上尚无此 XML，将新建：\n/mnt/sdcard/jsbsim/${path}\n\n不会覆盖已有文件。确认创建吗？`
+    );
+    if (!confirmed) throw new Error('用户取消新建 XML，仿真机文件未修改');
+    return true;
+  }
   if (comparableXml(remoteXml) === comparableXml(localXml)) return false;
   const preview = xmlChangePreview(remoteXml, localXml);
   const confirmed = window.confirm(
-    `即将更新仿真机 XML：\n/mnt/sdcard/jsbsim/${path}\n\n请比较以下变更：\n\n${preview}\n\n远端原文件会保留为 .bak。确认应用这些变更吗？`
+    `即将更新仿真机 XML：\n/mnt/sdcard/jsbsim/${path}\n\n请比较以下变更：\n\n${preview}\n\n确认覆盖原文件吗？`
   );
   if (!confirmed) throw new Error('用户取消 XML 更新，仿真机文件未修改');
   return true;
@@ -301,11 +332,23 @@ async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote
 export async function ftpUploadFile(path: string, content: string): Promise<{ path: string; uploaded: boolean }> {
   const normalizedPath = String(path).replace(/^\/+|^jsbsim\//g, '');
   const shouldUpload = await confirmRemoteXmlUpdate(normalizedPath, content, async () => {
-    const remote = await ftpDownloadXml(normalizedPath);
-    return remote.content;
+    const load = async () => (await ftpDownloadXml(normalizedPath)).content;
+    const parts = normalizedPath.split('/');
+    const filename = parts.pop() || '';
+    const directory = parts.join('/');
+    if (!filename || !/^(?:systems|engine|scripts|aircraft\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)$/.test(directory)) return load();
+    return remoteXmlOrNew(directory, filename, load);
   });
   if (!shouldUpload) return { path: normalizedPath, uploaded: false };
   return call('ftp_upload_file', { path: normalizedPath, content });
+}
+
+export async function ftpUploadModelAssets(sourceDirectory: string, model: string, expectedFiles: string[]): Promise<{ files: string[] }> {
+  return call('ftp_upload_model_assets', { sourceDirectory, model, expectedFiles });
+}
+
+export async function checkModelAssets(sourceDirectory: string, expectedFiles: string[]): Promise<void> {
+  await call('check_model_assets', { sourceDirectory, expectedFiles });
 }
 
 export async function ftpDownloadScript(file: string): Promise<{ file: string; xml: string; source: string }> {
@@ -316,8 +359,7 @@ export async function ftpUploadModel(model: string, xml: string): Promise<{ mode
   const modelName = String(model).replace(/^aircraft\//, '').replace(/\/.*$/, '');
   const path = `aircraft/${modelName}/${modelName}.xml`;
   const shouldUpload = await confirmRemoteXmlUpdate(path, xml, async () => {
-    const remote = await ftpDownloadModel(modelName);
-    return remote.xml;
+    return remoteXmlOrNew(`aircraft/${modelName}`, `${modelName}.xml`, async () => (await ftpDownloadModel(modelName)).xml);
   });
   if (!shouldUpload) return { model: modelName, uploaded: false };
   return call('ftp_upload_model', { model: modelName, xml });
@@ -414,6 +456,24 @@ export interface FirmwareProgress {
   total: number;
 }
 
+export interface FirmwareSelection {
+  path: string;
+  name: string;
+  size: number;
+}
+
+export async function selectFirmwareFile(): Promise<FirmwareSelection | null> {
+  const preferenceKey = 'jsbsim-last-firmware-path';
+  const previousPath = localStorage.getItem(preferenceKey);
+  const selected = await call('select_firmware_file', { previousPath }) as FirmwareSelection | null;
+  if (selected?.path) localStorage.setItem(preferenceKey, selected.path);
+  return selected;
+}
+
+export async function firmwareStageFile(path: string): Promise<FirmwareStageResult> {
+  return call('firmware_stage_file', { path });
+}
+
 export async function firmwareStage(fileName: string, bytes: Uint8Array): Promise<FirmwareStageResult> {
   return call('firmware_stage', { fileName, bytes: Array.from(bytes) });
 }
@@ -478,4 +538,21 @@ export function removeAllListeners() {
     fn();
   }
   unlistenFns = [];
+}
+
+export interface TelemetryRecordingStatus {
+  recording: boolean;
+  path?: string | null;
+  written: number;
+  dropped: number;
+  error?: string | null;
+}
+export async function telemetryRecordStart(directory?: string): Promise<TelemetryRecordingStatus> {
+  return call('telemetry_record_start', { directory: directory ?? null });
+}
+export async function telemetryRecordStop(): Promise<TelemetryRecordingStatus> {
+  return call('telemetry_record_stop');
+}
+export async function telemetryRecordStatus(): Promise<TelemetryRecordingStatus> {
+  return call('telemetry_record_status');
 }

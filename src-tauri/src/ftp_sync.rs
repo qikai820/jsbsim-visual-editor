@@ -189,21 +189,42 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
     }
 }
 
+fn verify_uploaded_file(auth: &str, path: &str, expected: &[u8]) -> Result<(), String> {
+    let url = format!("{}{}", endpoint(), path);
+    let output = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
+               "--disable-epsv", "--connect-timeout", "3", "--max-time", "15",
+               "--user", auth, &url])
+        .output()
+        .map_err(|error| format!("cannot read back uploaded file: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("cannot read back {path}: {}",
+                           String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    if output.stdout != expected {
+        return Err(format!("uploaded file differs on SD card: {path} (expected {} bytes, read {} bytes)",
+                           expected.len(), output.stdout.len()));
+    }
+    Ok(())
+}
+
 fn list_directory(path: &str) -> Result<Vec<String>, String> {
     if use_usb() {
-        let usb_entries = match transport::mode() {
-            TransportMode::Auto => usb_file::list_quick(&format!("jsbsim/{path}")),
-            TransportMode::Usb => usb_file::list(&format!("jsbsim/{path}")),
-            TransportMode::Network => unreachable!(),
-        };
-        if let Ok(entries) = usb_entries {
-            let mut entries: Vec<String> = entries.into_iter().map(|entry| entry.name).collect();
-            entries.sort();
-            entries.dedup();
-            return Ok(entries);
-        } else if !matches!(transport::mode(), TransportMode::Auto) {
-            return Err(usb_entries.unwrap_err());
-        }
+        let built_in = usb_file::list(&format!("romfs/jsbsim/{path}"));
+        let user = usb_file::list(&format!("jsbsim/{path}"));
+        let mut entries = match (built_in, user) {
+            (Ok(mut built_in), Ok(user)) => { built_in.extend(user); built_in },
+            (Ok(built_in), Err(_)) => built_in,
+            (Err(_), Ok(user)) => user,
+            (Err(_), Err(error)) => return Err(error),
+        }.into_iter()
+            .filter(|entry| path != "aircraft" || entry.directory)
+            .map(|entry| entry.name)
+            .filter(|name| safe_component(name).is_ok())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries.dedup();
+        return Ok(entries);
     }
     let url = format!("{}/jsbsim/{}/", endpoint(), path);
     let auth = credentials();
@@ -217,6 +238,16 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
     entries.sort();
     entries.dedup();
     Ok(entries)
+}
+
+fn read_usb_library(path: &str, built_in_first: bool) -> Result<String, String> {
+    let built_in = format!("romfs/jsbsim/{path}");
+    let user = format!("jsbsim/{path}");
+    if built_in_first {
+        usb_file::read_text(&built_in).or_else(|_| usb_file::read_text(&user))
+    } else {
+        usb_file::read_text(&user).or_else(|_| usb_file::read_text(&built_in))
+    }
 }
 
 fn dsdl_root() -> String {
@@ -237,16 +268,10 @@ fn safe_relative_path(path: &str) -> Result<&str, String> {
 fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
     safe_relative_path(path)?;
     if use_usb() {
-        let usb_entries = match transport::mode() {
-            TransportMode::Auto => usb_file::list_quick(path),
-            TransportMode::Usb => usb_file::list(path),
-            TransportMode::Network => unreachable!(),
-        };
+        let usb_entries = usb_file::list(path);
         if let Ok(entries) = usb_entries {
             return Ok(entries.into_iter().map(|entry| entry.name).collect());
-        } else if !matches!(transport::mode(), TransportMode::Auto) {
-            return Err(usb_entries.unwrap_err());
-        }
+        } else { return Err(usb_entries.unwrap_err()); }
     }
     let url = format!("{}/{}/", endpoint(), path.trim_matches('/'));
     let auth = credentials();
@@ -420,7 +445,7 @@ pub fn download_path(path: &str) -> Result<String, String> {
         return Err("invalid remote XML path".into());
     }
     if use_usb() {
-        return usb_file::read_text(&format!("jsbsim/{path}"));
+        return read_usb_library(path, false);
     }
     let url = format!("{}/jsbsim/{}", endpoint(), path);
     let auth = credentials();
@@ -430,7 +455,7 @@ pub fn download_path(path: &str) -> Result<String, String> {
 
 pub fn download_simulator_version() -> Result<String, String> {
     if use_usb() {
-        return usb_file::read_text("jsbsim/VERSION.json");
+        return read_usb_library("VERSION.json", true);
     }
     let url = format!("{}/jsbsim/VERSION.json", endpoint());
     let auth = credentials();
@@ -463,8 +488,46 @@ pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
     let result = child.wait_with_output().map_err(|e| e.to_string())?;
     if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).trim().to_string()); }
 
+    verify_uploaded_file(&auth, &temporary, content.as_bytes())?;
     commit_uploaded_file(&auth, &temporary, &remote, &backup)
-        .map_err(|e| format!("cannot commit {path}: {e}"))
+        .map_err(|e| format!("cannot commit {path}: {e}"))?;
+    verify_uploaded_file(&auth, &remote, content.as_bytes())
+}
+
+pub fn upload_model_asset(model: &str, name: &str, content: &[u8]) -> Result<(), String> {
+    let model = safe_component(model)?;
+    if name.is_empty() || name.split('/').any(|part| {
+        part.is_empty() || safe_component(part).is_err() ||
+        !part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    }) || name.to_ascii_lowercase().ends_with(".xml") {
+        return Err(format!("invalid model asset path: {name}"));
+    }
+    let path = format!("jsbsim/aircraft/{model}/{name}");
+    if use_usb() {
+        usb_file::write_all(&path, content)?;
+        if usb_file::read_all(&path)? != content {
+            return Err(format!("model asset readback mismatch: {path}"));
+        }
+        return Ok(());
+    }
+    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
+    let remote = format!("/{path}");
+    let temporary = format!("{remote}.upload");
+    let backup = format!("{remote}.bak");
+    let auth = credentials();
+    let temp_url = format!("{}{}", endpoint(), temporary);
+    let mut child = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
+               "--connect-timeout", "3", "--max-time", "30", "--user", &auth,
+               "--ftp-create-dirs", "--upload-file", "-", &temp_url])
+        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .map_err(|e| format!("cannot start curl: {e}"))?;
+    child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content).map_err(|e| e.to_string())?;
+    let result = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).trim().to_string()); }
+    verify_uploaded_file(&auth, &temporary, content)?;
+    commit_uploaded_file(&auth, &temporary, &remote, &backup)?;
+    verify_uploaded_file(&auth, &remote, content)
 }
 
 fn safe_config_path(path: &str) -> Result<&str, String> {
@@ -478,7 +541,7 @@ fn safe_config_path(path: &str) -> Result<&str, String> {
 pub fn download_config(path: &str) -> Result<String, String> {
     let path = safe_config_path(path)?;
     if use_usb() {
-        return usb_file::read_text(&format!("jsbsim/{path}"));
+        return read_usb_library(path, false);
     }
     let url = format!("{}/jsbsim/{}", endpoint(), path);
     let auth = credentials();
@@ -508,11 +571,32 @@ pub fn upload_config(path: &str, content: &str) -> Result<(), String> {
     child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
-    commit_uploaded_file(&auth, &temporary, &remote, &backup)
+    verify_uploaded_file(&auth, &temporary, content.as_bytes())?;
+    commit_uploaded_file(&auth, &temporary, &remote, &backup)?;
+    verify_uploaded_file(&auth, &remote, content.as_bytes())
 }
 
 pub fn list_models() -> Result<Vec<String>, String> {
     list_directory("aircraft")
+}
+
+/// A parent listing is the only safe way to distinguish a new XML path from
+/// a failed read. NuttX can return ENOTDIR for a missing model directory.
+pub fn list_xml_parent(parent: &str) -> Result<Option<Vec<String>>, String> {
+    let parts: Vec<&str> = parent.split('/').collect();
+    if parts.is_empty() || parts.len() > 6 || parts.iter().any(|part| safe_component(part).is_err()) ||
+        (parts.len() > 1 && parts[0] != "aircraft") ||
+        (parts.len() == 1 && !matches!(parts[0], "aircraft" | "systems" | "engine" | "scripts")) {
+        return Err("unsupported XML parent directory".into());
+    }
+    for depth in 1..parts.len() {
+        let ancestor = parts[..depth].join("/");
+        let entries = list_directory(&ancestor)?;
+        if !entries.iter().any(|entry| entry.eq_ignore_ascii_case(parts[depth])) {
+            return Ok(None);
+        }
+    }
+    list_directory(parent).map(Some)
 }
 
 pub fn list_scripts() -> Result<Vec<String>, String> {
@@ -538,7 +622,7 @@ pub fn list_engine_catalog() -> Result<(Vec<String>, Vec<String>), String> {
     let mut propellers = Vec::new();
     for name in list_engines()? {
         let xml = if use_usb() {
-            usb_file::read_text(&format!("jsbsim/engine/{name}"))?.to_ascii_lowercase()
+            read_usb_library(&format!("engine/{name}"), true)?.to_ascii_lowercase()
         } else {
             let url = format!("{}/jsbsim/engine/{}", endpoint(), name);
             let auth = credentials();
@@ -558,7 +642,7 @@ pub fn list_engine_catalog() -> Result<(Vec<String>, Vec<String>), String> {
 pub fn download_model(model: &str) -> Result<String, String> {
     let model = safe_component(model)?;
     if use_usb() {
-        return usb_file::read_text(&format!("jsbsim/aircraft/{model}/{model}.xml"));
+        return read_usb_library(&format!("aircraft/{model}/{model}.xml"), true);
     }
     let url = format!("{}/jsbsim/aircraft/{}/{}.xml", endpoint(), model, model);
     let auth = credentials();
@@ -573,7 +657,7 @@ pub fn download_script(file: &str) -> Result<String, String> {
     }
 
     if use_usb() {
-        return usb_file::read_text(&format!("jsbsim/scripts/{file}"));
+        return read_usb_library(&format!("scripts/{file}"), true);
     }
 
     let url = format!("{}/jsbsim/scripts/{}", endpoint(), file);
@@ -613,8 +697,10 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
 
+    verify_uploaded_file(&auth, &temporary, xml.as_bytes())?;
     commit_uploaded_file(&auth, &temporary, &target, &backup)
-        .map_err(|e| format!("cannot commit remote model: {e}"))
+        .map_err(|e| format!("cannot commit remote model: {e}"))?;
+    verify_uploaded_file(&auth, &target, xml.as_bytes())
 }
 
 #[cfg(test)]

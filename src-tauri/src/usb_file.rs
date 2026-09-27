@@ -7,7 +7,8 @@
 use rusb::{Context, DeviceHandle, UsbContext};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
 use std::{io::Write, path::Path};
 
@@ -23,11 +24,11 @@ const VERSION: u16 = 1;
 const HEADER_SIZE: usize = 32;
 const MAX_PAYLOAD: usize = 16 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(3);
+const LIST_TIMEOUT: Duration = Duration::from_secs(8);
 const FIRMWARE_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 /* Automatic transport selection must never hold the live simulation link for
- * a file-service timeout.  A healthy vendor endpoint replies to PING/LIST in
- * a few milliseconds; use this small budget only when the caller may fall
- * back to Ethernet. */
+ * a file-service timeout.  Probe with a short PING before choosing USB;
+ * a directory LIST can legitimately take longer on a busy SD card. */
 const AUTO_FILE_TIMEOUT: Duration = Duration::from_millis(300);
 const AUTO_LOCK_WAIT: Duration = Duration::from_millis(150);
 /* The simulation connection is a live UI transport, not a file transfer.
@@ -48,10 +49,22 @@ const MKDIR: u16 = 9;
 const WRITE_ABORT: u16 = 10;
 const UPDATE: u16 = 11;
 const NSH_EXEC: u16 = 12;
-const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(4);
+const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(8);
 
-static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
+static REQUEST_ID: OnceLock<AtomicU32> = OnceLock::new();
 static USB_LOCK: Mutex<()> = Mutex::new(());
+// Keep incomplete EP3 responses across timeouts. The next transaction must
+// consume their complete frames before looking for its own request ID.
+static FILE_RX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+fn next_request_id() -> u32 {
+    REQUEST_ID.get_or_init(|| {
+        // Restarting the app must not reuse request 1 while an old request 1
+        // response remains queued on the board. No new dependency is needed.
+        let seed = std::collections::hash_map::RandomState::new().build_hasher().finish() as u32;
+        AtomicU32::new(seed)
+    }).fetch_add(1, Ordering::Relaxed)
+}
 /* USB bulk preserves byte order, not application-message boundaries.  A
  * visual SIM1 record can be larger than the endpoint's 512-byte max packet,
  * so retain partial data across libusb reads until its complete length is
@@ -129,21 +142,74 @@ fn write_exact(handle: &DeviceHandle<Context>, mut data: &[u8], timeout: Duratio
     Ok(())
 }
 
-fn read_exact(
-    handle: &DeviceHandle<Context>,
-    mut data: &mut [u8],
-    timeout: Duration,
-) -> Result<(), String> {
-    while !data.is_empty() {
-        let count = handle
-            .read_bulk(FILE_IN, data, timeout)
-            .map_err(|error| format!("USB bulk read failed: {error}"))?;
-        if count == 0 {
-            return Err("USB bulk read returned zero bytes".into());
+fn take_file_response(buffer: &mut Vec<u8>, opcode: u16, request_id: u32) -> Result<Option<Response>, String> {
+    loop {
+        // A previous process may have consumed only a header before timing
+        // out. Scan past its orphaned payload, retaining a partial magic word.
+        let Some(start) = buffer.windows(4).position(|bytes| bytes == MAGIC.to_le_bytes()) else {
+            let discard = buffer.len().saturating_sub(3);
+            buffer.drain(..discard);
+            return Ok(None);
+        };
+        buffer.drain(..start);
+        if buffer.len() < HEADER_SIZE { return Ok(None); }
+        let version = u16::from_le_bytes(buffer[4..6].try_into().unwrap());
+        let response_opcode = u16::from_le_bytes(buffer[6..8].try_into().unwrap());
+        let response_id = u32::from_le_bytes(buffer[8..12].try_into().unwrap());
+        let status = i32::from_le_bytes(buffer[12..16].try_into().unwrap());
+        let length = u32::from_le_bytes(buffer[16..20].try_into().unwrap()) as usize;
+        let offset = u64::from_le_bytes(buffer[20..28].try_into().unwrap());
+        let checksum = u32::from_le_bytes(buffer[28..32].try_into().unwrap());
+        if version != VERSION || response_opcode & 0x8000 == 0 || length > MAX_PAYLOAD {
+            buffer.drain(..1);
+            continue;
         }
-        data = &mut data[count..];
+        if buffer.len() < HEADER_SIZE + length { return Ok(None); }
+        let payload = buffer[HEADER_SIZE..HEADER_SIZE + length].to_vec();
+        buffer.drain(..HEADER_SIZE + length);
+        if response_id != request_id {
+            // Never interpret a late response as the current operation, and
+            // never resend writes automatically after an ambiguous timeout.
+            continue;
+        }
+        if response_opcode != (opcode | 0x8000) {
+            return Err("USB response opcode does not match current request".into());
+        }
+        if crc32(&payload) != checksum {
+            return Err("USB response CRC32 mismatch".into());
+        }
+        return Ok(Some(Response { status, offset, payload }));
     }
-    Ok(())
+}
+
+fn read_file_response(
+    handle: &DeviceHandle<Context>,
+    opcode: u16,
+    request_id: u32,
+    timeout: Duration,
+) -> Result<Response, String> {
+    let mut buffer = FILE_RX.lock().map_err(|_| "USB file receive buffer lock poisoned")?;
+    let deadline = std::time::Instant::now() + timeout;
+    // Always read multiples of the endpoint's 512-byte packet size. Reading
+    // a 304-byte queued payload into a 32-byte header buffer causes Overflow.
+    // One max-size packet also avoids waiting for a short packet/ZLP when
+    // the board finishes a payload whose size is exactly divisible by 512.
+    let mut packet = [0u8; 512];
+    loop {
+        if let Some(response) = take_file_response(&mut buffer, opcode, request_id)? {
+            return Ok(response);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        // libusb interprets a zero millisecond timeout as infinite.
+        if remaining.as_millis() == 0 {
+            return Err(format!("USB file response timed out (opcode={opcode}, request={request_id}, buffered={} bytes)", buffer.len()));
+        }
+        match handle.read_bulk(FILE_IN, &mut packet, remaining) {
+            Ok(count) => buffer.extend_from_slice(&packet[..count]),
+            Err(rusb::Error::Timeout) => return Err(format!("USB file response timed out (opcode={opcode}, request={request_id}, buffered={} bytes)", buffer.len())),
+            Err(error) => return Err(format!("USB bulk read failed (opcode={opcode}): {error}")),
+        }
+    }
 }
 
 fn transaction_locked_with_timeout(
@@ -158,7 +224,7 @@ fn transaction_locked_with_timeout(
         return Err(format!("USB payload exceeds {MAX_PAYLOAD} bytes"));
     }
 
-    let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let request_id = next_request_id();
     let mut header = [0u8; HEADER_SIZE];
     header[0..4].copy_from_slice(&MAGIC.to_le_bytes());
     header[4..6].copy_from_slice(&VERSION.to_le_bytes());
@@ -174,38 +240,7 @@ fn transaction_locked_with_timeout(
         write_exact(handle, payload, timeout)?;
     }
 
-    let mut response_header = [0u8; HEADER_SIZE];
-    read_exact(handle, &mut response_header, timeout)?;
-    let response_magic = u32::from_le_bytes(response_header[0..4].try_into().unwrap());
-    let response_version = u16::from_le_bytes(response_header[4..6].try_into().unwrap());
-    let response_opcode = u16::from_le_bytes(response_header[6..8].try_into().unwrap());
-    let response_id = u32::from_le_bytes(response_header[8..12].try_into().unwrap());
-    let response_status = i32::from_le_bytes(response_header[12..16].try_into().unwrap());
-    let response_length = u32::from_le_bytes(response_header[16..20].try_into().unwrap()) as usize;
-    let response_offset = u64::from_le_bytes(response_header[20..28].try_into().unwrap());
-    let response_crc = u32::from_le_bytes(response_header[28..32].try_into().unwrap());
-
-    if response_magic != MAGIC || response_version != VERSION ||
-        response_opcode != (opcode | 0x8000) || response_id != request_id {
-        return Err("invalid or out-of-sequence USB response".into());
-    }
-    if response_length > MAX_PAYLOAD {
-        return Err("USB response payload is too large".into());
-    }
-
-    let mut response_payload = vec![0u8; response_length];
-    if response_length > 0 {
-        read_exact(handle, &mut response_payload, timeout)?;
-        if crc32(&response_payload) != response_crc {
-            return Err("USB response CRC32 mismatch".into());
-        }
-    }
-
-    let response = Response {
-        status: response_status,
-        offset: response_offset,
-        payload: response_payload,
-    };
+    let response = read_file_response(handle, opcode, request_id, timeout)?;
     if response.status < 0 {
         return Err(format!("board file operation failed: errno {}", -response.status));
     }
@@ -294,27 +329,8 @@ pub fn available_quick() -> bool {
 
 pub fn list(path: &str) -> Result<Vec<UsbFileEntry>, String> {
     with_device(|handle| {
-        let response = transaction_locked(handle, LIST, 0, 0, path.as_bytes())?;
-        let text = std::str::from_utf8(&response.payload)
-            .map_err(|_| "board returned a non-UTF-8 directory listing")?;
-        text.lines().map(|line| {
-            let mut fields = line.splitn(3, '\t');
-            let kind = fields.next().ok_or("directory entry has no type")?;
-            let name = fields.next().ok_or("directory entry has no name")?;
-            let size = fields.next().ok_or("directory entry has no size")?
-                .parse::<u64>().map_err(|_| "directory entry has invalid size")?;
-            Ok(UsbFileEntry { name: name.to_owned(), directory: kind == "D", size })
-        }).collect()
-    })
-}
-
-/// Short, non-queuing directory request for Auto mode.  A caller can safely
-/// use network FTP when this returns an error.
-pub fn list_quick(path: &str) -> Result<Vec<UsbFileEntry>, String> {
-    with_device_quick(|handle| {
-        let response = transaction_locked_with_timeout(
-            handle, LIST, 0, 0, path.as_bytes(), AUTO_FILE_TIMEOUT,
-        )?;
+        let response = transaction_locked_with_timeout(handle, LIST, 0, 0, path.as_bytes(), LIST_TIMEOUT)
+            .map_err(|error| format!("USB LIST {path}: {error}"))?;
         let text = std::str::from_utf8(&response.payload)
             .map_err(|_| "board returned a non-UTF-8 directory listing")?;
         text.lines().map(|line| {
@@ -390,8 +406,19 @@ pub fn write_all_with_progress(
     data: &[u8],
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(), String> {
-    if path.len() > u16::MAX as usize { return Err("remote path is too long".into()); }
+    if path.is_empty() || path.len() > 220 {
+        return Err("remote path must contain 1 to 220 bytes".into());
+    }
     with_device(|handle| {
+        // Older board firmware acknowledges an upload without checking its
+        // length or checksum and deletes the old SD file before renaming it.
+        // Firmware staging on eMMC must remain possible so it can be updated.
+        if !path.starts_with("fireware/") {
+            let response = transaction_locked(handle, PING, 0, 0, &[])?;
+            if response.payload != b"lmx93-usb-file/3" {
+                return Err("板端 FAT 文件名修复尚未生效，已阻止 SD 写入。请先升级至 lmx93-usb-file/3 固件并重启仿真机".into());
+            }
+        }
         transaction_locked(handle, WRITE_BEGIN, 0, 0, path.as_bytes())?;
         let chunk_size = MAX_PAYLOAD.saturating_sub(path.len() + 2);
         let mut offset = 0usize;
@@ -403,11 +430,27 @@ pub fn write_all_with_progress(
                 payload.extend_from_slice(&(path.len() as u16).to_le_bytes());
                 payload.extend_from_slice(path.as_bytes());
                 payload.extend_from_slice(&data[offset..offset + count]);
-                transaction_locked(handle, WRITE_DATA, 0, offset as u64, &payload)?;
+                let response = transaction_locked(handle, WRITE_DATA, 0, offset as u64, &payload)?;
+                if response.offset != (offset + count) as u64 {
+                    return Err(format!("board acknowledged wrong upload offset at byte {offset}"));
+                }
                 offset += count;
                 progress(offset as u64, data.len() as u64);
             }
-            transaction_locked(handle, WRITE_COMMIT, 0, offset as u64, path.as_bytes())?;
+            transaction_locked(handle, WRITE_COMMIT, crc32(data) as i32, offset as u64, path.as_bytes())?;
+            // Check the final pathname too: a successful USB transfer only
+            // proves delivery to the board, not that the card can read it.
+            let mut verified = 0usize;
+            while verified < data.len() {
+                let count = (data.len() - verified).min(MAX_PAYLOAD);
+                let response = transaction_locked(handle, READ, count as i32,
+                                                  verified as u64, path.as_bytes())?;
+                if response.payload != data[verified..verified + count] ||
+                   response.offset != (verified + count) as u64 {
+                    return Err(format!("SD upload readback mismatch at byte {verified}"));
+                }
+                verified += count;
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -432,7 +475,7 @@ pub fn apply_firmware_with_progress(
     mut progress: impl FnMut(FirmwareUpdateProgress),
 ) -> Result<String, String> {
     with_device(|handle| {
-        let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let request_id = next_request_id();
         let mut header = [0u8; HEADER_SIZE];
         header[0..4].copy_from_slice(&MAGIC.to_le_bytes());
         header[4..6].copy_from_slice(&VERSION.to_le_bytes());
@@ -445,32 +488,10 @@ pub fn apply_firmware_with_progress(
         write_exact(handle, path.as_bytes(), FIRMWARE_UPDATE_TIMEOUT)?;
 
         loop {
-            let mut response_header = [0u8; HEADER_SIZE];
-            read_exact(handle, &mut response_header, FIRMWARE_UPDATE_TIMEOUT)?;
-            let response_magic = u32::from_le_bytes(response_header[0..4].try_into().unwrap());
-            let response_version = u16::from_le_bytes(response_header[4..6].try_into().unwrap());
-            let response_opcode = u16::from_le_bytes(response_header[6..8].try_into().unwrap());
-            let response_id = u32::from_le_bytes(response_header[8..12].try_into().unwrap());
-            let response_status = i32::from_le_bytes(response_header[12..16].try_into().unwrap());
-            let response_length = u32::from_le_bytes(response_header[16..20].try_into().unwrap()) as usize;
-            let response_offset = u64::from_le_bytes(response_header[20..28].try_into().unwrap());
-            let response_crc = u32::from_le_bytes(response_header[28..32].try_into().unwrap());
-
-            if response_magic != MAGIC || response_version != VERSION ||
-                response_opcode != (UPDATE | 0x8000) || response_id != request_id {
-                return Err("invalid or out-of-sequence firmware update response".into());
-            }
-            if response_length > MAX_PAYLOAD {
-                return Err("firmware update response payload is too large".into());
-            }
-
-            let mut payload = vec![0u8; response_length];
-            if response_length > 0 {
-                read_exact(handle, &mut payload, FIRMWARE_UPDATE_TIMEOUT)?;
-                if crc32(&payload) != response_crc {
-                    return Err("firmware update response CRC32 mismatch".into());
-                }
-            }
+            let response = read_file_response(handle, UPDATE, request_id, FIRMWARE_UPDATE_TIMEOUT)?;
+            let response_status = response.status;
+            let response_offset = response.offset;
+            let payload = response.payload;
 
             if response_status == -libc::EINPROGRESS {
                 let text = std::str::from_utf8(&payload)
@@ -666,5 +687,118 @@ pub fn simulation_self_test() -> Result<String, String> {
         Err(format!("simulation USB heartbeat received (state={state}), but visual telemetry timed out"))
     } else {
         Err("simulation USB heartbeat timed out: firmware did not return telemetry".into())
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    fn frame(opcode: u16, id: u32, status: i32, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(opcode | 0x8000).to_le_bytes());
+        bytes.extend_from_slice(&id.to_le_bytes());
+        bytes.extend_from_slice(&status.to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&crc32(payload).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    #[test]
+    fn skips_stale_frames_and_orphaned_payload_before_current_response() {
+        let mut buffer = vec![b'x'; 304];
+        buffer.extend(frame(LIST, 7, 0, &[b'a'; 304]));
+        buffer.extend(frame(PING, 1, 0, b"old"));
+        buffer.extend(frame(PING, 900, 0, b"current"));
+        assert_eq!(take_file_response(&mut buffer, PING, 900).unwrap().unwrap().payload, b"current");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn handles_every_split_point_and_a_late_partial_frame() {
+        let bytes = frame(LIST, 8, 0, &[42; 1300]);
+        for split in 0..bytes.len() {
+            let mut buffer = bytes[..split].to_vec();
+            assert!(take_file_response(&mut buffer, LIST, 8).unwrap().is_none());
+            buffer.extend_from_slice(&bytes[split..]);
+            buffer.extend(frame(PING, 9, 0, b"new"));
+            assert_eq!(take_file_response(&mut buffer, PING, 9).unwrap().unwrap().payload, b"new");
+        }
+    }
+
+    #[test]
+    fn rejects_corrupt_current_payload_and_wrong_opcode() {
+        let mut buffer = frame(PING, 8, 0, b"good");
+        *buffer.last_mut().unwrap() ^= 1;
+        assert!(take_file_response(&mut buffer, PING, 8).unwrap_err().contains("CRC32"));
+        let mut buffer = frame(LIST, 8, 0, b"wrong operation");
+        assert!(take_file_response(&mut buffer, PING, 8).unwrap_err().contains("opcode"));
+    }
+
+    #[test]
+    fn keeps_progress_frames_and_board_errors_intact() {
+        let mut buffer = frame(UPDATE, 8, -libc::EINPROGRESS, b"progress");
+        buffer.extend(frame(UPDATE, 8, 0, b"done"));
+        assert_eq!(take_file_response(&mut buffer, UPDATE, 8).unwrap().unwrap().status, -libc::EINPROGRESS);
+        assert_eq!(take_file_response(&mut buffer, UPDATE, 8).unwrap().unwrap().payload, b"done");
+        let mut buffer = frame(STAT, 9, -2, b"");
+        assert_eq!(take_file_response(&mut buffer, STAT, 9).unwrap().unwrap().status, -2);
+    }
+
+    #[test]
+    fn resynchronizes_invalid_header_without_unbounded_buffering() {
+        let mut buffer = frame(PING, 1, 0, b"");
+        buffer[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        buffer.extend(frame(PING, 9, 0, b"valid"));
+        assert_eq!(take_file_response(&mut buffer, PING, 9).unwrap().unwrap().payload, b"valid");
+        let mut noise = vec![b'x'; 16896];
+        assert!(take_file_response(&mut noise, PING, 9).unwrap().is_none());
+        assert_eq!(noise.len(), 3);
+    }
+
+    #[test]
+    #[ignore = "requires the real board and exclusive access; PING/LIST only"]
+    fn live_file_queries_recover_queued_responses_without_writes() {
+        with_device(|handle| {
+            // Queue a reply without reading it, reproducing the state left
+            // by a previous timed-out caller. Do not issue a write opcode.
+            let mut request = frame(LIST, next_request_id(), 0, b"jsbsim/systems");
+            request[6..8].copy_from_slice(&LIST.to_le_bytes());
+            write_exact(handle, &request[..HEADER_SIZE], TIMEOUT)?;
+            write_exact(handle, &request[HEADER_SIZE..], TIMEOUT)?;
+            let response = transaction_locked(handle, PING, 0, 0, b"")?;
+            assert_eq!(String::from_utf8_lossy(&response.payload), "lmx93-usb-file/3");
+            Ok(())
+        }).unwrap();
+        println!("Recovered queued old LIST response; current PING verified");
+        for _ in 0..5 {
+            assert_eq!(ping().unwrap(), "lmx93-usb-file/3");
+        }
+        println!("Five subsequent file-service PINGs verified");
+    }
+
+    #[test]
+    #[ignore = "requires the real board; tests storage separately from transport recovery"]
+    fn live_directory_queries() {
+        for path in ["jsbsim", "jsbsim/aircraft", "jsbsim/systems", "jsbsim/engine"] {
+            let entries = list(path).unwrap();
+            println!("USB LIST {path}: {entries:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires updated board firmware and a mounted SD card; writes and removes one test file"]
+    fn live_sd_upload_roundtrip() {
+        let path = "jsbsim/usbtest.bin";
+        for size in [0, 1, 511, 16_384, 32_771, 131_075] {
+            let data: Vec<u8> = (0..size).map(|index| (index * 37 % 251) as u8).collect();
+            write_all(path, &data).unwrap();
+            assert_eq!(read_all(path).unwrap(), data, "readback failed for {size} bytes");
+        }
+        delete(path).unwrap();
     }
 }

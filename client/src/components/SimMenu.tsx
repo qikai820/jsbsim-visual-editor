@@ -216,8 +216,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [healthFresh, setHealthFresh] = useState(false);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
+  const [fdmIsWindow, setFdmIsWindow] = useState(false);
   const [simulationDt, setSimulationDt] = useState<number | null>(null);
-  const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number }[]>([]);
+  const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number; peak: number }[]>([]);
   const [fdmPopupOpen, setFdmPopupOpen] = useState(false);
   const [fdmWindow, setFdmWindow] = useState<10 | 20 | 30>(10);
   const [cpuHistory, setCpuHistory] = useState<number[][]>([]);
@@ -330,12 +331,17 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         free: Number(remoteMemory.free) || 0,
         percent: Number(remoteMemory.percent) || 0,
       } : null);
-      const remoteFdmRunMs = typeof status.fdmRunMs === 'number' ? status.fdmRunMs : null;
+      const window = status.fdmWindow;
+      const hasWindow = !!window && Number.isFinite(window.averageMs) && Number.isFinite(window.maxMs);
+      const remoteFdmRunMs = hasWindow ? window!.averageMs
+        : typeof status.fdmRunMs === 'number' ? status.fdmRunMs : null;
+      const peak = hasWindow ? window!.maxMs : remoteFdmRunMs;
+      setFdmIsWindow(hasWindow);
       if (remoteFdmRunMs != null && Number.isFinite(remoteFdmRunMs) && remoteFdmRunMs >= 0) {
         setFdmRunMs(remoteFdmRunMs);
         if (status.connected && status.state === 'running' && !launchInProgressRef.current) {
           const now = Date.now();
-          setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs }]
+          setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs, peak: peak ?? remoteFdmRunMs }]
             .filter(sample => now - sample.at <= 30000));
         }
       }
@@ -743,15 +749,22 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const showRuntimeStatus = external || running || phase !== 'idle';
   const fdmLoading = external && (launchInProgressRef.current || remoteState === 'loading');
   const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
-  const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.value)) * 1.1;
+  const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.peak)) * 1.1;
   const fdmValues = fdmVisibleHistory.map(sample => sample.value);
   const fdmAverage = fdmValues.length ? fdmValues.reduce((sum, value) => sum + value, 0) / fdmValues.length : 0;
-  const fdmMaximum = fdmValues.length ? Math.max(...fdmValues) : 0;
+  const fdmMaximum = fdmVisibleHistory.length ? Math.max(...fdmVisibleHistory.map(sample => sample.peak)) : 0;
   const fdmMinimum = fdmValues.length ? Math.min(...fdmValues) : 0;
   const fdmChartPoints = fdmVisibleHistory.map(sample => {
     const age = Date.now() - sample.at;
     const x = 240 - Math.min(fdmWindow * 1000, age) * 240 / (fdmWindow * 1000);
     const y = 92 - Math.min(92, sample.value * 92 / fdmChartMax);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  const fdmPeakPoints = fdmVisibleHistory.map(sample => {
+    const age = Date.now() - sample.at;
+    const x = 240 - Math.min(fdmWindow * 1000, age) * 240 / (fdmWindow * 1000);
+    const y = 92 - Math.min(92, sample.peak * 92 / fdmChartMax);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
 
@@ -820,8 +833,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {fdmLoading ? (
             <span className="sim-connection-fdm sim-connection-fdm-loading" title="模型正在加载，FDM 尚未开始执行">FDM 加载中</span>
           ) : external && fdmRunMs != null && (
-            <button type="button" className="sim-connection-fdm" title="单击查看 FDM 运行时间曲线" onClick={event => { event.stopPropagation(); setFdmPopupOpen(open => !open); }}>
-              FDM {fdmRunMs.toFixed(3)} ms <small>⌁</small>
+            <button type="button" className="sim-connection-fdm" title="FDM 周期耗时包含输入/输出等待；单击查看均值和峰值曲线" onClick={event => { event.stopPropagation(); setFdmPopupOpen(open => !open); }}>
+              FDM {fdmIsWindow ? '均值 ' : ''}{fdmRunMs.toFixed(3)} ms <small>⌁</small>
             </button>
           )}
         </span>
@@ -843,19 +856,20 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       )}
       {showRuntimeStatus && !fdmLoading && fdmPopupOpen && fdmRunMs != null && (
         <div className="sim-fdm-popup">
-          <div className="sim-cpu-popup-head"><b>FDM 单步运行时间</b><span>{fdmRunMs.toFixed(3)} ms</span></div>
+          <div className="sim-cpu-popup-head"><b>FDM 周期（含 I/O）</b><span>{fdmIsWindow ? '均值' : '最近周期'} {fdmRunMs.toFixed(3)} ms</span></div>
           <div className="sim-fdm-window-picker">
             {([10, 20, 30] as const).map(seconds => <button key={seconds} className={fdmWindow === seconds ? 'active' : ''} onClick={() => setFdmWindow(seconds)}>{seconds}s</button>)}
           </div>
           <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
             {[.25, .5, .75].map(value => <line key={value} x1="0" x2="240" y1={92 - value * 92} y2={92 - value * 92} className="sim-cpu-grid" />)}
+            <polyline points={fdmPeakPoints} className="sim-fdm-line" style={{ stroke: '#f59e0b', strokeDasharray: '3 2' }} />
             <polyline points={fdmChartPoints} className="sim-fdm-line" />
           </svg>
-          <div className="sim-fdm-chart-scale"><span>{fdmChartMax.toFixed(3)} ms</span><span>0 ms</span></div>
+          <div className="sim-fdm-chart-scale"><span>实线：均值 · 橙色虚线：峰值</span><span>{fdmChartMax.toFixed(3)} ms</span><span>0 ms</span></div>
           <div className="sim-fdm-stats">
             <span>平均 <b>{fdmAverage.toFixed(3)} ms</b></span>
             <span>最大 <b>{fdmMaximum.toFixed(3)} ms</b></span>
-            <span>最小 <b>{fdmMinimum.toFixed(3)} ms</b></span>
+            <span>最低均值 <b>{fdmMinimum.toFixed(3)} ms</b></span>
           </div>
         </div>
       )}

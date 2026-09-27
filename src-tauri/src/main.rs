@@ -5,6 +5,7 @@ mod xml_parser;
 mod xml_generator;
 mod expression_xml;
 mod sim_client;
+mod telemetry_recorder;
 mod file_index;
 mod aircraft_library;
 mod dataflow;
@@ -12,6 +13,8 @@ mod jsbsim_process;
 mod ftp_sync;
 mod usb_file;
 mod transport;
+mod model_import;
+mod firmware_picker;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -41,6 +44,8 @@ struct ParseXmlRequest {
 struct ReferenceFile {
     name: String,
     xml: String,
+    #[serde(default)]
+    category: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +115,14 @@ where
 // ── Tauri Commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
+async fn select_model_import(window: tauri::WebviewWindow, directory: bool, initial_directory: Option<String>) -> Result<Option<model_import::ModelImport>, String> {
+    #[cfg(target_os = "linux")]
+    { model_import::pick_model(window, directory, initial_directory).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (window, directory, initial_directory); Err("此平台暂不支持原生目录扫描，请使用文件多选导入。".into()) }
+}
+
+#[tauri::command]
 fn generate_xml(data: serde_json::Value) -> Result<serde_json::Value, String> {
     match xml_generator::generate_xml(&data) {
         Ok(xml) => Ok(serde_json::json!({ "xml": xml })),
@@ -129,7 +142,13 @@ fn parse_xml(
 
     let package_files: Vec<serde_json::Value> = files.as_ref().map(|items| items.iter().map(|file| {
         let lower = file.name.to_ascii_lowercase();
-        let category = if lower.ends_with("reset.xml") || lower.ends_with("initfile.xml") {
+        let selected_category = file.category.as_deref().filter(|category| {
+            matches!(*category, "initialization" | "model-config" | "system" | "engine" | "companion")
+        });
+        let category = if let Some(category) = selected_category {
+            category
+        } else if lower.ends_with("reset.xml") || lower.ends_with("initfile.xml")
+            || file.xml.contains("<initialize") {
             "initialization"
         } else if lower.ends_with("-set.xml") {
             "model-config"
@@ -330,7 +349,7 @@ async fn load_aircraft(
                 let candidates = [format!("systems/{stem}.xml"), format!("engine/{stem}.xml"), format!("aircraft/{remote_aircraft_id}/{stem}.xml")];
                 for path in candidates {
                     if let Ok(content) = ftp_sync::download_path(&path) {
-                        refs.push(ReferenceFile { name: path, xml: content });
+                        refs.push(ReferenceFile { name: path, xml: content, category: None });
                         break;
                     }
                 }
@@ -727,6 +746,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "healthAgeMs": health_age_ms,
             "memory": memory,
             "fdmRunMs": fdm_run_ms,
+            "fdmWindow": client.fdm_window_stats(),
             "simulationDt": simulation_dt,
         }));
     }
@@ -814,6 +834,14 @@ async fn ftp_list_systems() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn ftp_list_xml_parent(parent: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let files = ftp_sync::list_xml_parent(&parent)?;
+        Ok(serde_json::json!({ "exists": files.is_some(), "files": files.unwrap_or_default(), "source": ftp_sync::transport_source() }))
+    }).await
+}
+
+#[tauri::command]
 async fn ftp_list_engines() -> Result<serde_json::Value, String> {
     run_blocking(|| {
         let (engines, propellers) = ftp_sync::list_engine_catalog()?;
@@ -868,6 +896,39 @@ async fn ftp_upload_file(path: String, content: String) -> Result<serde_json::Va
     run_blocking(move || {
         ftp_sync::upload_file(&path, &content)?;
         Ok(serde_json::json!({ "path": path, "uploaded": true, "source": ftp_sync::transport_source() }))
+    }).await
+}
+
+#[tauri::command]
+async fn ftp_upload_model_assets(source_directory: String, model: String, expected_files: Vec<String>) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let paths = model_import::scan_model_assets(std::path::Path::new(&source_directory))?;
+        let actual_files = paths.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+        if actual_files != expected_files { return Err("模型资源列表在导入后发生变化，请重新导入模型".into()); }
+        let assets = paths.into_iter().map(|(name, path)| {
+            std::fs::read(&path).map(|bytes| (name, bytes))
+                .map_err(|e| format!("无法读取模型资源 {}: {e}", path.display()))
+        }).collect::<Result<Vec<_>, _>>()?;
+        let mut uploaded = Vec::new();
+        for (name, bytes) in assets {
+            ftp_sync::upload_model_asset(&model, &name, &bytes)?;
+            uploaded.push(format!("/mnt/sdcard/jsbsim/aircraft/{model}/{name}"));
+        }
+        Ok(serde_json::json!({ "files": uploaded, "source": ftp_sync::transport_source() }))
+    }).await
+}
+
+#[tauri::command]
+async fn check_model_assets(source_directory: String, expected_files: Vec<String>) -> Result<(), String> {
+    run_blocking(move || {
+        let paths = model_import::scan_model_assets(std::path::Path::new(&source_directory))?;
+        if paths.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>() != expected_files {
+            return Err("模型资源列表在导入后发生变化，请重新导入模型".into());
+        }
+        for (_, path) in paths {
+            std::fs::read(&path).map_err(|e| format!("无法读取模型资源 {}: {e}", path.display()))?;
+        }
+        Ok(())
     }).await
 }
 
@@ -955,53 +1016,75 @@ const FIRMWARE_MIN_SIZE: usize = 64 * 1024;
 const FIRMWARE_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 #[tauri::command]
+async fn select_firmware_file(window: tauri::WebviewWindow, previous_path: Option<String>) -> Result<Option<firmware_picker::FirmwareSelection>, String> {
+    #[cfg(target_os = "linux")]
+    { firmware_picker::pick_firmware(window, previous_path).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (window, previous_path); Err("此平台暂不支持原生固件选择框".into()) }
+}
+
+#[tauri::command]
+async fn firmware_stage_file(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let selected = firmware_picker::inspect_firmware(std::path::Path::new(&path))?;
+        if selected.size < FIRMWARE_MIN_SIZE as u64 || selected.size > FIRMWARE_MAX_SIZE as u64 {
+            return Err("firmware size must be between 64 KiB and 64 MiB".into());
+        }
+        let bytes = std::fs::read(&selected.path).map_err(|e| format!("无法读取固件文件: {e}"))?;
+        stage_firmware_bytes(&app, selected.name, bytes)
+    }).await
+}
+
+#[tauri::command]
 async fn firmware_stage(
     app: tauri::AppHandle,
     file_name: String,
     bytes: Vec<u8>,
 ) -> Result<serde_json::Value, String> {
-    run_blocking(move || {
-        if !file_name.to_ascii_lowercase().ends_with(".bin") {
-            return Err("firmware file must have a .bin extension".to_owned());
-        }
-        if bytes.len() < FIRMWARE_MIN_SIZE || bytes.len() > FIRMWARE_MAX_SIZE {
-            return Err(format!(
-                "firmware size must be between {} and {} bytes",
-                FIRMWARE_MIN_SIZE, FIRMWARE_MAX_SIZE
-            ));
-        }
+    run_blocking(move || stage_firmware_bytes(&app, file_name, bytes)).await
+}
 
-        let crc32 = usb_file::crc32(&bytes);
-        let _ = app.emit("firmware-progress", serde_json::json!({
-            "stage": "upload",
-            "completed": 0,
-            "total": bytes.len()
-        }));
-        usb_file::write_all_with_progress(FIRMWARE_REMOTE_PATH, &bytes,
-            |completed, total| {
-                let _ = app.emit("firmware-progress", serde_json::json!({
-                    "stage": "upload",
-                    "completed": completed,
-                    "total": total
-                }));
-            })?;
-        let remote = usb_file::stat(FIRMWARE_REMOTE_PATH)?;
-        if remote.directory || remote.size != bytes.len() as u64 {
-            return Err(format!(
-                "staged firmware size mismatch: local={} remote={}",
-                bytes.len(), remote.size
-            ));
-        }
+fn stage_firmware_bytes(app: &tauri::AppHandle, file_name: String, bytes: Vec<u8>) -> Result<serde_json::Value, String> {
+    if !file_name.to_ascii_lowercase().ends_with(".bin") {
+        return Err("firmware file must have a .bin extension".to_owned());
+    }
+    if bytes.len() < FIRMWARE_MIN_SIZE || bytes.len() > FIRMWARE_MAX_SIZE {
+        return Err(format!(
+            "firmware size must be between {} and {} bytes",
+            FIRMWARE_MIN_SIZE, FIRMWARE_MAX_SIZE
+        ));
+    }
 
-        Ok(serde_json::json!({
-            "fileName": file_name,
-            "path": format!("/data/{}", FIRMWARE_REMOTE_PATH),
-            "size": remote.size,
-            "crc32": crc32,
-            "staged": true,
-            "source": "usb-bulk"
-        }))
-    }).await
+    let crc32 = usb_file::crc32(&bytes);
+    let _ = app.emit("firmware-progress", serde_json::json!({
+        "stage": "upload",
+        "completed": 0,
+        "total": bytes.len()
+    }));
+    usb_file::write_all_with_progress(FIRMWARE_REMOTE_PATH, &bytes,
+        |completed, total| {
+            let _ = app.emit("firmware-progress", serde_json::json!({
+                "stage": "upload",
+                "completed": completed,
+                "total": total
+            }));
+        })?;
+    let remote = usb_file::stat(FIRMWARE_REMOTE_PATH)?;
+    if remote.directory || remote.size != bytes.len() as u64 {
+        return Err(format!(
+            "staged firmware size mismatch: local={} remote={}",
+            bytes.len(), remote.size
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "fileName": file_name,
+        "path": format!("/data/{}", FIRMWARE_REMOTE_PATH),
+        "size": remote.size,
+        "crc32": crc32,
+        "staged": true,
+        "source": "usb-bulk"
+    }))
 }
 
 #[tauri::command]
@@ -1058,12 +1141,30 @@ fn simulator_transport_set(mode: String) -> Result<String, String> {
     Ok(transport::set_mode(&mode)?.as_str().to_string())
 }
 
+#[tauri::command]
+async fn telemetry_record_start(app: tauri::AppHandle, directory: Option<String>) -> Result<telemetry_recorder::Status, String> {
+    let directory = match directory.filter(|path| !path.trim().is_empty()) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => app.path().document_dir().map_err(|e| e.to_string())?.join("JSBSim").join("Telemetry"),
+    };
+    run_blocking(move || telemetry_recorder::global().start(&directory)).await
+}
+#[tauri::command]
+async fn telemetry_record_stop() -> Result<telemetry_recorder::Status, String> {
+    run_blocking(|| Ok(telemetry_recorder::global().stop())).await
+}
+#[tauri::command]
+fn telemetry_record_status() -> telemetry_recorder::Status { telemetry_recorder::global().status() }
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 fn main() {
     if std::env::args().any(|argument| argument == "--usb-self-test") {
         match usb_file::ping().and_then(|identity| {
-            let entries = usb_file::list("jsbsim")?;
+            let entries = usb_file::list("romfs/jsbsim/aircraft")?;
+            if !entries.iter().any(|entry| entry.directory && entry.name == "c172x") {
+                return Err("ROMFS aircraft listing does not contain c172x".into());
+            }
             let simulation_state = usb_file::simulation_self_test()?;
             Ok((identity, entries.len(), simulation_state))
         }) {
@@ -1125,6 +1226,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            select_model_import,
             generate_xml,
             parse_xml,
             get_jsbsim_files,
@@ -1141,6 +1243,9 @@ fn main() {
             get_sim_status,
             sim_sync_time,
             parse_dataflow,
+            telemetry_record_start,
+            telemetry_record_stop,
+            telemetry_record_status,
             sim_start,
             sim_stop,
             nsh_execute,
@@ -1154,6 +1259,7 @@ fn main() {
             ftp_download_xml,
             ftp_get_simulator_version,
             ftp_list_systems,
+            ftp_list_xml_parent,
             ftp_list_engines,
             ftp_list_dsdl,
             ftp_list_logs,
@@ -1161,6 +1267,8 @@ fn main() {
             ftp_delete_log,
             ftp_download_dsdl,
             ftp_upload_file,
+            ftp_upload_model_assets,
+            check_model_assets,
             ftp_download_script,
             ftp_upload_model,
             ftp_download_sim_config,
@@ -1172,11 +1280,18 @@ fn main() {
             usb_file_write,
             usb_file_delete,
             usb_file_mkdir,
+            select_firmware_file,
+            firmware_stage_file,
             firmware_stage,
             firmware_apply,
             simulator_transport_get,
             simulator_transport_set,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                telemetry_recorder::global().stop();
+            }
+        });
 }

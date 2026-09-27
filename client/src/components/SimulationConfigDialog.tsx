@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { firmwareApply, firmwareStage, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, SimulatorVersion } from '../utils/tauriApi';
+import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, SimulatorVersion, type FirmwareSelection } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 
 type Tab = '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
@@ -58,7 +58,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   const [simulatorVersion, setSimulatorVersion] = useState<SimulatorVersion | null>(null);
   const [versionStatus, setVersionStatus] = useState(tr('正在读取仿真机版本…', 'Reading simulator version…'));
   const [showVersionManager, setShowVersionManager] = useState(false);
-  const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
+  const [firmwareFile, setFirmwareFile] = useState<File | FirmwareSelection | null>(null);
   const [firmwareUpdating, setFirmwareUpdating] = useState(false);
   const [firmwareStatus, setFirmwareStatus] = useState(tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image'));
   const [firmwareUploadProgress, setFirmwareUploadProgress] = useState(0);
@@ -145,6 +145,20 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     localStorage.setItem('jsbsim-simulator-version-snapshots', JSON.stringify(next));
   };
 
+  const chooseFirmware = async () => {
+    try {
+      const selected = await selectFirmwareFile();
+      if (!selected) return;
+      setFirmwareFile(selected);
+      setFirmwareUploadProgress(0);
+      setFirmwareInstallProgress(0);
+      setFirmwareInstallStage('idle');
+      setFirmwareStatus(`${selected.name} · ${(selected.size / 1024 / 1024).toFixed(2)} MiB`);
+    } catch (error: any) {
+      setFirmwareStatus(`${tr('选择固件失败', 'Failed to select firmware')}: ${error?.message || error}`);
+    }
+  };
+
   const updateFirmware = async () => {
     if (!firmwareFile || firmwareUpdating) return;
     if (!firmwareFile.name.toLowerCase().endsWith('.bin')) {
@@ -166,8 +180,9 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     setFirmwareInstallStage('idle');
     try {
       setFirmwareStatus(tr('正在通过USB上传到 /data/fireware…', 'Uploading to /data/fireware over USB…'));
-      const bytes = new Uint8Array(await firmwareFile.arrayBuffer());
-      const staged = await firmwareStage(firmwareFile.name, bytes);
+      const staged = 'path' in firmwareFile
+        ? await firmwareStageFile(firmwareFile.path)
+        : await firmwareStage(firmwareFile.name, new Uint8Array(await firmwareFile.arrayBuffer()));
       setFirmwareUploadProgress(100);
       setFirmwareInstallStage('write');
       setFirmwareStatus(tr('上传完成，仿真机正在写入并回读校验 eMMC…', 'Upload complete; simulator is writing and verifying eMMC…'));
@@ -252,7 +267,9 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
             <p>{tr('先完整上传固件，再由仿真机写入 eMMC 固件分区并回读校验。升级成功后手动重启生效。', 'The image is staged first, then written to the eMMC firmware partition and read back for verification. Reboot manually after success.')}</p>
             <div className="firmware-upgrade-card">
               <div className="firmware-target"><span>{tr('暂存位置', 'Staging')}</span><b>/data/fireware/nuttx.bin</b><span>{tr('启动位置', 'Boot slot')}</span><b>SIM_FW · slot A</b></div>
-              <label className="firmware-file-picker"><input type="file" accept=".bin,application/octet-stream" disabled={firmwareUpdating} onChange={event => { const file = event.target.files?.[0] || null; setFirmwareFile(file); setFirmwareUploadProgress(0); setFirmwareInstallProgress(0); setFirmwareInstallStage('idle'); setFirmwareStatus(file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MiB` : tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image')); }} /><span>{firmwareFile ? firmwareFile.name : tr('选择 nuttx.bin 固件', 'Choose nuttx.bin firmware')}</span></label>
+              {isTauri && /Linux/i.test(navigator.userAgent)
+                ? <button type="button" className="firmware-file-picker" disabled={firmwareUpdating} onClick={() => void chooseFirmware()} title={firmwareFile && 'path' in firmwareFile ? firmwareFile.path : undefined}><span>{firmwareFile ? firmwareFile.name : tr('选择 nuttx.bin 固件', 'Choose nuttx.bin firmware')}</span></button>
+                : <label className="firmware-file-picker"><input type="file" accept=".bin,application/octet-stream" disabled={firmwareUpdating} onChange={event => { const file = event.target.files?.[0] || null; setFirmwareFile(file); setFirmwareUploadProgress(0); setFirmwareInstallProgress(0); setFirmwareInstallStage('idle'); setFirmwareStatus(file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MiB` : tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image')); }} /><span>{firmwareFile ? firmwareFile.name : tr('选择 nuttx.bin 固件', 'Choose nuttx.bin firmware')}</span></label>}
               <div className="firmware-file-details">{firmwareFile ? `${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB · ${tr('允许 64 KiB–64 MiB', '64 KiB–64 MiB allowed')}` : tr('请选择 AArch64 NuttX .bin 文件', 'Select an AArch64 NuttX .bin file')}</div>
               <div className="firmware-progress-row"><div><span>{tr('上传到数据分区', 'Upload to data partition')}</span><b>{firmwareUploadProgress}%</b></div><div className="firmware-progress-track"><i style={{ width: `${firmwareUploadProgress}%` }} /></div></div>
               <div className="firmware-progress-row"><div><span>{firmwareInstallStage === 'verify' ? tr('eMMC 回读校验', 'eMMC readback verification') : tr('写入 eMMC 固件分区', 'Write eMMC firmware partition')}</span><b>{firmwareInstallProgress}%</b></div><div className={`firmware-progress-track ${firmwareInstallStage}`}><i style={{ width: `${firmwareInstallProgress}%` }} /></div></div>

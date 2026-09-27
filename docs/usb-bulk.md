@@ -25,6 +25,7 @@ commit/abort, delete, and mkdir. The board only accepts relative paths under:
 - `/mnt/sdcard/jsbsim`
 - `/mnt/sdcard/LOG`
 - `/mnt/sdcard/dsdl/px4`
+- `/romfs/jsbsim` (read-only built-in aviation library)
 
 Uploads use a `.usbpart` file and become visible at the target pathname only
 after commit. File transfers use USB only when a protocol PING succeeds;
@@ -59,8 +60,8 @@ After flashing the matching NuttX image, run this from the repository root:
 ./test-usb.sh
 ```
 
-The test sends a protocol PING and lists the board's `jsbsim` directory. A
-working link prints `USB bulk self-test PASS: lmx93-usb-file/1; ...`. The Tauri
+The test sends a protocol PING and lists the built-in ROMFS aircraft directory.
+A working link prints `USB bulk self-test PASS: lmx93-usb-file/1; ...`. The Tauri
 command `usb_file_ping` performs the same initial check. The commands
 `usb_file_list`, `usb_file_read`, `usb_file_write`, `usb_file_delete`, and
 `usb_file_mkdir` expose the private RPC directly. Existing UI model, script,

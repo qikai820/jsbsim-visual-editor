@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { nshExecute } from '../utils/tauriApi';
+import { getSimulatorTransportMode, nshExecute } from '../utils/tauriApi';
 
 const cleanTerminalOutput = (value: string) => value
   .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
   .replace(/\r/g, '');
 
 export default function NshConsoleDialog({ onClose }: { onClose: () => void }) {
+  const transportMode = getSimulatorTransportMode();
+  const transportLabel = transportMode === 'usb' ? '仅 USB' : transportMode === 'network' ? '仅 TCP' : 'USB / TCP 自动选择';
   const [command, setCommand] = useState('');
-  const [output, setOutput] = useState('NuttX NSH console · USB / TCP 自动选择\n');
+  const [output, setOutput] = useState(`NuttX NSH console · ${transportLabel}\n`);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [running, setRunning] = useState(false);
@@ -31,7 +33,11 @@ export default function NshConsoleDialog({ onClose }: { onClose: () => void }) {
       const result = cleanTerminalOutput(await nshExecute(line));
       setOutput(previous => `${previous}${result || '(no output)\n'}`);
     } catch (error: any) {
-      setOutput(previous => `${previous}error: ${error?.message || error}\n`);
+      const message = String(error?.message || error);
+      const hint = transportMode === 'usb' && message.includes('USB file response timed out')
+        ? '提示：当前设为「仅 USB」。可在本地配置中选择「网络」或「自动」后重试。\n'
+        : '';
+      setOutput(previous => `${previous}error: ${message}\n${hint}`);
     } finally {
       setRunning(false);
       inputRef.current?.focus();
@@ -70,7 +76,7 @@ export default function NshConsoleDialog({ onClose }: { onClose: () => void }) {
 
   return <div className="nsh-console-overlay" role="dialog" aria-modal="true" aria-label="NuttX NSH 控制台" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="nsh-console" style={position ? { position: 'fixed', left: position.left, top: position.top, margin: 0 } : undefined} onMouseDown={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onPointerMove={event => event.stopPropagation()}>
-      <header onPointerDown={beginDrag} onPointerMove={drag} onPointerUp={endDrag} onPointerCancel={endDrag}><div><b>⌨ NuttX NSH 控制台</b><small>USB / TCP 自动选择 · 回车执行 · ↑↓ 历史命令 · 标题栏拖动 · 右下角缩放</small></div><div className="nsh-console-actions"><button onClick={() => setOutput('')}>清屏</button><button onClick={onClose}>×</button></div></header>
+      <header onPointerDown={beginDrag} onPointerMove={drag} onPointerUp={endDrag} onPointerCancel={endDrag}><div><b>⌨ NuttX NSH 控制台</b><small>{transportLabel} · 回车执行 · ↑↓ 历史命令 · 标题栏拖动 · 右下角缩放</small></div><div className="nsh-console-actions"><button onClick={() => setOutput('')}>清屏</button><button onClick={onClose}>×</button></div></header>
       <div className="nsh-terminal" ref={terminalRef} onMouseDown={event => { if (event.target === event.currentTarget) inputRef.current?.focus(); }}>
         <pre>{output}</pre>
         <div className="nsh-prompt"><span>nsh&gt;</span><input ref={inputRef} value={command} disabled={running} spellCheck={false} onChange={event => { setCommand(event.target.value); setHistoryIndex(-1); }} onKeyDown={event => {

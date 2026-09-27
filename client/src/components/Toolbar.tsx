@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpListSystems, ftpListEngines, isRemoteUploadEnabled } from '../utils/tauriApi';
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
+import TelemetryRecorder from './TelemetryRecorder';
 import SimulationConfigDialog from './SimulationConfigDialog';
 import LocalSettingsDialog from './LocalSettingsDialog';
 import NshConsoleDialog from './NshConsoleDialog';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
-import { isTauri } from '../utils/tauriApi';
+import { isTauri, selectModelImport, getSimulatorTransportMode } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
 
@@ -28,6 +29,21 @@ interface ToolbarProps {
   onPaste?: () => void;
   modifiedXmlFiles?: string[];
   onSaveComplete?: (savedFiles?: string[]) => void;
+}
+
+type ImportFileCategory = 'initialization' | 'model-config' | 'system' | 'engine' | 'companion';
+type ImportFile = { name: string; xml: string; category: ImportFileCategory };
+
+interface PendingModelImport {
+  mainFileName: string;
+  mainXml: string;
+  referenceFiles: ImportFile[];
+  assets: Array<{ name: string; size: number }>;
+  fromDirectory: boolean;
+  sourceDirectory?: string;
+  originalModelName: string;
+  modelName: string;
+  renameFdmConfig: boolean;
 }
 
 function projectFingerprint(project: { aircraft: any; nodes: any[]; edges: any[]; subFiles?: any[]; xmlFiles?: any[] }): string {
@@ -88,6 +104,56 @@ function setXmlAttribute(tag: string, name: string, value: unknown): string {
     return tag.replace(expression, (_match, prefix) => `${prefix}"${escaped}"`);
   }
   return tag.replace(/(\s*\/?>)$/, (_match, ending) => ` ${name}="${escaped}"${ending}`);
+}
+
+function fdmConfigName(xml: string): string {
+  const tag = xml.match(/<fdm_config\b[^>]*>/i)?.[0] || '';
+  return getXmlAttribute(tag, 'name').trim();
+}
+
+function renameFdmConfig(xml: string, modelName: string): string {
+  let changed = false;
+  const renamed = xml.replace(/<fdm_config\b[^>]*>/i, tag => {
+    changed = true;
+    return setXmlAttribute(tag, 'name', modelName);
+  });
+  if (!changed) throw new Error('未找到 <fdm_config> 主模型标签。');
+  return renamed;
+}
+
+function xmlRoot(xml: string, name: string): string {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error(`${name} 不是有效的 XML，请检查文件内容。`);
+  return doc.documentElement.localName.toLowerCase();
+}
+
+function importedFileCategory(name: string, xml: string): ImportFileCategory {
+  const lower = name.toLowerCase();
+  const root = xmlRoot(xml, name);
+  // Check the actual document root, including comments/DOCTYPE before it.
+  // A misleading filename must not turn a system/model into initialization.
+  if (root === 'initialize') return 'initialization';
+  if (root === 'propertylist' || root === 'fdm_config' || lower.endsWith('-set.xml')) return 'model-config';
+  if (['system', 'flight_control'].includes(root)) return 'system';
+  if (['piston_engine', 'turbine_engine', 'turboprop_engine', 'rocket_engine', 'electric_engine', 'propeller', 'thruster'].includes(root)) return 'engine';
+  if (lower.includes('/systems/') || lower.startsWith('systems/')) return 'system';
+  if (lower.includes('/engine/') || lower.startsWith('engine/')) return 'engine';
+  return 'companion';
+}
+
+function suggestedImportModelName(mainFileName: string): string {
+  const base = mainFileName.replace(/\\/g, '/').split('/').pop() || 'aircraft';
+  return base.replace(/\.xml$/i, '').replace(/[^a-zA-Z0-9_.-]/g, '_') || 'aircraft';
+}
+
+function importCategoryLabel(category: ImportFileCategory | 'main', isZh: boolean): string {
+  const zh: Record<ImportFileCategory | 'main', string> = {
+    main: '主模型', initialization: '初始化/重置', 'model-config': '模型配置', system: '系统', engine: '发动机/螺旋桨', companion: '关联文件',
+  };
+  const en: Record<ImportFileCategory | 'main', string> = {
+    main: 'Main model', initialization: 'Initialization', 'model-config': 'Model config', system: 'System', engine: 'Engine / propeller', companion: 'Companion',
+  };
+  return (isZh ? zh : en)[category];
 }
 
 /**
@@ -207,10 +273,11 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const [showXml, setShowXml] = useState(false);
   const [showXmlSourceBrowser, setShowXmlSourceBrowser] = useState(false);
   const [uploadReview, setUploadReview] = useState<{ documents: XmlSourceDocument[]; resolve: () => void } | null>(null);
+  const [pendingImport, setPendingImport] = useState<PendingModelImport | null>(null);
   const [xmlContent, setXmlContent] = useState('');
-  const [importedSubFiles, setImportedSubFiles] = useState<Array<{ name: string; referenced: boolean; category?: string }>>(() => {
-    try { return JSON.parse(localStorage.getItem('jsbsim-imported-subfiles') || '[]'); } catch { return []; }
-  });
+  // An import result belongs to the current import action. Restoring the old
+  // modal on startup makes stale references look like a new import result.
+  const [importedSubFiles, setImportedSubFiles] = useState<Array<{ name: string; referenced: boolean; category?: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -218,6 +285,8 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const [showEditMenu, setShowEditMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showTelemetryRecorder, setShowTelemetryRecorder] = useState(false);
+  const [telemetryRecording, setTelemetryRecording] = useState(false);
   const [showNshConsole, setShowNshConsole] = useState(false);
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
@@ -253,13 +322,16 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     if ((event.target as HTMLElement).closest('button, input, select, [role="menu"]')) return;
     void getCurrentWindow().startDragging();
   };
-  // The import summary describes one import action. Anything that replaces the
-  // model in the editor invalidates it, and it is restored from localStorage on
-  // mount, so it has to be dropped explicitly or it keeps resurfacing.
+  // The import summary describes one import action, not persistent project data.
   const clearImportedSubFiles = () => {
     setImportedSubFiles([]);
-    localStorage.removeItem('jsbsim-imported-subfiles');
   };
+
+  useEffect(() => {
+    // Remove summaries persisted by older versions. They describe a previous
+    // import and must never appear as a result of launching the editor.
+    localStorage.removeItem('jsbsim-imported-subfiles');
+  }, []);
 
   const rememberProject = (filename: string, path: string) => {
     setRecentProjects(current => {
@@ -301,15 +373,106 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     setLoading(false);
   };
 
+  const commitModelImport = async (pending: PendingModelImport) => {
+    const modelName = pending.modelName.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(modelName)) {
+      alert('模型目录名只能使用字母、数字、点、下划线或连字符，并且必须以字母或数字开头。');
+      return;
+    }
+    setLoading(true);
+    try {
+      const mainXml = pending.renameFdmConfig
+        ? renameFdmConfig(pending.mainXml, modelName)
+        : pending.mainXml;
+      const refFiles = pending.referenceFiles;
+      const allXml = [mainXml, ...refFiles.map(file => file.xml)].join('\n').toLowerCase();
+      const data = await parseXml(mainXml, refFiles);
+      loadProject(data);
+      const selectedFiles = refFiles.map(file => file.name);
+      const parsedFiles = (data.xmlFiles || []).filter((file: any) => file.category !== 'main').map((file: any) => String(file.path || ''));
+      const packageCategories = new Map<string, string>((data.packageFiles || []).map((file: any) => [String(file.path || ''), String(file.category || 'companion')]));
+      const packagePaths = Array.from(packageCategories.keys()).filter(Boolean);
+      const importedFiles = Array.from(new Set([...selectedFiles, ...parsedFiles, ...packagePaths].filter(Boolean))).map(name => {
+        const normalized = name.replace(/\\/g, '/').toLowerCase();
+        const basename = normalized.split('/').pop() || normalized;
+        const selected = refFiles.find(file => file.name === name);
+        return {
+          name,
+          referenced: parsedFiles.includes(name) || allXml.includes(normalized) || allXml.includes(basename),
+          category: packageCategories.get(name) || selected?.category || 'companion',
+        };
+      }).sort((a, b) => Number(b.referenced) - Number(a.referenced) || a.name.localeCompare(b.name));
+      setImportedSubFiles(importedFiles);
+
+      // Store the edited source as the canonical import snapshot. This keeps
+      // the model identity used by the UI, the upload directory and fdm_config
+      // aligned instead of recreating the former dflyer/quadrotor_x mismatch.
+      localStorage.setItem('jsbsim-project', JSON.stringify(data));
+      localStorage.setItem('jsbsim-raw-xml', mainXml);
+      localStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
+      localStorage.setItem('jsbsim-import-assets', JSON.stringify(pending.assets));
+      if (pending.sourceDirectory?.startsWith('/')) localStorage.setItem('jsbsim-import-directory', pending.sourceDirectory);
+      else localStorage.removeItem('jsbsim-import-directory');
+      // The directory chosen in the import dialog is the remote pathname.
+      // The XML's fdm_config name can intentionally remain different.
+      localStorage.setItem('jsbsim-remote-model', modelName);
+      localStorage.removeItem(remoteBaselineKey(modelName));
+      if (refFiles.length > 0) {
+        console.log(`[Import] Associated ${refFiles.length} XML file(s): ${refFiles.map(file => file.name).join(', ')}`);
+      }
+      setPendingImport(null);
+    } catch (err: any) {
+      alert('导入失败: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const prepareModelImport = (files: Array<{ name: string; xml: string }>, fromDirectory: boolean, sourceDirectory?: string, selectedMain?: string | null, assets: Array<{ name: string; size: number }> = []) => {
+    const mainFiles = files.filter(file => xmlRoot(file.xml, file.name) === 'fdm_config');
+    const folderName = sourceDirectory?.replace(/\\/g, '/').split('/').pop();
+    const mainFile = selectedMain
+      ? mainFiles.find(file => file.name === selectedMain)
+      : mainFiles.find(file => file.name === `${folderName}.xml`) || (mainFiles.length === 1 ? mainFiles[0] : undefined);
+    if (!mainFile) throw new Error(mainFiles.length > 1
+      ? '目录包含多个主模型，请使用「导入 XML」指定其中一个主模型文件。'
+      : '所选主模型必须以 <fdm_config> 为根标签。');
+    const originalModelName = fdmConfigName(mainFile.xml);
+    const suggestedName = suggestedImportModelName(mainFile.name);
+    setPendingImport({
+      mainFileName: mainFile.name, mainXml: mainFile.xml,
+      referenceFiles: files.filter(file => file !== mainFile).map(file => ({ ...file, category: importedFileCategory(file.name, file.xml) })), assets,
+      fromDirectory, sourceDirectory, originalModelName, modelName: suggestedName,
+      renameFdmConfig: Boolean(originalModelName && originalModelName !== suggestedName),
+    });
+  };
+
+  const beginModelImport = async (directory: boolean) => {
+    setShowFileMenu(false);
+    if (!isTauri || !/Linux/i.test(navigator.userAgent)) {
+      (directory ? directoryInputRef : fileInputRef).current?.click();
+      return;
+    }
+    setLoading(true);
+    clearImportedSubFiles();
+    try {
+      const scanned = await selectModelImport(directory);
+      if (scanned) prepareModelImport(scanned.files, true, scanned.directory, scanned.mainFile, scanned.assets);
+    } catch (err: any) {
+      alert('扫描模型目录失败: ' + (err?.message || String(err)));
+    } finally { setLoading(false); }
+  };
+
   const handleImportXml = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
-    setLoading(true);
+    clearImportedSubFiles();
     try {
       // Read all files
       const allFiles: { name: string; xml: string }[] = [];
       for (let i = 0; i < fileList.length; i++) {
         const f = fileList[i];
+        if (!/\.xml$/i.test(f.name)) continue;
         const text = await f.text();
         // Keep the relative path when a directory is selected.  JSBSim XML
         // references are relative to the data root, so flattening filenames
@@ -323,74 +486,13 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       // only the common browser-added directory prefix.
       const normalizedFiles = allFiles.map(file => ({ ...file, name: file.name.replace(/\\/g, '/').replace(/^\.\//, '') }));
       const firstSegments = normalizedFiles.map(file => file.name.split('/')[0]);
-      const commonRoot = firstSegments.length > 1 && firstSegments.every(segment => segment === firstSegments[0]) ? `${firstSegments[0]}/` : '';
+      const commonRoot = normalizedFiles.length > 0 && normalizedFiles.every(file => file.name.includes('/')) && firstSegments.every(segment => segment === firstSegments[0]) ? `${firstSegments[0]}/` : '';
       if (commonRoot) normalizedFiles.forEach(file => { file.name = file.name.slice(commonRoot.length); });
 
-      // Directory enumeration order is not a stable way to identify the
-      // aircraft configuration. Prefer the fdm_config document as main XML.
-      const mainIndex = normalizedFiles.findIndex(file => /<\s*fdm_config\b/i.test(file.xml));
-      const orderedFiles = mainIndex > 0
-        ? [normalizedFiles[mainIndex], ...normalizedFiles.filter((_, index) => index !== mainIndex)]
-        : normalizedFiles;
-
-      // First file is the main XML, rest are referenced files.  Selecting a
-      // directory is supported as well; the complete relative tree is passed
-      // to the parser and retained in the project.
-      const mainXml = orderedFiles[0].xml;
-      const refFiles = orderedFiles.slice(1);
-      const allXml = orderedFiles.map(file => file.xml).join('\n').toLowerCase();
-      const classifyPackageFile = (name: string) => {
-        const lower = name.toLowerCase();
-        if (lower.endsWith('reset.xml') || lower.endsWith('initfile.xml')) return 'initialization';
-        if (lower.endsWith('-set.xml')) return 'model-config';
-        if (lower.includes('/systems/') || lower.startsWith('systems/')) return 'system';
-        if (lower.includes('/engine/') || lower.startsWith('engine/')) return 'engine';
-        return 'companion';
-      };
-      const provisionalFiles = refFiles.map(file => ({ name: file.name, referenced: false, category: classifyPackageFile(file.name) }));
-      setImportedSubFiles(provisionalFiles);
-      localStorage.setItem('jsbsim-imported-subfiles', JSON.stringify(provisionalFiles));
-      const data = await parseXml(mainXml, refFiles);
-      loadProject(data);
-      const selectedFiles = refFiles.map(file => file.name);
-      const parsedFiles = (data.xmlFiles || []).filter((file: any) => file.category !== 'main').map((file: any) => String(file.path || ''));
-      const packageCategories = new Map<string, string>((data.packageFiles || []).map((file: any) => [String(file.path || ''), String(file.category || 'companion')]));
-      const packagePaths = Array.from(packageCategories.keys()).filter(Boolean);
-      const importedFiles = Array.from(new Set([...selectedFiles, ...parsedFiles, ...packagePaths].filter(Boolean))).map(name => {
-        const normalized = name.replace(/\\/g, '/').toLowerCase();
-        const basename = normalized.split('/').pop() || normalized;
-        return { name, referenced: parsedFiles.includes(name) || allXml.includes(normalized) || allXml.includes(basename), category: packageCategories.get(name) };
-      }).sort((a, b) => Number(b.referenced) - Number(a.referenced) || a.name.localeCompare(b.name));
-      setImportedSubFiles(importedFiles);
-      localStorage.setItem('jsbsim-imported-subfiles', JSON.stringify(importedFiles));
-
-      // Persist to localStorage so data survives refresh
-      try {
-        localStorage.setItem('jsbsim-project', JSON.stringify(data));
-        localStorage.setItem('jsbsim-raw-xml', mainXml);
-          localStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
-        // An imported model defines its own identity. Without rebinding, a
-        // previously loaded simulator model would keep winning at
-        // handleSaveToSimulator() and the import would be uploaded into the
-        // wrong aircraft directory.
-        const importedModel = String(data?.aircraft?.name || '').trim();
-        if (importedModel) {
-          localStorage.setItem('jsbsim-remote-model', importedModel);
-          // Whatever the simulator currently holds was never verified against
-          // this import, so drop the baseline and force a full push.
-          localStorage.removeItem(remoteBaselineKey(importedModel));
-        }
-      } catch (e) {
-        console.warn('[Import] Failed to save to localStorage:', e);
-      }
-
-      if (refFiles.length > 0) {
-        console.log(`[Import] Merged ${refFiles.length} referenced file(s): ${refFiles.map(f => f.name).join(', ')}`);
-      }
+      prepareModelImport(normalizedFiles, e.target === directoryInputRef.current, commonRoot.replace(/\/$/, '') || undefined);
     } catch (err: any) {
       alert('导入失败: ' + err.message);
     }
-    setLoading(false);
     // Reset the input that actually fired. A <input type="file"> only raises
     // `change` when its value differs from the previous selection, so leaving
     // the directory picker populated makes re-importing the same folder a
@@ -413,6 +515,8 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
         files: {
           main: { name: `${model}.xml`, xml: localStorage.getItem('jsbsim-raw-xml') || '' },
           references: JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]'),
+          assets: JSON.parse(localStorage.getItem('jsbsim-import-assets') || '[]'),
+          assetSource: localStorage.getItem('jsbsim-import-directory') || '',
           subFiles,
           xmlFiles,
         },
@@ -438,22 +542,49 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
 
   const handleSaveToSimulator = async () => {
     const model = localStorage.getItem('jsbsim-remote-model') || aircraft.name;
-    if (!model) {
-      alert('无法确定仿真机模型名称，请先从仿真机加载模型。');
+    if (!model || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(model)) {
+      alert('无法确定有效的仿真机模型名称，请先导入或从仿真机加载模型。');
       return;
     }
     const target = `/mnt/sdcard/jsbsim/aircraft/${model}/${model}.xml`;
     const stateBeforeSave = useFlowStore.getState();
-    // A model without a remote baseline has never been exchanged with the
-    // simulator, so there is nothing to diff against: the whole model counts
-    // as pending instead of just the local edits. This is what makes
-    // "import a folder -> save to simulator" work at all.
+    // Without a baseline, upload the main file and the files explicitly
+    // selected at import. Indexed global references are not owned by this
+    // model and must not be regenerated or overwritten automatically.
     const hasBaseline = !!localStorage.getItem(remoteBaselineKey(model));
-    const dirtyRecords = hasBaseline
-      ? (stateBeforeSave.xmlFiles || []).filter(file => file.dirty)
-      : (stateBeforeSave.xmlFiles || []).filter(file => file.category !== 'main');
+    const dirtyRecords = (stateBeforeSave.xmlFiles || []).filter(file => file.dirty);
+    let packageFiles: Array<{ path: string; xml: string }> = [];
+    let assetFiles: Array<{ name: string; size: number }> = [];
+    let assetSource = '';
+    if (!hasBaseline) {
+      try {
+        const references: ImportFile[] = JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]');
+        if (!Array.isArray(references)) throw new Error('关联文件清单格式无效');
+        const seen = new Set<string>();
+        packageFiles = references.map(file => {
+          const name = String(file.name || '').replace(/\\/g, '/');
+          const parts = name.split('/');
+          if (parts.length > 4 || !parts.every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
+              !name.toLowerCase().endsWith('.xml') || !String(file.xml || '').trim() || name.toLowerCase() === `${model.toLowerCase()}.xml` || seen.has(name.toLowerCase())) {
+            throw new Error(`关联 XML 的路径或内容无效：${name}`);
+          }
+          seen.add(name.toLowerCase());
+          return { path: `aircraft/${model}/${name}`, xml: file.xml };
+        });
+        assetFiles = JSON.parse(localStorage.getItem('jsbsim-import-assets') || '[]');
+        assetSource = localStorage.getItem('jsbsim-import-directory') || '';
+        if (!Array.isArray(assetFiles) || (assetFiles.length && !assetSource.startsWith('/')) ||
+            assetFiles.some(file => !file.name || !file.name.split('/').every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
+              !Number.isSafeInteger(file.size) || file.size < 0)) {
+          throw new Error('模型资源清单或源目录无效，请重新导入');
+        }
+      } catch (error) {
+        alert(`无法准备关联 XML，未开始上传：${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+    }
     const trackedFiles = dirtyRecords.map(file => file.path);
-    const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles]));
+    const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path)]));
     const changes = changesList.length
       ? changesList.map(file => `  • ${file}`).join('\n')
       : hasBaseline ? '  • 当前未记录到 XML 修改' : `  • 全量上传：${model} 尚无同步基线`;
@@ -466,19 +597,12 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       if (path.includes('/')) return path;
       return file.category === 'system' ? `systems/${path}` : `engine/${path}`;
     }));
-    if (!hasBaseline) {
-      // The upload loop below only writes paths present in this set, so a full
-      // push has to seed it from the component nodes as well.
-      for (const node of stateBeforeSave.nodes || []) {
-        if (!['engine', 'propeller', 'system', 'flight_control'].includes(node.data?.componentType)) continue;
-        const path = nodeOwnedPath(node);
-        if (path) externalPaths.add(path);
-      }
-    }
     for (const file of modifiedXmlFiles) {
       if (file.startsWith('systems/') || file.startsWith('engine/')) externalPaths.add(file);
     }
-    const writes = [...(mainDirty ? [target] : []), ...Array.from(externalPaths).map(path => `/mnt/sdcard/jsbsim/${path}`)];
+    const writes = [...(mainDirty ? [target] : []), ...Array.from(externalPaths).map(path => `/mnt/sdcard/jsbsim/${path}`),
+      ...packageFiles.map(file => `/mnt/sdcard/jsbsim/${file.path}`),
+      ...assetFiles.map(file => `/mnt/sdcard/jsbsim/aircraft/${model}/${file.name}`)];
     if (!writes.length) {
       alert('当前没有需要写入仿真机的 XML 修改。');
       return;
@@ -488,22 +612,30 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       return;
     }
     try {
-      const [systems, engines] = await Promise.all([ftpListSystems(), ftpListEngines()]);
-      const existing = new Set([
-        ...systems.map(file => `systems/${String(file).replace(/^systems\//, '').replace(/^\/+/, '')}`),
-        ...engines.map(file => `engine/${String(file).replace(/^engine\//, '').replace(/^\/+/, '')}`),
-      ].map(path => path.toLowerCase()));
-      const conflicts = Array.from(externalPaths).filter(path => existing.has(path.replace(/^\/+/, '').toLowerCase()));
-      if (conflicts.length && !confirm(`检测到同名子文件：\n\n${conflicts.map(path => `  • /mnt/sdcard/jsbsim/${path}`).join('\n')}\n\n继续将覆盖这些文件（旧文件会保留为 .bak）。是否确认覆盖？`)) return;
+      if (externalPaths.size) {
+        const [systems, engines] = await Promise.all([ftpListSystems(), ftpListEngines()]);
+        const existing = new Set([
+          ...systems.map(file => `systems/${String(file).replace(/^systems\//, '').replace(/^\/+/, '')}`),
+          ...engines.map(file => `engine/${String(file).replace(/^engine\//, '').replace(/^\/+/, '')}`),
+        ].map(path => path.toLowerCase()));
+        const conflicts = Array.from(externalPaths).filter(path => existing.has(path.replace(/^\/+/, '').toLowerCase()));
+        if (conflicts.length && !confirm(`检测到同名子文件：\n\n${conflicts.map(path => `  • /mnt/sdcard/jsbsim/${path}`).join('\n')}\n\n继续将覆盖这些文件。是否确认覆盖？`)) return;
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error || '未知错误');
       // Do not continue when the preflight listing failed.  Continuing here
       // made a network outage look like a harmless name conflict and could
       // leave the upload half-completed on NuttX.
-      alert(`无法读取仿真机现有子文件列表，已取消上传。\n\n请确认仿真机已连接且 FTP 服务正常。\n${detail}`);
+      const mode = getSimulatorTransportMode();
+      const hint = mode === 'usb'
+        ? '当前为 USB 模式：请检查 USB 文件服务是否响应，并确认没有其他程序占用设备；无需启动 FTP。'
+        : mode === 'network'
+          ? '当前为网络模式：请确认网络连接和 FTP 服务正常。'
+          : '当前为自动模式：请检查 USB 文件服务或网络 FTP 连接。';
+      alert(`无法读取仿真机现有子文件列表，已取消上传，未写入模型。\n\n${hint}\n${detail}`);
       return;
     }
-    if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n远端旧文件会保留为 .bak。确认继续吗？`)) return;
+    if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n已有文件将逐个比较并在覆盖前确认。确认继续吗？`)) return;
     setLoading(true);
     try {
       const current = useFlowStore.getState();
@@ -515,13 +647,65 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
           throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
         }
         xml = patchMainIoAttributes(mainSource, current.nodes);
-        await ftpUploadModel(model, xml);
       }
       const uploadedChildren = new Map<string, string>();
       for (const path of externalPaths) {
         const content = await buildChildUploadXml(current, path);
-        await ftpUploadFile(path, content);
         uploadedChildren.set(path, content);
+      }
+      if (assetFiles.length) await checkModelAssets(assetSource, assetFiles.map(file => file.name));
+      // Every local source must be ready before the first remote write.
+      const written: string[] = [];
+      const verified: string[] = [];
+      if (mainDirty) {
+        const result = await ftpUploadModel(model, xml);
+        const remote = await ftpDownloadModel(model);
+        if (comparableXml(remote.xml) !== comparableXml(xml)) throw new Error(`主模型回读不一致：${target}`);
+        verified.push(target);
+        if (result.uploaded) written.push(target);
+      }
+      for (const [path, content] of uploadedChildren) {
+        const result = await ftpUploadFile(path, content);
+        const remote = await ftpDownloadXml(path);
+        if (comparableXml(remote.content) !== comparableXml(content)) throw new Error(`子文件回读不一致：/mnt/sdcard/jsbsim/${path}`);
+        const fullPath = `/mnt/sdcard/jsbsim/${path}`;
+        verified.push(fullPath);
+        if (result.uploaded) written.push(fullPath);
+      }
+      for (const file of packageFiles) {
+        const result = await ftpUploadFile(file.path, file.xml);
+        const remote = await ftpDownloadXml(file.path);
+        if (comparableXml(remote.content) !== comparableXml(file.xml)) throw new Error(`关联文件回读不一致：/mnt/sdcard/jsbsim/${file.path}`);
+        const fullPath = `/mnt/sdcard/jsbsim/${file.path}`;
+        verified.push(fullPath);
+        if (result.uploaded) written.push(fullPath);
+      }
+      const xmlWritten = written.length;
+      if (assetFiles.length) {
+        const result = await ftpUploadModelAssets(assetSource, model, assetFiles.map(file => file.name));
+        const expected = assetFiles.map(file => `/mnt/sdcard/jsbsim/aircraft/${model}/${file.name}`);
+        if (JSON.stringify(result.files) !== JSON.stringify(expected)) throw new Error('模型资源上传结果与源目录不一致');
+        verified.push(...result.files);
+        written.push(...result.files);
+      }
+      // A pathname read can succeed while FAT directory enumeration is already
+      // damaged. Check the same directory view that NSH's ls command uses.
+      const directoryEntries = new Map<string, string[]>();
+      for (const fullPath of verified) {
+        const relative = fullPath.replace(/^\/mnt\/sdcard\/jsbsim\//, '');
+        const separator = relative.lastIndexOf('/');
+        if (separator < 0) throw new Error(`无法验证仿真机目录：${fullPath}`);
+        const parent = relative.slice(0, separator);
+        const name = relative.slice(separator + 1);
+        if (!directoryEntries.has(parent)) {
+          const listing = await listRemoteXmlParent(parent);
+          if (!listing.exists) throw new Error(`仿真机目录不存在或目录项异常：/mnt/sdcard/jsbsim/${parent}`);
+          directoryEntries.set(parent, listing.files);
+        }
+        const names = directoryEntries.get(parent)!;
+        if (!names.includes(name)) {
+          throw new Error(`文件回读成功，但目录列表中找不到 ${fullPath}；当前目录项：${names.join(', ') || '空'}。请停止写入 SD 并检查文件系统。`);
+        }
       }
       useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
         file.category === 'main'
@@ -534,8 +718,11 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       localStorage.setItem('jsbsim-remote-model', model);
       localStorage.setItem(remoteBaselineKey(model), projectFingerprint({ aircraft: current.aircraft, nodes: current.nodes, edges: current.edges, subFiles: current.subFiles }));
       onSaveComplete?.(changesList);
-      onLog?.(`[${new Date().toLocaleTimeString()}] 已保存 XML 到仿真机: ${writes.join(', ')}`);
-      alert(`已保存到仿真机：\n${writes.join('\n')}`);
+      const status = written.length > 0
+        ? `已写入 ${xmlWritten} 个 XML、${written.length - xmlWritten} 个资源文件并回读确认`
+        : '仿真机上的文件与本地一致，本次未写入';
+      onLog?.(`[${new Date().toLocaleTimeString()}] ${status}: ${verified.join(', ')}`);
+      alert(`${status}：\n${verified.join('\n')}`);
     } catch (err: any) {
       alert(`保存到仿真机失败：${err?.message || err}`);
     } finally {
@@ -562,6 +749,8 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     localStorage.removeItem('jsbsim-project');
     localStorage.removeItem('jsbsim-raw-xml');
     localStorage.removeItem('jsbsim-reference-files');
+    localStorage.removeItem('jsbsim-import-assets');
+    localStorage.removeItem('jsbsim-import-directory');
     Object.keys(localStorage)
       .filter(key => key.startsWith('jsbsim-remote-baseline:'))
       .forEach(key => localStorage.removeItem(key));
@@ -584,6 +773,9 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       clearImportedSubFiles();
       if (data.files?.main?.xml) localStorage.setItem('jsbsim-raw-xml', data.files.main.xml);
       if (data.files?.references) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.files.references));
+      localStorage.setItem('jsbsim-import-assets', JSON.stringify(data.files?.assets || []));
+      if (data.files?.assetSource) localStorage.setItem('jsbsim-import-directory', data.files.assetSource);
+      else localStorage.removeItem('jsbsim-import-directory');
       if (data.model) localStorage.setItem('jsbsim-remote-model', data.model);
       if (data.userSettings) {
         localStorage.setItem('jsbsim-pinned-properties', JSON.stringify(data.userSettings.pinnedProperties || []));
@@ -847,8 +1039,8 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
                 <div className="file-menu-separator" />
                 <button role="menuitem" disabled={!hasLoadedModel} onClick={() => { handleCloseModel(); setShowFileMenu(false); }} title={isZh ? '关闭当前已加载的模型，回到空白工程（保留仿真机模型绑定）' : 'Close the loaded model (keeps the simulator binding)'}>✖️ {isZh ? '关闭模型' : 'Close Model'}</button>
                 <div className="file-menu-separator" />
-                <button role="menuitem" onClick={() => { fileInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入 XML 文件（可多选依赖文件）' : 'Import XML files'}>📥 {isZh ? '导入 XML' : 'Import XML'}</button>
-                <button role="menuitem" onClick={() => { directoryInputRef.current?.click(); setShowFileMenu(false); }} title={isZh ? '导入整个 XML 目录，自动保留目录结构' : 'Import an XML directory'}>📂 {isZh ? '导入 XML 目录' : 'Import XML folder'}</button>
+                <button role="menuitem" onClick={() => void beginModelImport(false)} title={isZh ? '选择主模型，自动扫描同目录及子目录 XML' : 'Select main XML and scan sibling XML files'}>📥 {isZh ? '导入 XML（自动关联同目录）' : 'Import XML with siblings'}</button>
+                <button role="menuitem" onClick={() => void beginModelImport(true)} title={isZh ? '扫描整个模型目录，自动保留目录结构' : 'Scan an XML directory'}>📂 {isZh ? '导入 XML 目录' : 'Import XML folder'}</button>
                 <button role="menuitem" onClick={() => { void handleExportXml(); setShowFileMenu(false); }}>📤 {isZh ? '导出 XML' : 'Export XML'}</button>
                 <button role="menuitem" disabled={!xmlSourceDocuments.length} onClick={() => { setShowXmlSourceBrowser(true); setShowFileMenu(false); }}>🧾 {isZh ? 'XML 源码浏览器' : 'XML Source Browser'}</button>
               </div>
@@ -881,10 +1073,12 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
             </div>}
           </div>
           <div className="file-menu-anchor" ref={toolsMenuRef}>
+            <TelemetryRecorder open={showTelemetryRecorder} onClose={() => setShowTelemetryRecorder(false)} onRecordingChange={setTelemetryRecording} />
             <button className={`file-menu-trigger ${showToolsMenu ? 'active' : ''}`} onClick={() => setShowToolsMenu(value => !value)} aria-haspopup="menu" aria-expanded={showToolsMenu}>
-              🧰 {isZh ? '工具' : 'Tools'} <span className="file-menu-caret">▾</span>
+              {telemetryRecording ? '🔴' : '🧰'} {isZh ? '工具' : 'Tools'} <span className="file-menu-caret">▾</span>
             </button>
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
+              <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
               <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowToolsMenu(false); }}>📊 {isZh ? '日志中心' : 'Log Center'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
             </div>}
@@ -939,12 +1133,86 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
         </div>
       )}
 
+      {pendingImport && (
+        <div className="model-import-overlay" role="dialog" aria-modal="true" aria-labelledby="model-import-title">
+          <div className="model-import-dialog">
+            <header>
+              <div>
+                <strong id="model-import-title">{isZh ? '导入模型确认' : 'Confirm model import'}</strong>
+                <small>{isZh ? `主模型：${pendingImport.mainFileName}` : `Main model: ${pendingImport.mainFileName}`}</small>
+              </div>
+              <button aria-label={isZh ? '取消导入' : 'Cancel import'} onClick={() => setPendingImport(null)}>×</button>
+            </header>
+            <div className="model-import-body">
+              {pendingImport.sourceDirectory && <p className="model-import-selection-note">已扫描目录：{pendingImport.sourceDirectory}（含子目录，仅 XML）</p>}
+              <p>{isZh
+                ? '模型目录名将用于仿真机路径，并可同步写回主 XML 的 <fdm_config name>。'
+                : 'The model directory name is used for simulator paths and can be written back to <fdm_config name>.'}</p>
+              <p>{isZh
+                ? '此步骤只把模型导入上位机；要写入 SD 卡，还需在文件菜单选择「保存到仿真机」，并等待回读确认。'
+                : 'This step imports the model into the editor. Use “Save to Simulator” afterward and wait for readback verification to write the SD card.'}</p>
+              <label className="model-import-name">
+                <span>{isZh ? '模型目录名 / fdm_config 名称' : 'Model directory / fdm_config name'}</span>
+                <input autoFocus value={pendingImport.modelName} maxLength={80} spellCheck={false}
+                  onChange={event => setPendingImport(current => current ? { ...current, modelName: event.target.value } : current)} />
+                <small>{isZh ? '允许：字母、数字、点、下划线、连字符。保存到仿真机时将使用此名称。' : 'Letters, digits, dots, underscores and hyphens only. This name is used when saving to the simulator.'}</small>
+              </label>
+              <label className="model-import-check">
+                <input type="checkbox" checked={pendingImport.renameFdmConfig}
+                  onChange={event => setPendingImport(current => current ? { ...current, renameFdmConfig: event.target.checked } : current)} />
+                <span>{isZh ? '重命名主 XML 的 fdm_config name 属性' : 'Rename the main XML fdm_config name attribute'}</span>
+              </label>
+              {pendingImport.originalModelName && pendingImport.originalModelName !== pendingImport.modelName && (
+                <div className="model-import-rename-note">
+                  {isZh ? `检测到原名称 “${pendingImport.originalModelName}”。确认后将${pendingImport.renameFdmConfig ? `改为 “${pendingImport.modelName || '…'}”` : '保留原名称'}。` :
+                    `Detected original name “${pendingImport.originalModelName}”. It will ${pendingImport.renameFdmConfig ? `be changed to “${pendingImport.modelName || '…'}”` : 'be retained'}.`}
+                </div>
+              )}
+              <section className="model-import-associated">
+                <div>
+                  <strong>{isZh ? `确认 ${pendingImport.referenceFiles.length + 1} 个 XML 的文件类型` : `Confirm types for ${pendingImport.referenceFiles.length + 1} XML file(s)`}</strong>
+                  <small>{isZh ? '初始化文件会与模型一并保留；可在导入前逐项核对或调整关联文件类型。' : 'Initialization files are retained with the model; review or adjust every associated XML type before importing.'}</small>
+                  <small>检测到 {pendingImport.referenceFiles.filter(file => file.category === 'initialization').length} 个初始化/重置 XML，确认后与模型关联保存。</small>
+                  {pendingImport.assets.length > 0 && <small>另有 {pendingImport.assets.length} 个模型资源文件（例如 .ac、图片），保存到仿真机时会一并上传。</small>}
+                </div>
+                {!pendingImport.fromDirectory && <p className="model-import-selection-note">{isZh
+                  ? '当前是文件选择：上位机只能读取你选中的 XML。若要同时导入同目录的 initfile.xml、reset.xml，请取消后选择「导入 XML 目录」。'
+                  : 'Only selected XML files are available. To include initfile.xml and reset.xml from the same folder, cancel and choose “Import XML folder”.'}</p>}
+                <ul>
+                  <li className="main-file">🛩️ <span>{pendingImport.mainFileName}</span><em>{importCategoryLabel('main', isZh)}</em></li>
+                  {pendingImport.referenceFiles.map((file, index) => <li key={file.name}>
+                    <span className="model-import-file-icon">{file.category === 'initialization' ? '🎯' : file.category === 'model-config' ? '⚙️' : file.category === 'system' ? '🔗' : file.category === 'engine' ? '⚙️' : '📄'}</span>
+                    <span>{file.name}</span>
+                    <select aria-label={`${file.name} 文件类型`} value={file.category} onChange={event => setPendingImport(current => current ? {
+                      ...current,
+                      referenceFiles: current.referenceFiles.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, category: event.target.value as ImportFileCategory } : candidate),
+                    } : current)}>
+                      <option value="initialization">{importCategoryLabel('initialization', isZh)}</option>
+                      <option value="model-config">{importCategoryLabel('model-config', isZh)}</option>
+                      <option value="system">{importCategoryLabel('system', isZh)}</option>
+                      <option value="engine">{importCategoryLabel('engine', isZh)}</option>
+                      <option value="companion">{importCategoryLabel('companion', isZh)}</option>
+                    </select>
+                  </li>)}
+                </ul>
+              </section>
+            </div>
+            <footer>
+              <button className="secondary" onClick={() => setPendingImport(null)}>{isZh ? '取消' : 'Cancel'}</button>
+              <button disabled={!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(pendingImport.modelName.trim()) || loading}
+                onClick={() => void commitModelImport(pendingImport)}>{isZh ? '确认并导入' : 'Confirm and import'}</button>
+            </footer>
+          </div>
+        </div>
+      )}
+
       {importedSubFiles.length > 0 && (
         <div className="xml-import-files-overlay" role="dialog" aria-modal="true" aria-label="影响的 XML 子文件" onClick={event => event.stopPropagation()}>
           <div className="xml-import-files-dialog" onClick={event => event.stopPropagation()}>
             <header><strong>📂 影响的 XML 子文件</strong><button onClick={event => { event.preventDefault(); event.stopPropagation(); clearImportedSubFiles(); }}>×</button></header>
-            <small>已保留原目录结构，共 {importedSubFiles.length} 个文件</small>
-            <ul>{importedSubFiles.map(file => <li key={file.name}>{file.category === 'initialization' ? '🎯' : file.category === 'model-config' ? '⚙️' : file.referenced ? '🔗' : '📄'} {file.name} <em>{file.category === 'initialization' ? '初始化/重置' : file.category === 'model-config' ? '模型配置' : file.referenced ? '已引用' : '随目录导入'}</em></li>)}</ul>
+            <small>共 {importedSubFiles.length} 个关联/引用文件；已关联 {importedSubFiles.filter(file => file.category === 'initialization').length} 个初始化/重置 XML</small>
+            {!importedSubFiles.some(file => file.category === 'initialization') && <p className="model-import-selection-note">本次未关联任何初始化/重置 XML。请检查所选目录是否包含以 &lt;initialize&gt; 为根标签的文件。</p>}
+            <ul>{importedSubFiles.map(file => <li key={file.name}>{file.category === 'initialization' ? '🎯' : file.category === 'model-config' ? '⚙️' : file.category === 'system' ? '🔗' : file.category === 'engine' ? '⚙️' : '📄'} {file.name} <em>{file.category === 'initialization' ? '初始化/重置' : file.category === 'model-config' ? '模型配置' : file.category === 'system' ? '系统' : file.category === 'engine' ? '发动机/螺旋桨' : file.referenced ? '已引用' : '关联文件'}</em></li>)}</ul>
             <footer><button onClick={event => { event.preventDefault(); event.stopPropagation(); clearImportedSubFiles(); }}>确认关闭</button></footer>
           </div>
         </div>
@@ -970,6 +1238,8 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
           onClose={() => setShowLibrary(false)}
           onLoad={(data) => {
             loadProject(data);
+            localStorage.removeItem('jsbsim-import-assets');
+            localStorage.removeItem('jsbsim-import-directory');
             const loadedModel = String(data?.model || data?.aircraft?.name || '').trim();
             if (loadedModel) setLibrarySimulationModel(loadedModel);
             // Persist to localStorage

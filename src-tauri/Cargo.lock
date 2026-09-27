@@ -1808,6 +1808,7 @@ dependencies = [
 name = "jsbsim-visual-editor"
 version = "1.0.0"
 dependencies = [
+ "gtk",
  "libc",
  "quick-xml",
  "rusb",
