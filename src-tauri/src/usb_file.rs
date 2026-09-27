@@ -495,8 +495,11 @@ fn write_stream_with_progress<R: Read + Seek>(
         // Firmware staging on eMMC must remain possible so it can be updated.
         if !path.starts_with("fireware/") {
             let response = transaction_locked(handle, PING, 0, 0, &[])?;
-            if response.payload != b"lmx93-usb-file/3" && response.payload != b"lmx93-usb-file/4" {
+            if response.payload != b"lmx93-usb-file/3" && response.payload != b"lmx93-usb-file/4" && response.payload != b"lmx93-usb-file/5" {
                 return Err("板端 FAT 文件名修复尚未生效，已阻止 SD 写入。请先升级至 lmx93-usb-file/3 固件并重启仿真机".into());
+            }
+            if has_long_component(path) && response.payload != b"lmx93-usb-file/5" {
+                return Err("文件名超过 32 字节，需要升级至 lmx93-usb-file/5 板端固件".into());
             }
         }
         transaction_locked(handle, WRITE_BEGIN, 0, 0, path.as_bytes())?;
@@ -554,7 +557,15 @@ pub fn delete(path: &str) -> Result<(), String> {
 }
 
 pub fn mkdir(path: &str) -> Result<(), String> {
+    managed_volume(path)?;
+    if has_long_component(path) && ping()? != "lmx93-usb-file/5" {
+        return Err("文件名超过 32 字节，需要升级至 lmx93-usb-file/5 板端固件".into());
+    }
     with_device(|handle| transaction_locked(handle, MKDIR, 0, 0, path.as_bytes()).map(|_| ()))
+}
+
+pub(crate) fn has_long_component(path: &str) -> bool {
+    path.split('/').skip(1).any(|part| part.len() > 32)
 }
 
 pub(crate) fn managed_volume(path: &str) -> Result<&str, String> {
@@ -563,11 +574,11 @@ pub(crate) fn managed_volume(path: &str) -> Result<&str, String> {
     }
     let (volume, remainder) = path.split_once('/').ok_or("不能操作 SD 或 data 根目录")?;
     if !matches!(volume, "sd" | "data") || remainder.split('/').any(|part| {
-        part.is_empty() || part == "." || part == ".." || part.len() > 32 ||
+        part.is_empty() || part == "." || part == ".." || part.len() > 64 ||
         part.contains(['\\', '\0', ':', '*', '?', '"', '<', '>', '|']) ||
         part.bytes().any(|byte| byte < 32)
     }) {
-        return Err("文件路径无效，名称不能超过 32 字节".into());
+        return Err("文件路径无效，名称不能超过 64 字节".into());
     }
     Ok(volume)
 }
@@ -630,8 +641,11 @@ pub fn transfer(source: &str, destination: &str, move_source: bool) -> Result<()
     }
     let source_info = stat(source)?;
     let identity = ping()?;
-    if identity != "lmx93-usb-file/4" {
-        return Err("重命名、拷贝和移动需要 lmx93-usb-file/4 板端固件".into());
+    if identity != "lmx93-usb-file/4" && identity != "lmx93-usb-file/5" {
+        return Err("重命名、拷贝和移动需要 lmx93-usb-file/4 或更新板端固件".into());
+    }
+    if (has_long_component(source) || has_long_component(destination)) && identity != "lmx93-usb-file/5" {
+        return Err("文件名超过 32 字节，需要升级至 lmx93-usb-file/5 板端固件".into());
     }
 
     if move_source && source_volume == destination_volume {
@@ -922,6 +936,15 @@ mod response_tests {
         let data = (0..20000).map(|index| (index % 251) as u8).collect::<Vec<_>>();
         let checksum = data.chunks(517).fold(u32::MAX, crc32_fold);
         assert_eq!(!checksum, crc32(&data));
+    }
+
+    #[test]
+    fn accepts_long_library_names_within_board_limit() {
+        let path = "sd/jsbsim/scripts/737_cruise_steady_turn_linearize.xml";
+        assert_eq!(managed_volume(path).unwrap(), "sd");
+        assert!(has_long_component(path));
+        assert!(managed_volume(&format!("sd/{}", "a".repeat(64))).is_ok());
+        assert!(managed_volume(&format!("sd/{}", "a".repeat(65))).is_err());
     }
 
     fn frame(opcode: u16, id: u32, status: i32, payload: &[u8]) -> Vec<u8> {

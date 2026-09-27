@@ -30,7 +30,7 @@ function errorText(error: unknown): string {
 
 function validName(name: string): boolean {
   return !!name && name !== '.' && name !== '..' && !/[\\/\0:*?"<>|\x01-\x1f]/.test(name) &&
-    new TextEncoder().encode(name).length <= 32;
+    new TextEncoder().encode(name).length <= 64;
 }
 
 function browserFolderFiles(files: FileList, directory: string) {
@@ -158,7 +158,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const createFolder = async () => {
     const name = folderName.trim();
     if (!validName(name)) {
-      setStatus(isZh ? '目录名需为 1–32 字节，且不能包含斜杠' : 'Folder name must be 1–32 bytes without slashes');
+      setStatus(isZh ? '目录名需为 1–64 字节，且不能包含斜杠' : 'Folder name must be 1–64 bytes without slashes');
       return;
     }
     setBusy(true);
@@ -236,8 +236,14 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     const created: string[] = [];
     try {
       const { rootName, rootPath, entries, folders } = browserFolderFiles(files, directory);
-      if ((await usbFilePing()).identity !== 'lmx93-usb-file/4') {
-        throw new Error(isZh ? '文件夹上传需要 lmx93-usb-file/4 板端固件' : 'Folder upload requires lmx93-usb-file/4 board firmware');
+      const identity = (await usbFilePing()).identity;
+      if (identity !== 'lmx93-usb-file/4' && identity !== 'lmx93-usb-file/5') {
+        throw new Error(isZh ? '文件夹上传需要 lmx93-usb-file/4 或更新板端固件' : 'Folder upload requires lmx93-usb-file/4 or newer board firmware');
+      }
+      const longName = [rootName, ...entries.flatMap(({ relative }) => relative.split('/'))]
+        .some(name => new TextEncoder().encode(name).length > 32);
+      if (longName && identity !== 'lmx93-usb-file/5') {
+        throw new Error(isZh ? '文件夹包含超过 32 字节的名称，需要升级至 lmx93-usb-file/5 板端固件' : 'Folder has names over 32 bytes; install lmx93-usb-file/5 board firmware');
       }
       const siblings = await usbFileList(directory);
       const root = siblings.find(entry => entry.name === rootName);
@@ -444,7 +450,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     if (!renameSource || renameName === null) return;
     const name = renameName.trim();
     if (!validName(name)) {
-      setStatus(isZh ? '名称需为 1–32 字节，且不能包含斜杠' : 'Name must be 1–32 bytes without slashes');
+      setStatus(isZh ? '名称需为 1–64 字节，且不能包含斜杠' : 'Name must be 1–64 bytes without slashes');
       return;
     }
     if (name === renameSource.split('/').pop()) { setRenameName(null); return; }
@@ -474,7 +480,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     if (!clipboard) return;
     const name = pasteName.trim();
     if (!validName(name)) {
-      setStatus(isZh ? '目标名称需为 1–32 字节，且不能包含斜杠' : 'Target name must be 1–32 bytes without slashes');
+      setStatus(isZh ? '目标名称需为 1–64 字节，且不能包含斜杠' : 'Target name must be 1–64 bytes without slashes');
       return;
     }
     const destination = `${targetDirectory}/${name}`;

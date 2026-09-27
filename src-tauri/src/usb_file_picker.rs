@@ -83,8 +83,13 @@ fn prepare_folder(source: PathBuf, directory: String) -> Result<PreparedFolder, 
     let files = entries.iter().filter(|entry| !entry.directory).count();
     let directories = entries.len() - files + 1;
     let bytes = entries.iter().map(|entry| entry.size).sum();
-    if crate::usb_file::ping()? != "lmx93-usb-file/4" {
-        return Err("文件夹上传需要 lmx93-usb-file/4 板端固件".into());
+    let identity = crate::usb_file::ping()?;
+    if identity != "lmx93-usb-file/4" && identity != "lmx93-usb-file/5" {
+        return Err("文件夹上传需要 lmx93-usb-file/4 或更新板端固件".into());
+    }
+    if identity != "lmx93-usb-file/5" && (crate::usb_file::has_long_component(&destination) ||
+        entries.iter().any(|entry| entry.relative_path.split('/').any(|part| part.len() > 32))) {
+        return Err("文件夹包含超过 32 字节的名称，需要升级至 lmx93-usb-file/5 板端固件".into());
     }
     let siblings = crate::usb_file::list(&directory)?;
     let name = source.file_name().and_then(|name| name.to_str()).ok_or("文件夹名无效")?;
