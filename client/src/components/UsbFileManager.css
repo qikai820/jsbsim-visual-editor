@@ -1,12 +1,27 @@
-.usb-fm {
+.usb-fm-backdrop {
   position: fixed;
-  inset: 44px 0 0;
+  inset: 0;
   z-index: 1600;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #17283d99;
+}
+.usb-fm {
+  position: relative;
+  display: flex;
   flex-direction: column;
+  width: min(1180px, 100%);
+  height: min(820px, calc(100vh - 32px));
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #cbd7e2;
+  border-radius: 12px;
   background: #f4f7fa;
   color: #233247;
   font-family: Inter, "Microsoft YaHei", sans-serif;
+  box-shadow: 0 24px 64px #17283d70;
 }
 
 .usb-fm button { cursor: pointer; }
@@ -48,7 +63,7 @@
 .usb-fm-breadcrumb b { color: #9dabb8; }
 .usb-fm-breadcrumb button { padding: 4px 7px; border: 0; border-radius: 5px; background: none; color: #39677d; }
 .usb-fm-breadcrumb button:hover { background: #e8f7f6; }
-.usb-fm-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 18px; border-bottom: 1px solid #d5dee7; }
+.usb-fm-toolbar { display: flex; flex-wrap: wrap; gap: 8px; max-height: 28vh; overflow-y: auto; padding: 12px 18px; border-bottom: 1px solid #d5dee7; }
 .usb-fm-toolbar button, .usb-fm-footer button {
   padding: 8px 12px;
   border: 1px solid #cbd7e2;
@@ -146,3 +161,10 @@
 .usb-fm-context button:hover:not(:disabled), .usb-fm-context button:focus-visible { background: #e8f7f6; color: #087f7b; outline: none; }
 .usb-fm-context button:disabled { opacity: .45; }
 .usb-fm-context-separator { height: 1px; margin: 4px 6px; background: #e5ebf0; }
+
+@media (max-width: 640px) {
+  .usb-fm-backdrop { padding: 8px; }
+  .usb-fm { height: calc(100vh - 16px); border-radius: 9px; }
+  .usb-fm-header div { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .usb-fm-toolbar { max-height: 32vh; }
+}

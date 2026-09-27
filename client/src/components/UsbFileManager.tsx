@@ -344,10 +344,18 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     });
   };
 
-  return <div className="usb-fm" role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
+  const closeManager = () => {
+    if (busy || savingBuiltIn) return;
+    if (builtInEditor && builtInEditor.content !== builtInEditor.original &&
+        !window.confirm(isZh ? '有未保存的修改，确定关闭文件管理器吗？' : 'Close the file manager and discard unsaved changes?')) return;
+    onClose();
+  };
+
+  return <div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
+    <div className="usb-fm" role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
     <header className="usb-fm-header">
       <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 data' : 'Manage SD and data over USB'}</small></div>
-      <button onClick={onClose} aria-label={isZh ? '关闭' : 'Close'}>×</button>
+      <button onClick={closeManager} disabled={busy || savingBuiltIn} aria-label={isZh ? '关闭' : 'Close'}>×</button>
     </header>
     <div className="usb-fm-volumes">
       <button className={volume === 'sd' ? 'active' : ''} onClick={() => chooseVolume('sd')} disabled={busy}>SD</button>
@@ -451,5 +459,6 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
         <button onClick={closeBuiltIn} disabled={savingBuiltIn}>{isZh ? '关闭' : 'Close'}</button>
       </footer>
     </div>}
+    </div>
   </div>;
 }
