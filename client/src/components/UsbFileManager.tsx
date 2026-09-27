@@ -2,8 +2,9 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEve
 import { useLanguage } from '../i18n';
 import {
   isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileMkdir,
-  usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn, usbFileOpenEditor,
-  usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer, usbFileUploadLocal, usbFileWrite,
+  listenUsbFolderUploadProgress, usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn,
+  usbFileOpenEditor, usbFilePing, usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer,
+  usbFileUploadFolder, usbFileUploadLocal, usbFileWrite,
   type UsbBuiltInDocument, type UsbEditorSession, type UsbFileEntry,
 } from '../utils/tauriApi';
 import './UsbFileManager.css';
@@ -13,6 +14,8 @@ const UsbTextEditor = lazy(() => import('./UsbTextEditor'));
 type Volume = 'sd' | 'data';
 const DOWNLOAD_DIRECTORY_KEY = 'jsbsim-usb-download-directory';
 const UPLOAD_PATH_KEY = 'jsbsim-usb-upload-path';
+const UPLOAD_FOLDER_PATH_KEY = 'jsbsim-usb-upload-folder-path';
+type FolderConflictPolicy = 'overwrite' | 'skip';
 
 function formatSize(size: number): string {
   if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(1)} GiB`;
@@ -28,6 +31,32 @@ function errorText(error: unknown): string {
 function validName(name: string): boolean {
   return !!name && name !== '.' && name !== '..' && !/[\\/\0:*?"<>|\x01-\x1f]/.test(name) &&
     new TextEncoder().encode(name).length <= 32;
+}
+
+function browserFolderFiles(files: FileList, directory: string) {
+  const selected = Array.from(files);
+  const first = selected[0]?.webkitRelativePath.split('/') || [];
+  if (first.length < 2 || !validName(first[0])) throw new Error('文件夹选择结果无效');
+  const rootName = first[0];
+  const rootPath = `${directory}/${rootName}`;
+  const paths = new Set<string>();
+  const folders = new Set<string>();
+  const entries = selected.map(file => {
+    const parts = file.webkitRelativePath.split('/');
+    if (parts.length < 2 || parts[0] !== rootName || parts.some(part => !validName(part))) {
+      throw new Error(`文件夹内含无效路径: ${file.webkitRelativePath || file.name}`);
+    }
+    const relative = parts.slice(1).join('/');
+    if (new TextEncoder().encode(`${rootPath}/${relative}`).length > 220 || paths.has(relative)) {
+      throw new Error(`路径过长或重复: ${relative}`);
+    }
+    if (file.size > 16 * 1024 * 1024) throw new Error(`文件超过 16 MiB: ${relative}`);
+    paths.add(relative);
+    for (let index = 2; index < parts.length; index++) folders.add(parts.slice(1, index).join('/'));
+    return { file, relative };
+  });
+  return { rootName, rootPath, entries,
+    folders: Array.from(folders).sort((left, right) => left.split('/').length - right.split('/').length || left.localeCompare(right)) };
 }
 
 type Clipboard = { source: string; move: boolean };
@@ -47,6 +76,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [pasteName, setPasteName] = useState('');
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [editorSessions, setEditorSessions] = useState<UsbEditorSession[]>([]);
+  const [folderConflict, setFolderConflict] = useState<string | null>(null);
   const [builtInEditor, setBuiltInEditor] = useState<BuiltInEditorState | null>(null);
   const [builtInStatus, setBuiltInStatus] = useState('');
   const [savingBuiltIn, setSavingBuiltIn] = useState(false);
@@ -55,6 +85,8 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderUploadInput = useRef<HTMLInputElement>(null);
+  const resolveFolderConflict = useRef<((policy: FolderConflictPolicy | null) => void) | null>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const refreshNotice = useRef('');
   const editorRevision = useRef(0);
@@ -68,6 +100,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   }, [contextMenu]);
   const selectedEntry = entries.find(entry => entry.name === selected);
   const nativePicker = isTauri && /Linux/i.test(navigator.userAgent);
+  useEffect(() => { folderUploadInput.current?.setAttribute('webkitdirectory', ''); }, []);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -164,6 +197,134 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       refresh(isZh ? `已上传 ${files.length} 个文件` : `Uploaded ${files.length} file(s)`);
     } catch (error) { setStatus(`${isZh ? '上传失败' : 'Upload failed'}: ${errorText(error)}`); }
     finally { setBusy(false); if (fileInput.current) fileInput.current.value = ''; }
+  };
+  const uploadFolder = async () => {
+    if (!nativePicker) { folderUploadInput.current?.click(); return; }
+    setBusy(true);
+    setStatus(isZh ? '请选择要上传的文件夹…' : 'Choose a folder to upload…');
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await listenUsbFolderUploadProgress(progress => setStatus(
+        `${isZh ? '正在上传' : 'Uploading'} ${progress.path} (${progress.completedFiles + 1}/${progress.totalFiles})`));
+      const previous = localStorage.getItem(UPLOAD_FOLDER_PATH_KEY) || undefined;
+      const result = await usbFileUploadFolder(directory, previous);
+      if (result) {
+        localStorage.setItem(UPLOAD_FOLDER_PATH_KEY, result.localPath);
+        refresh(`${isZh ? '文件夹已上传' : 'Folder uploaded'} ${result.remotePath} · ${result.files - result.skipped}/${result.files} ${isZh ? '个文件' : 'files'}${result.skipped ? ` · ${isZh ? '跳过' : 'skipped'} ${result.skipped}` : ''}${result.overwritten ? ` · ${isZh ? '覆盖' : 'overwritten'} ${result.overwritten}` : ''}`);
+      } else setStatus('');
+    } catch (error) { setStatus(`${isZh ? '上传文件夹失败' : 'Folder upload failed'}: ${errorText(error)}`); }
+    finally { unlisten?.(); setBusy(false); }
+  };
+  const chooseFolderConflict = (policy: FolderConflictPolicy | null) => {
+    resolveFolderConflict.current?.(policy);
+    resolveFolderConflict.current = null;
+    setFolderConflict(null);
+  };
+  const askFolderConflict = (path: string): Promise<FolderConflictPolicy | null> => {
+    setFolderConflict(path);
+    return new Promise(resolve => { resolveFolderConflict.current = resolve; });
+  };
+  const uploadBrowserFolder = async (files: FileList | null) => {
+    if (!files) return;
+    if (!files.length) {
+      setStatus(isZh ? '当前平台的文件夹选择框无法上传空文件夹' : 'This folder picker cannot upload an empty folder');
+      return;
+    }
+    setBusy(true);
+    let staging: string | null = null;
+    let wroteToExisting = false;
+    const created: string[] = [];
+    try {
+      const { rootName, rootPath, entries, folders } = browserFolderFiles(files, directory);
+      if ((await usbFilePing()).identity !== 'lmx93-usb-file/4') {
+        throw new Error(isZh ? '文件夹上传需要 lmx93-usb-file/4 板端固件' : 'Folder upload requires lmx93-usb-file/4 board firmware');
+      }
+      const siblings = await usbFileList(directory);
+      const root = siblings.find(entry => entry.name === rootName);
+      if (root && !root.directory) throw new Error(isZh ? '目标位置已有同名文件，无法合并文件夹' : 'A file with the same name already exists');
+      const policy = root ? await askFolderConflict(rootPath) : 'overwrite';
+      if (!policy) { setStatus(''); return; }
+
+      const existingDirectories = new Set<string>(root ? [rootPath] : []);
+      const cachedLists = new Map<string, UsbFileEntry[]>();
+      const findExisting = async (path: string): Promise<UsbFileEntry | undefined> => {
+        const parent = path.slice(0, path.lastIndexOf('/'));
+        if (!existingDirectories.has(parent)) return undefined;
+        let listing = cachedLists.get(parent);
+        if (!listing) { listing = await usbFileList(parent); cachedLists.set(parent, listing); }
+        return listing.find(entry => entry.name === path.slice(path.lastIndexOf('/') + 1));
+      };
+      const skippedFolders = new Set<string>();
+      const skippedFiles = new Set<string>();
+      const existingFiles = new Set<string>();
+      const underSkippedFolder = (relative: string) => Array.from(skippedFolders).some(folder => relative.startsWith(`${folder}/`));
+      for (const relative of folders) {
+        if (underSkippedFolder(relative)) continue;
+        const path = `${rootPath}/${relative}`;
+        const found = await findExisting(path);
+        if (found?.directory) existingDirectories.add(path);
+        else if (found) {
+          if (policy === 'overwrite') throw new Error(`${relative}: ${isZh ? '同名项目类型不同，不能直接覆盖' : 'Cannot overwrite a file with a folder'}`);
+          skippedFolders.add(relative);
+        }
+      }
+      for (const { relative } of entries) {
+        if (underSkippedFolder(relative)) { skippedFiles.add(relative); continue; }
+        const found = await findExisting(`${rootPath}/${relative}`);
+        if (found?.directory) {
+          if (policy === 'overwrite') throw new Error(`${relative}: ${isZh ? '同名项目类型不同，不能直接覆盖' : 'Cannot overwrite a folder with a file'}`);
+          skippedFiles.add(relative);
+        } else if (found) {
+          if (policy === 'skip') skippedFiles.add(relative);
+          else existingFiles.add(relative);
+        }
+      }
+
+      if (!root) {
+        const used = new Set(siblings.map(entry => entry.name));
+        const seed = Math.floor(Math.random() * 0xffffffff);
+        for (let attempt = 0; attempt < 16; attempt++) {
+          const name = `.usbup${((seed + attempt) >>> 0).toString(16).padStart(8, '0')}`;
+          if (!used.has(name)) { staging = `${directory}/${name}`; break; }
+        }
+        if (!staging) throw new Error(isZh ? '无法分配临时上传目录' : 'Could not reserve a temporary upload folder');
+        for (const { relative } of entries) {
+          if (new TextEncoder().encode(`${staging}/${relative}`).length > 220) {
+            throw new Error(`${relative}: ${isZh ? '临时上传路径超过设备限制' : 'Temporary upload path exceeds device limit'}`);
+          }
+        }
+        await usbFileMkdir(staging);
+        created.push(staging);
+      }
+      const base = staging || rootPath;
+      for (const relative of folders) {
+        if (skippedFolders.has(relative) || underSkippedFolder(relative)) continue;
+        if (!existingDirectories.has(`${rootPath}/${relative}`)) {
+          const path = `${base}/${relative}`;
+          await usbFileMkdir(path);
+          if (staging) created.push(path);
+        }
+      }
+      let completed = 0;
+      for (const { file, relative } of entries) {
+        if (skippedFiles.has(relative)) { completed++; continue; }
+        const path = `${base}/${relative}`;
+        setStatus(`${isZh ? '正在上传' : 'Uploading'} ${relative} (${completed + 1}/${entries.length})`);
+        if (staging) created.push(path);
+        else wroteToExisting = true;
+        await usbFileWrite(path, new Uint8Array(await file.arrayBuffer()));
+        completed++;
+      }
+      if (staging) await usbFileTransfer(staging, rootPath, true);
+      const uploaded = entries.length - skippedFiles.size;
+      refresh(`${isZh ? '文件夹已上传' : 'Folder uploaded'} ${rootPath} · ${uploaded}/${entries.length} ${isZh ? '个文件' : 'files'}${skippedFiles.size ? ` · ${isZh ? '跳过' : 'skipped'} ${skippedFiles.size}` : ''}${existingFiles.size ? ` · ${isZh ? '覆盖' : 'overwritten'} ${existingFiles.size}` : ''}`);
+    } catch (error) {
+      let cleanupFailed = false;
+      if (staging && created.length) {
+        for (const path of created.reverse()) { try { await usbFileDelete(path); } catch { cleanupFailed = true; } }
+      }
+      setStatus(`${isZh ? '上传文件夹失败' : 'Folder upload failed'}: ${errorText(error)}${wroteToExisting ? (isZh ? '；可能已有部分文件上传' : '; some files may have uploaded') : ''}${cleanupFailed ? `；${isZh ? '临时目录可能需要手动清理' : 'temporary folder may need cleanup'}: ${staging}` : ''}`);
+    } finally { setBusy(false); if (folderUploadInput.current) folderUploadInput.current.value = ''; }
   };
   const download = async (entry = selectedEntry) => {
     if (!entry || entry.directory) return;
@@ -370,6 +531,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     <div className="usb-fm-toolbar">
       <button onClick={() => refresh()} disabled={busy || loading}>↻ {isZh ? '刷新' : 'Refresh'}</button>
       <button onClick={() => void upload()} disabled={busy || loading}>↑ {isZh ? '上传文件' : 'Upload'}</button>
+      <button onClick={() => void uploadFolder()} disabled={busy || loading}>↑ {isZh ? '上传文件夹' : 'Upload folder'}</button>
       <button onClick={() => void openBuiltIn()} disabled={busy || !selectedEntry || selectedEntry.directory}>✎ {isZh ? '内置编辑' : 'Edit here'}</button>
       <button onClick={() => void openEditor()} disabled={busy || !selectedEntry || selectedEntry.directory}>↗ {isZh ? '电脑打开' : 'Open on computer'}</button>
       <button onClick={() => void download()} disabled={busy || !selectedEntry || selectedEntry.directory}>↓ {isZh ? '下载' : 'Download'}</button>
@@ -378,6 +540,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       <button onClick={() => markTransfer(true)} disabled={busy || !selectedEntry}>✂ {isZh ? '移动' : 'Move'}</button>
       <button onClick={() => void remove()} disabled={busy || !selectedEntry}>🗑 {isZh ? '删除' : 'Delete'}</button>
       <input ref={fileInput} type="file" multiple hidden onChange={event => void uploadBrowserFiles(event.target.files)} />
+      <input ref={folderUploadInput} type="file" multiple hidden onChange={event => void uploadBrowserFolder(event.target.files)} />
     </div>
     {renameName !== null && <div className="usb-fm-action">
       <label>{isZh ? '新名称' : 'New name'} <input value={renameName} autoFocus onChange={event => setRenameName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void rename(); if (event.key === 'Escape') setRenameName(null); }} disabled={busy} /></label>
@@ -432,6 +595,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
           <button role="menuitem" onClick={() => { void remove(contextMenu.entry!); setContextMenu(null); }}>{isZh ? '删除' : 'Delete'}</button>
         </> : <>
           <button role="menuitem" onClick={() => { void paste(); setContextMenu(null); }} disabled={!clipboard || loading}>{isZh ? '粘贴到此目录' : 'Paste here'}</button>
+          <button role="menuitem" onClick={() => { void uploadFolder(); setContextMenu(null); }}>{isZh ? '上传文件夹…' : 'Upload folder…'}</button>
           <button role="menuitem" onClick={() => { folderInput.current?.focus(); setContextMenu(null); }}>{isZh ? '新建目录' : 'New folder'}</button>
           <div className="usb-fm-context-separator" />
           <button role="menuitem" onClick={() => { refresh(); setContextMenu(null); }}>{isZh ? '刷新' : 'Refresh'}</button>
@@ -458,6 +622,18 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
         </button>}
         <button onClick={closeBuiltIn} disabled={savingBuiltIn}>{isZh ? '关闭' : 'Close'}</button>
       </footer>
+    </div>}
+    {folderConflict && <div className="usb-fm-conflict-overlay" role="dialog" aria-modal="true" aria-label={isZh ? '处理同名文件' : 'Resolve duplicate files'}>
+      <div className="usb-fm-conflict-dialog">
+        <strong>{isZh ? '目标已有同名文件夹' : 'A folder with this name already exists'}</strong>
+        <p>{folderConflict}</p>
+        <p>{isZh ? '文件夹会合并。遇到同名文件时，请选择如何处理；其他文件继续上传。' : 'Folders will merge. Choose how to handle files with the same name; other files will still upload.'}</p>
+        <div>
+          <button onClick={() => chooseFolderConflict('overwrite')}>{isZh ? '覆盖全部同名文件' : 'Overwrite all duplicates'}</button>
+          <button onClick={() => chooseFolderConflict('skip')}>{isZh ? '跳过全部同名文件' : 'Skip all duplicates'}</button>
+          <button onClick={() => chooseFolderConflict(null)}>{isZh ? '取消上传' : 'Cancel upload'}</button>
+        </div>
+      </div>
     </div>}
     </div>
   </div>;

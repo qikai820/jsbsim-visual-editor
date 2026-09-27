@@ -1126,6 +1126,15 @@ async fn usb_file_upload_local(
     usb_file_picker::pick_and_upload(window, directory, previous_path).await
 }
 
+#[tauri::command]
+async fn usb_file_upload_folder(
+    window: tauri::WebviewWindow,
+    directory: String,
+    previous_path: Option<String>,
+) -> Result<Option<usb_file_picker::UsbFolderUploadSelection>, String> {
+    usb_file_picker::pick_and_upload_folder(window, directory, previous_path).await
+}
+
 const FIRMWARE_REMOTE_PATH: &str = "fireware/nuttx.bin";
 const FIRMWARE_MIN_SIZE: usize = 64 * 1024;
 const FIRMWARE_MAX_SIZE: usize = 64 * 1024 * 1024;
@@ -1404,6 +1413,7 @@ fn main() {
             usb_file_save_editor,
             usb_file_finish_editor,
             usb_file_upload_local,
+            usb_file_upload_folder,
             select_firmware_file,
             firmware_stage_file,
             firmware_stage,

@@ -47,6 +47,14 @@ application starts.
 The in-app file manager can rename, copy, and move files and directories.
 Right-click a file or folder for its actions; right-click an empty area to
 paste into the current directory, or right-click a folder to paste into it.
+**Upload folder** places a local folder under the current SD/data directory,
+including nested and empty directories on Linux. New folders are uploaded to
+a temporary directory and published after every file passes readback verification.
+If a folder with the same name exists, the user chooses whether to overwrite
+or skip same-name files; other files are merged. Conflicting file and folder
+types are not overwritten. Folder upload requires board file protocol v4.
+The non-Linux folder picker can upload files up to 16 MiB each and cannot
+upload an empty folder or preserve empty subdirectories.
 The built-in editor uses the MIT-licensed CodeMirror 6 component for UTF-8
 text files up to 4 MiB, with XML/JSON highlighting and Ctrl+S. It only shows
 **Save to simulator** after the content changes. Before saving, the app checks
@@ -60,7 +68,7 @@ copy in the configured download directory.
 Copy stages content in the destination volume and publishes it after USB
 readback verification. A move within one volume uses board rename; a move
 between SD and data copies and verifies first, then removes the source. An
-existing destination is never intentionally replaced.
+existing destination is never intentionally replaced by copy or move.
 
 ## Linux
 

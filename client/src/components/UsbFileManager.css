@@ -111,6 +111,13 @@
 .usb-fm-builtin-footer { flex-wrap: wrap; border-top: 1px solid #d5dee7; border-bottom: 0; }
 .usb-fm-builtin-footer [role="status"] { flex: 1; min-width: 100px; color: #52677d; font-size: 12px; }
 .usb-fm-builtin-footer button { padding: 8px 12px; border: 1px solid #cbd7e2; border-radius: 6px; background: #fff; color: #276c69; }
+.usb-fm-conflict-overlay { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 18px; background: #17283d99; }
+.usb-fm-conflict-dialog { width: min(480px, 100%); padding: 20px; border-radius: 10px; background: #fff; box-shadow: 0 12px 36px #17283d70; }
+.usb-fm-conflict-dialog strong { font-size: 16px; }
+.usb-fm-conflict-dialog p { overflow-wrap: anywhere; color: #52677d; font-size: 13px; }
+.usb-fm-conflict-dialog > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.usb-fm-conflict-dialog button { padding: 8px 10px; border: 1px solid #cbd7e2; border-radius: 6px; background: #fff; color: #276c69; }
+.usb-fm-conflict-dialog button:first-child { border-color: #0a8984; background: #0a8984; color: #fff; }
 .usb-fm-list { min-height: 0; flex: 1; overflow: auto; background: #fff; }
 .usb-fm-row {
   display: grid;

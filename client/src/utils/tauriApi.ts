@@ -487,6 +487,28 @@ export async function usbFileUploadLocal(directory: string, previousPath?: strin
   return call('usb_file_upload_local', { directory, previousPath: previousPath || null });
 }
 
+export interface UsbFolderUploadResult {
+  localPath: string;
+  remotePath: string;
+  files: number;
+  directories: number;
+  bytes: number;
+  skipped: number;
+  overwritten: number;
+}
+
+export async function usbFileUploadFolder(directory: string, previousPath?: string): Promise<UsbFolderUploadResult | null> {
+  return call('usb_file_upload_folder', { directory, previousPath: previousPath || null });
+}
+
+export async function listenUsbFolderUploadProgress(callback: (progress: {
+  path: string; completedFiles: number; totalFiles: number;
+}) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  await ensureTauri();
+  return tauriListen('usb-folder-upload-progress', (event: any) => callback(event.payload));
+}
+
 export interface FirmwareStageResult {
   fileName: string;
   path: string;

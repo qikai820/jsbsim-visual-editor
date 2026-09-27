@@ -557,7 +557,7 @@ pub fn mkdir(path: &str) -> Result<(), String> {
     with_device(|handle| transaction_locked(handle, MKDIR, 0, 0, path.as_bytes()).map(|_| ()))
 }
 
-fn managed_volume(path: &str) -> Result<&str, String> {
+pub(crate) fn managed_volume(path: &str) -> Result<&str, String> {
     if path.len() > 220 {
         return Err("文件路径超过板端 220 字节限制".into());
     }
@@ -589,7 +589,7 @@ fn rename_remote(source: &str, destination: &str) -> Result<(), String> {
     with_device(|handle| transaction_locked(handle, RENAME, 0, 0, &payload).map(|_| ()))
 }
 
-fn remove_tree(path: &str, directory: bool) -> Result<(), String> {
+pub(crate) fn remove_tree(path: &str, directory: bool) -> Result<(), String> {
     if directory {
         for entry in list(path)? {
             remove_tree(&format!("{path}/{}", entry.name), entry.directory)?;
