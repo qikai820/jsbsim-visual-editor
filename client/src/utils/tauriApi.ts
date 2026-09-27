@@ -433,6 +433,14 @@ export async function usbFileMkdir(path: string): Promise<void> {
   await call('usb_file_mkdir', { path });
 }
 
+export async function usbFileDownload(path: string, directory: string): Promise<{ localPath: string; size: number }> {
+  return call('usb_file_download', { path, directory });
+}
+
+export async function usbFileUploadLocal(directory: string, previousPath?: string): Promise<{ localPath: string; remotePath: string; size: number } | null> {
+  return call('usb_file_upload_local', { directory, previousPath: previousPath || null });
+}
+
 export interface FirmwareStageResult {
   fileName: string;
   path: string;

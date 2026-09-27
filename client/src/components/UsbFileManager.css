@@ -1,0 +1,91 @@
+.usb-fm {
+  position: fixed;
+  inset: 44px 0 0;
+  z-index: 1600;
+  display: flex;
+  flex-direction: column;
+  background: #f4f7fa;
+  color: #233247;
+  font-family: Inter, "Microsoft YaHei", sans-serif;
+}
+
+.usb-fm button { cursor: pointer; }
+.usb-fm button:disabled { cursor: wait; opacity: .55; }
+.usb-fm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid #d5dee7;
+  background: #fff;
+}
+.usb-fm-header div { display: flex; align-items: baseline; gap: 12px; }
+.usb-fm-header strong { font-size: 17px; }
+.usb-fm-header small { color: #718398; }
+.usb-fm-header button { border: 0; background: none; color: #6f8195; font-size: 24px; }
+.usb-fm-volumes { display: flex; gap: 8px; padding: 12px 18px 0; background: #fff; }
+.usb-fm-volumes button {
+  min-width: 100px;
+  padding: 9px 18px;
+  border: 1px solid #d5dee7;
+  border-radius: 8px 8px 0 0;
+  background: #f5f8fa;
+  color: #52677d;
+  font-weight: 600;
+}
+.usb-fm-volumes button.active { border-bottom-color: #fff; background: #fff; color: #087f7b; }
+.usb-fm-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 45px;
+  padding: 5px 18px;
+  border-block: 1px solid #d5dee7;
+  background: #fff;
+}
+.usb-fm-breadcrumb span { display: flex; gap: 4px; align-items: center; }
+.usb-fm-breadcrumb b { color: #9dabb8; }
+.usb-fm-breadcrumb button { padding: 4px 7px; border: 0; border-radius: 5px; background: none; color: #39677d; }
+.usb-fm-breadcrumb button:hover { background: #e8f7f6; }
+.usb-fm-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 18px; border-bottom: 1px solid #d5dee7; }
+.usb-fm-toolbar button, .usb-fm-footer button {
+  padding: 8px 12px;
+  border: 1px solid #cbd7e2;
+  border-radius: 6px;
+  background: #fff;
+  color: #40546b;
+}
+.usb-fm-toolbar button:hover:not(:disabled), .usb-fm-footer button:hover:not(:disabled) { border-color: #0ea5a4; color: #087f7b; }
+.usb-fm-list { min-height: 0; flex: 1; overflow: auto; background: #fff; }
+.usb-fm-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 110px 24px;
+  width: 100%;
+  min-height: 43px;
+  align-items: center;
+  padding: 0 18px;
+  border: 0;
+  border-bottom: 1px solid #edf1f4;
+  background: #fff;
+  color: #34475c;
+  text-align: left;
+}
+.usb-fm-row:hover, .usb-fm-row.selected { background: #e8f7f6; }
+.usb-fm-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.usb-fm-row small { color: #8191a1; text-align: right; }
+.usb-fm-open { color: #0a8984; font-size: 22px; text-align: center; }
+.usb-fm-empty { padding: 26px; color: #7f8fa0; }
+.usb-fm-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 66px;
+  padding: 10px 18px;
+  border-top: 1px solid #d5dee7;
+  background: #fff;
+}
+.usb-fm-footer label { display: flex; align-items: center; gap: 8px; color: #61758a; font-size: 12px; }
+.usb-fm-footer input { width: 170px; padding: 8px; border: 1px solid #cbd7e2; border-radius: 6px; }
+.usb-fm-footer > span { margin-left: auto; color: #60778d; font-size: 12px; overflow-wrap: anywhere; }

@@ -1,8 +1,10 @@
 # LMX93 USB Bulk transport
 
 The Type-C device appears as one vendor-specific USB interface, not as MTP,
-mass storage, a serial port, or a network adapter. Desktop file managers do
-not get access to the board filesystem.
+mass storage, a serial port, or a network adapter. The application's
+**Tools > Simulator Files** window browses the board over this private USB
+protocol. It shows the SD card and eMMC `data` filesystem as separate roots;
+operating-system file managers do not mount either filesystem.
 
 Development identity: `VID 1209`, `PID 93a1`, interface 0. Allocate a unique
 production VID/PID before shipping hardware.
@@ -25,6 +27,8 @@ commit/abort, delete, and mkdir. The board only accepts relative paths under:
 - `/mnt/sdcard/jsbsim`
 - `/mnt/sdcard/LOG`
 - `/mnt/sdcard/dsdl/px4`
+- `/mnt/sdcard` through the `sd` file-manager root
+- `/data` through the `data` file-manager root
 - `/romfs/jsbsim` (read-only built-in aviation library)
 
 Uploads use a `.usbpart` file and become visible at the target pathname only

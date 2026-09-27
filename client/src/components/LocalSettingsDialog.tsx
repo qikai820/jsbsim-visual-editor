@@ -15,6 +15,7 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
   const [transportError, setTransportError] = useState('');
   const [timeThreshold, setTimeThreshold] = useState(() => Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
   const [logDirectory, setLogDirectory] = useState(() => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
+  const [usbDownloadDirectory, setUsbDownloadDirectory] = useState(() => localStorage.getItem('jsbsim-usb-download-directory') || '~/Downloads/JSBSim-Files');
   const saveRemoteUpload = (value: boolean) => {
     setRemoteUpload(value); setRemoteUploadEnabled(value);
   };
@@ -37,6 +38,9 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
   };
   const saveLogDirectory = (value: string) => {
     setLogDirectory(value); localStorage.setItem('jsbsim-log-download-directory', value.trim() || '~/Downloads/JSBSim-Logs');
+  };
+  const saveUsbDownloadDirectory = (value: string) => {
+    setUsbDownloadDirectory(value); localStorage.setItem('jsbsim-usb-download-directory', value.trim() || '~/Downloads/JSBSim-Files');
   };
   return <div className="local-settings-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="local-settings-dialog" role="dialog" aria-modal="true" aria-label={isZh ? '本地配置' : 'Local Settings'}>
@@ -69,6 +73,11 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
           <b>{isZh ? '日志下载目录' : 'Log download directory'}</b>
           <small>{isZh ? '仅允许当前用户主目录内的绝对路径，支持 ~/' : 'Absolute path inside the current user home directory; ~/ is supported'}</small>
           <input value={logDirectory} placeholder="~/Downloads/JSBSim-Logs" onChange={event => saveLogDirectory(event.target.value)} />
+        </div>
+        <div className="local-settings-path">
+          <b>{isZh ? 'USB 文件下载目录' : 'USB file download directory'}</b>
+          <small>{isZh ? '文件管理器下载到这里，支持 ~/' : 'Files downloaded from Simulator Files are saved here; ~/ is supported'}</small>
+          <input value={usbDownloadDirectory} placeholder="~/Downloads/JSBSim-Files" onChange={event => saveUsbDownloadDirectory(event.target.value)} />
         </div>
       </section>
       <footer><button className="primary" onClick={onClose}>{isZh ? '完成' : 'Done'}</button></footer>

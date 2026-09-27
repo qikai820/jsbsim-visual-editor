@@ -8,6 +8,7 @@ import TelemetryRecorder from './TelemetryRecorder';
 import SimulationConfigDialog from './SimulationConfigDialog';
 import LocalSettingsDialog from './LocalSettingsDialog';
 import NshConsoleDialog from './NshConsoleDialog';
+import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
 import { isTauri, selectModelImport, getSimulatorTransportMode } from '../utils/tauriApi';
@@ -288,6 +289,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const [showTelemetryRecorder, setShowTelemetryRecorder] = useState(false);
   const [telemetryRecording, setTelemetryRecording] = useState(false);
   const [showNshConsole, setShowNshConsole] = useState(false);
+  const [showUsbFiles, setShowUsbFiles] = useState(false);
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
   const [librarySimulationModel, setLibrarySimulationModel] = useState('');
@@ -1080,6 +1082,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
               <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowToolsMenu(false); }}>📊 {isZh ? '日志中心' : 'Log Center'}</button>
+              <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
             </div>}
           </div>
@@ -1096,6 +1099,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
             selectedModelFromLibrary={librarySimulationModel || remoteModelDirectory || loadedModelDirectory || (hasLoadedModel ? aircraft.name : '')} />
         </div>
         {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}
+        {showUsbFiles && <UsbFileManager onClose={() => setShowUsbFiles(false)} />}
         <div className="toolbar-right">
           {isTauri && <div className="window-controls" onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
             <button onClick={() => void windowAction('min')} title={isZh ? '最小化' : 'Minimize'} aria-label={isZh ? '最小化' : 'Minimize'}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10" /></svg></button>

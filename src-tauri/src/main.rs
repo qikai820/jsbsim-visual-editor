@@ -15,6 +15,7 @@ mod usb_file;
 mod transport;
 mod model_import;
 mod firmware_picker;
+mod usb_file_picker;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -1011,6 +1012,68 @@ async fn usb_file_mkdir(path: String) -> Result<serde_json::Value, String> {
     }).await
 }
 
+#[tauri::command]
+async fn usb_file_download(path: String, directory: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let name = path.rsplit('/').next().ok_or("文件名无效")?;
+        if name.is_empty() || name == "." || name == ".." || name.contains('\\') {
+            return Err("文件名无效".into());
+        }
+
+        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| "无法确定当前用户主目录")?;
+        let requested = directory.strip_prefix("~/")
+            .map(|tail| std::path::PathBuf::from(&home).join(tail))
+            .unwrap_or_else(|| std::path::PathBuf::from(&directory));
+        if !requested.is_absolute() || !requested.starts_with(&home) {
+            return Err("下载目录必须位于当前用户主目录内".into());
+        }
+        if requested.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+            return Err("下载目录不能包含上级路径".into());
+        }
+        std::fs::create_dir_all(&requested).map_err(|e| format!("创建下载目录失败: {e}"))?;
+        let requested = requested.canonicalize().map_err(|e| e.to_string())?;
+        let home = std::path::Path::new(&home).canonicalize().map_err(|e| e.to_string())?;
+        if !requested.starts_with(home) {
+            return Err("下载目录必须位于当前用户主目录内".into());
+        }
+
+        let original = std::path::Path::new(name);
+        let stem = original.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
+        let extension = original.extension().and_then(|value| value.to_str());
+        let mut target = requested.join(name);
+        for number in 1..=1000 {
+            if !target.exists() { break; }
+            let candidate = match extension {
+                Some(ext) => format!("{stem} ({number}).{ext}"),
+                None => format!("{stem} ({number})"),
+            };
+            target = requested.join(candidate);
+        }
+        if target.exists() { return Err("下载目录中已有过多同名文件".into()); }
+
+        let partial = requested.join(format!(".{}.usbpart", target.file_name().unwrap().to_string_lossy()));
+        let size = match usb_file::download_to(&path, &partial) {
+            Ok(size) => size,
+            Err(error) => {
+                let _ = std::fs::remove_file(&partial);
+                return Err(error);
+            }
+        };
+        std::fs::rename(&partial, &target).map_err(|e| format!("保存下载文件失败: {e}"))?;
+        Ok(serde_json::json!({ "path": path, "localPath": target.to_string_lossy(), "size": size }))
+    }).await
+}
+
+#[tauri::command]
+async fn usb_file_upload_local(
+    window: tauri::WebviewWindow,
+    directory: String,
+    previous_path: Option<String>,
+) -> Result<Option<usb_file_picker::UsbUploadSelection>, String> {
+    usb_file_picker::pick_and_upload(window, directory, previous_path).await
+}
+
 const FIRMWARE_REMOTE_PATH: &str = "fireware/nuttx.bin";
 const FIRMWARE_MIN_SIZE: usize = 64 * 1024;
 const FIRMWARE_MAX_SIZE: usize = 64 * 1024 * 1024;
@@ -1280,6 +1343,8 @@ fn main() {
             usb_file_write,
             usb_file_delete,
             usb_file_mkdir,
+            usb_file_download,
+            usb_file_upload_local,
             select_firmware_file,
             firmware_stage_file,
             firmware_stage,

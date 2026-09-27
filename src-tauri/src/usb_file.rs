@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
-use std::{io::Write, path::Path};
+use std::{io::{Read, Seek, SeekFrom, Write}, path::Path};
 
 const VID: u16 = 0x1209;
 const PID: u16 = 0x93a1;
@@ -107,14 +107,17 @@ pub struct FirmwareUpdateProgress {
 }
 
 pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
+    !crc32_fold(u32::MAX, data)
+}
+
+fn crc32_fold(mut crc: u32, data: &[u8]) -> u32 {
     for byte in data {
         crc ^= u32::from(*byte);
         for _ in 0..8 {
             crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
         }
     }
-    !crc
+    crc
 }
 
 fn open() -> Result<DeviceHandle<Context>, String> {
@@ -387,6 +390,9 @@ pub fn download_to(path: &str, target: &Path) -> Result<u64, String> {
         loop {
             let response = transaction_locked(handle, READ, MAX_PAYLOAD as i32, offset, path.as_bytes())?;
             let count = response.payload.len();
+            if response.offset != offset + count as u64 {
+                return Err(format!("board returned wrong download offset at byte {offset}"));
+            }
             file.write_all(&response.payload)
                 .map_err(|error| format!("cannot write download file: {error}"))?;
             offset = response.offset;
@@ -404,10 +410,30 @@ pub fn write_all(path: &str, data: &[u8]) -> Result<(), String> {
 pub fn write_all_with_progress(
     path: &str,
     data: &[u8],
+    progress: impl FnMut(u64, u64),
+) -> Result<(), String> {
+    write_stream_with_progress(path, &mut std::io::Cursor::new(data), data.len() as u64, progress)
+}
+
+pub fn upload_from(path: &str, source: &Path) -> Result<u64, String> {
+    let mut file = std::fs::File::open(source)
+        .map_err(|error| format!("cannot open upload file: {error}"))?;
+    let size = file.metadata().map_err(|error| error.to_string())?.len();
+    write_stream_with_progress(path, &mut file, size, |_, _| {})?;
+    Ok(size)
+}
+
+fn write_stream_with_progress<R: Read + Seek>(
+    path: &str,
+    source: &mut R,
+    total: u64,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(), String> {
     if path.is_empty() || path.len() > 220 {
         return Err("remote path must contain 1 to 220 bytes".into());
+    }
+    if total > i64::MAX as u64 {
+        return Err("upload file is too large".into());
     }
     with_device(|handle| {
         // Older board firmware acknowledges an upload without checking its
@@ -421,35 +447,44 @@ pub fn write_all_with_progress(
         }
         transaction_locked(handle, WRITE_BEGIN, 0, 0, path.as_bytes())?;
         let chunk_size = MAX_PAYLOAD.saturating_sub(path.len() + 2);
-        let mut offset = 0usize;
-        progress(0, data.len() as u64);
+        let mut chunk = vec![0u8; chunk_size];
+        let mut offset = 0u64;
+        let mut checksum = u32::MAX;
+        progress(0, total);
         let result = (|| {
-            while offset < data.len() {
-                let count = chunk_size.min(data.len() - offset);
+            while offset < total {
+                let count = chunk_size.min((total - offset) as usize);
+                source.read_exact(&mut chunk[..count])
+                    .map_err(|error| format!("cannot read upload file: {error}"))?;
+                checksum = crc32_fold(checksum, &chunk[..count]);
                 let mut payload = Vec::with_capacity(2 + path.len() + count);
                 payload.extend_from_slice(&(path.len() as u16).to_le_bytes());
                 payload.extend_from_slice(path.as_bytes());
-                payload.extend_from_slice(&data[offset..offset + count]);
-                let response = transaction_locked(handle, WRITE_DATA, 0, offset as u64, &payload)?;
-                if response.offset != (offset + count) as u64 {
+                payload.extend_from_slice(&chunk[..count]);
+                let response = transaction_locked(handle, WRITE_DATA, 0, offset, &payload)?;
+                if response.offset != offset + count as u64 {
                     return Err(format!("board acknowledged wrong upload offset at byte {offset}"));
                 }
-                offset += count;
-                progress(offset as u64, data.len() as u64);
+                offset += count as u64;
+                progress(offset, total);
             }
-            transaction_locked(handle, WRITE_COMMIT, crc32(data) as i32, offset as u64, path.as_bytes())?;
+            transaction_locked(handle, WRITE_COMMIT, (!checksum) as i32, offset, path.as_bytes())?;
             // Check the final pathname too: a successful USB transfer only
             // proves delivery to the board, not that the card can read it.
-            let mut verified = 0usize;
-            while verified < data.len() {
-                let count = (data.len() - verified).min(MAX_PAYLOAD);
+            source.seek(SeekFrom::Start(0)).map_err(|error| error.to_string())?;
+            let mut verified = 0u64;
+            let mut expected = vec![0u8; MAX_PAYLOAD];
+            while verified < total {
+                let count = (total - verified).min(MAX_PAYLOAD as u64) as usize;
+                source.read_exact(&mut expected[..count])
+                    .map_err(|error| format!("cannot verify upload source: {error}"))?;
                 let response = transaction_locked(handle, READ, count as i32,
-                                                  verified as u64, path.as_bytes())?;
-                if response.payload != data[verified..verified + count] ||
-                   response.offset != (verified + count) as u64 {
+                                                  verified, path.as_bytes())?;
+                if response.payload != expected[..count] ||
+                   response.offset != verified + count as u64 {
                     return Err(format!("SD upload readback mismatch at byte {verified}"));
                 }
-                verified += count;
+                verified += count as u64;
             }
             Ok(())
         })();
@@ -694,6 +729,13 @@ pub fn simulation_self_test() -> Result<String, String> {
 mod response_tests {
     use super::*;
 
+    #[test]
+    fn streamed_crc_matches_single_buffer_crc() {
+        let data = (0..20000).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+        let checksum = data.chunks(517).fold(u32::MAX, crc32_fold);
+        assert_eq!(!checksum, crc32(&data));
+    }
+
     fn frame(opcode: u16, id: u32, status: i32, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&MAGIC.to_le_bytes());
@@ -784,7 +826,7 @@ mod response_tests {
     #[test]
     #[ignore = "requires the real board; tests storage separately from transport recovery"]
     fn live_directory_queries() {
-        for path in ["jsbsim", "jsbsim/aircraft", "jsbsim/systems", "jsbsim/engine"] {
+        for path in ["sd", "data", "jsbsim", "jsbsim/aircraft", "jsbsim/systems", "jsbsim/engine"] {
             let entries = list(path).unwrap();
             println!("USB LIST {path}: {entries:?}");
         }
