@@ -84,6 +84,7 @@ pub struct UsbFileEntry {
     pub name: String,
     pub directory: bool,
     pub size: u64,
+    pub modified: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -331,37 +332,77 @@ pub fn available_quick() -> bool {
     }).is_ok()
 }
 
+fn parse_list(payload: &[u8]) -> Result<Vec<UsbFileEntry>, String> {
+    let text = std::str::from_utf8(payload)
+        .map_err(|_| "board returned a non-UTF-8 directory listing")?;
+    text.lines().map(|line| {
+        let mut fields = line.splitn(3, '\t');
+        let kind = fields.next().ok_or("directory entry has no type")?;
+        let name = fields.next().ok_or("directory entry has no name")?;
+        let size = fields.next().ok_or("directory entry has no size")?
+            .parse::<u64>().map_err(|_| "directory entry has invalid size")?;
+        Ok(UsbFileEntry { name: name.to_owned(), directory: kind == "D", size, modified: None })
+    }).collect()
+}
+
+fn list_locked(handle: &DeviceHandle<Context>, path: &str) -> Result<Vec<UsbFileEntry>, String> {
+    let response = transaction_locked_with_timeout(handle, LIST, 0, 0, path.as_bytes(), LIST_TIMEOUT)
+        .map_err(|error| format!("USB LIST {path}: {error}"))?;
+    parse_list(&response.payload)
+}
+
 pub fn list(path: &str) -> Result<Vec<UsbFileEntry>, String> {
-    with_device(|handle| {
-        let response = transaction_locked_with_timeout(handle, LIST, 0, 0, path.as_bytes(), LIST_TIMEOUT)
-            .map_err(|error| format!("USB LIST {path}: {error}"))?;
-        let text = std::str::from_utf8(&response.payload)
-            .map_err(|_| "board returned a non-UTF-8 directory listing")?;
-        text.lines().map(|line| {
-            let mut fields = line.splitn(3, '\t');
-            let kind = fields.next().ok_or("directory entry has no type")?;
-            let name = fields.next().ok_or("directory entry has no name")?;
-            let size = fields.next().ok_or("directory entry has no size")?
-                .parse::<u64>().map_err(|_| "directory entry has invalid size")?;
-            Ok(UsbFileEntry { name: name.to_owned(), directory: kind == "D", size })
-        }).collect()
+    with_device(|handle| list_locked(handle, path))
+}
+
+fn parse_stat(path: &str, payload: &[u8]) -> Result<UsbFileEntry, String> {
+    let text = std::str::from_utf8(payload).map_err(|_| "invalid stat response")?;
+    let mut fields = text.trim_end().split('\t');
+    let kind = fields.next().ok_or("stat response has no type")?;
+    let size = fields.next().ok_or("stat response has no size")?
+        .parse::<u64>().map_err(|_| "stat response has invalid size")?;
+    let modified = fields.next().and_then(|value| value.parse::<u64>().ok()).filter(|value| *value > 0);
+    Ok(UsbFileEntry {
+        name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+        directory: kind == "D",
+        size,
+        modified,
     })
 }
 
+fn stat_locked(handle: &DeviceHandle<Context>, path: &str, timeout: Duration) -> Result<UsbFileEntry, String> {
+    let response = transaction_locked_with_timeout(handle, STAT, 0, 0, path.as_bytes(), timeout)?;
+    parse_stat(path, &response.payload)
+}
+
 pub fn stat(path: &str) -> Result<UsbFileEntry, String> {
-    with_device(|handle| {
-        let response = transaction_locked(handle, STAT, 0, 0, path.as_bytes())?;
-        let text = std::str::from_utf8(&response.payload).map_err(|_| "invalid stat response")?;
-        let mut fields = text.trim_end().splitn(3, '\t');
-        let kind = fields.next().ok_or("stat response has no type")?;
-        let size = fields.next().ok_or("stat response has no size")?
-            .parse::<u64>().map_err(|_| "stat response has invalid size")?;
-        Ok(UsbFileEntry {
-            name: path.rsplit('/').next().unwrap_or(path).to_owned(),
-            directory: kind == "D",
-            size,
-        })
-    })
+    with_device(|handle| stat_locked(handle, path, TIMEOUT))
+}
+
+/// Used by the visible file manager only.  Keep ordinary LIST inexpensive for
+/// folder uploads, copy operations and model-library discovery.
+pub fn list_with_modified(path: &str) -> Result<Vec<UsbFileEntry>, String> {
+    let mut entries = list(path)?;
+    // Release the USB lock between small groups so live simulation traffic can
+    // continue while a large directory's timestamps are being fetched.
+    for group in entries.chunks_mut(4) {
+        let complete = with_device(|handle| {
+            for entry in group {
+                let child = format!("{path}/{}", entry.name);
+                if child.len() > 220 { continue; }
+                match stat_locked(handle, &child, Duration::from_millis(750)) {
+                    Ok(info) => entry.modified = info.modified,
+                    // A missing file or slow storage must not hide the directory.
+                    Err(error) if error.contains("errno 2") => continue,
+                    Err(_) => return Ok(false),
+                }
+            }
+            Ok(true)
+        });
+        if !matches!(complete, Ok(true)) { break; }
+        std::thread::yield_now();
+    }
+    Ok(entries)
 }
 
 pub fn read_all(path: &str) -> Result<Vec<u8>, String> {
@@ -945,6 +986,18 @@ mod response_tests {
         assert!(has_long_component(path));
         assert!(managed_volume(&format!("sd/{}", "a".repeat(64))).is_ok());
         assert!(managed_volume(&format!("sd/{}", "a".repeat(65))).is_err());
+    }
+
+    #[test]
+    fn reads_existing_stat_modification_time() {
+        let file = parse_stat("sd/scripts/flight.xml", b"F\t120\t1790496000\n").unwrap();
+        assert_eq!(file.modified, Some(1790496000));
+        assert_eq!(file.size, 120);
+        let folder = parse_stat("sd/scripts", b"D\t0\t1790496001\n").unwrap();
+        assert_eq!(folder.modified, Some(1790496001));
+        assert!(folder.directory);
+        assert_eq!(parse_stat("sd/empty", b"D\t0\t0\n").unwrap().modified, None);
+        assert_eq!(parse_list(b"F\tflight.xml\t120\n").unwrap()[0].modified, None);
     }
 
     fn frame(opcode: u16, id: u32, status: i32, payload: &[u8]) -> Vec<u8> {

@@ -401,6 +401,7 @@ export interface UsbFileEntry {
   name: string;
   directory: boolean;
   size: number;
+  modified?: number | null;
 }
 
 export async function usbFileStatus(): Promise<UsbFileStatus> {
@@ -413,6 +414,11 @@ export async function usbFilePing(): Promise<{ identity: string; source: string 
 
 export async function usbFileList(path: string): Promise<UsbFileEntry[]> {
   const result = await call('usb_file_list', { path });
+  return result.files || [];
+}
+
+export async function usbFileListWithModified(path: string): Promise<UsbFileEntry[]> {
+  const result = await call('usb_file_list_with_modified', { path });
   return result.files || [];
 }
 

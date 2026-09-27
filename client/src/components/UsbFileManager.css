@@ -119,13 +119,17 @@
 .usb-fm-conflict-dialog button { padding: 8px 10px; border: 1px solid #cbd7e2; border-radius: 6px; background: #fff; color: #276c69; }
 .usb-fm-conflict-dialog button:first-child { border-color: #0a8984; background: #0a8984; color: #fff; }
 .usb-fm-list { min-height: 0; flex: 1; overflow: auto; background: #fff; }
-.usb-fm-row {
+.usb-fm-row, .usb-fm-columns {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 110px 24px;
+  grid-template-columns: 36px minmax(0, 1fr) 100px 175px 24px;
   width: 100%;
-  min-height: 43px;
   align-items: center;
   padding: 0 18px;
+}
+.usb-fm-columns { min-height: 34px; border-bottom: 1px solid #dce5ed; color: #718398; font-size: 11px; }
+.usb-fm-columns span:nth-child(n+3) { text-align: right; }
+.usb-fm-row {
+  min-height: 43px;
   border: 0;
   border-bottom: 1px solid #edf1f4;
   background: #fff;
@@ -135,6 +139,7 @@
 .usb-fm-row:hover, .usb-fm-row.selected { background: #e8f7f6; }
 .usb-fm-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
 .usb-fm-row small { color: #8191a1; text-align: right; }
+.usb-fm-row time { color: #718398; font-size: 12px; text-align: right; white-space: nowrap; }
 .usb-fm-open { color: #0a8984; font-size: 22px; text-align: center; }
 .usb-fm-empty { padding: 26px; color: #7f8fa0; }
 .usb-fm-footer {

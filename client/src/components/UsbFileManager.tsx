@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useLanguage } from '../i18n';
 import {
-  isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileMkdir,
+  isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
   listenUsbFolderUploadProgress, usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn,
   usbFileOpenEditor, usbFilePing, usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer,
   usbFileUploadFolder, usbFileUploadLocal, usbFileWrite,
@@ -22,6 +22,16 @@ function formatSize(size: number): string {
   if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MiB`;
   if (size >= 1024) return `${(size / 1024).toFixed(1)} KiB`;
   return `${size} B`;
+}
+
+function formatModified(seconds: number | null | undefined, isZh: boolean): string {
+  if (!seconds) return '—';
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString(isZh ? 'zh-CN' : 'en-US', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
 }
 
 function errorText(error: unknown): string {
@@ -134,7 +144,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     setSelected('');
     setLoading(true);
     setStatus(isZh ? '正在读取目录…' : 'Loading directory…');
-    void usbFileList(directory).then(files => {
+    void usbFileListWithModified(directory).then(files => {
       if (cancelled) return;
       setEntries(files.sort((left, right) => Number(right.directory) - Number(left.directory) || left.name.localeCompare(right.name)));
       setStatus(notice || (files.length ? '' : (isZh ? '目录为空' : 'Directory is empty')));
@@ -570,10 +580,12 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       </div>)}
     </div>}
     <div className="usb-fm-list" role="listbox" aria-label={isZh ? '文件列表' : 'Files'} onContextMenu={event => showContextMenu(event, null)}>
-      {segments.length > 0 && <button className="usb-fm-row" onClick={() => setSegments(value => value.slice(0, -1))} disabled={busy}><span>↰</span><strong>..</strong><small /></button>}
+      <div className="usb-fm-columns" aria-hidden="true"><span /><span>{isZh ? '名称' : 'Name'}</span><span>{isZh ? '大小' : 'Size'}</span><span>{isZh ? '修改时间' : 'Modified'}</span><span /></div>
+      {segments.length > 0 && <button className="usb-fm-row" onClick={() => setSegments(value => value.slice(0, -1))} disabled={busy}><span>↰</span><strong>..</strong><small /><time /><span /></button>}
       {entries.map(entry => <button key={entry.name} className={`usb-fm-row ${selected === entry.name ? 'selected' : ''}`}
         onClick={() => setSelected(entry.name)} onDoubleClick={() => entry.directory ? openDirectory(entry.name) : void openBuiltIn(entry)} onContextMenu={event => showContextMenu(event, entry)} disabled={busy} role="option" aria-selected={selected === entry.name}>
         <span>{entry.directory ? '📁' : '📄'}</span><strong>{entry.name}</strong><small>{entry.directory ? '' : formatSize(entry.size)}</small>
+        <time>{formatModified(entry.modified, isZh)}</time>
         {entry.directory && <span className="usb-fm-open" onClick={event => { event.stopPropagation(); openDirectory(entry.name); }}>›</span>}
       </button>)}
       {!loading && entries.length === 0 && <div className="usb-fm-empty">{status || (isZh ? '目录为空' : 'Directory is empty')}</div>}

@@ -982,6 +982,11 @@ async fn usb_file_list(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn usb_file_list_with_modified(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || Ok(serde_json::json!({ "path": path, "files": usb_file::list_with_modified(&path)?, "source": "usb-bulk" }))).await
+}
+
+#[tauri::command]
 async fn usb_file_read(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
         let bytes = usb_file::read_all(&path)?;
@@ -1400,6 +1405,7 @@ fn main() {
             usb_file_status,
             usb_file_ping,
             usb_file_list,
+            usb_file_list_with_modified,
             usb_file_read,
             usb_file_write,
             usb_file_delete,
