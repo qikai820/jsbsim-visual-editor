@@ -66,3 +66,6 @@ command `usb_file_ping` performs the same initial check. The commands
 `usb_file_list`, `usb_file_read`, `usb_file_write`, `usb_file_delete`, and
 `usb_file_mkdir` expose the private RPC directly. Existing UI model, script,
 configuration, DSDL, and log operations use the same USB module by default.
+
+The [Log Center](LOG_CENTER.md) lists finalized `.mcap` files under the board's
+`LOG` directory. A recording still named `.active` is not listed.
