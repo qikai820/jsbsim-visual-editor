@@ -1013,6 +1013,14 @@ async fn usb_file_mkdir(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn usb_file_transfer(source: String, destination: String, move_source: bool) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        usb_file::transfer(&source, &destination, move_source)?;
+        Ok(serde_json::json!({ "source": source, "destination": destination, "moved": move_source }))
+    }).await
+}
+
+#[tauri::command]
 async fn usb_file_download(path: String, directory: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
         let name = path.rsplit('/').next().ok_or("文件名无效")?;
@@ -1343,6 +1351,7 @@ fn main() {
             usb_file_write,
             usb_file_delete,
             usb_file_mkdir,
+            usb_file_transfer,
             usb_file_download,
             usb_file_upload_local,
             select_firmware_file,

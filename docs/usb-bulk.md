@@ -22,7 +22,7 @@ existing UDP payload. USB and UDP operate in parallel.
 File records use a 32-byte little-endian `JBS1` header containing version,
 opcode, request ID, status/read length, payload length, file offset, and
 CRC32. Supported operations are ping, list, stat, chunked read, staged write,
-commit/abort, delete, and mkdir. The board only accepts relative paths under:
+commit/abort, delete, mkdir, and same-volume rename. The board only accepts relative paths under:
 
 - `/mnt/sdcard/jsbsim`
 - `/mnt/sdcard/LOG`
@@ -43,6 +43,12 @@ communication** control applies to both file transfer and live simulation:
 
 The selected mode is stored on the desktop computer and restored when the
 application starts.
+
+The in-app file manager can rename, copy, and move files and directories.
+Copy stages content in the destination volume and publishes it after USB
+readback verification. A move within one volume uses board rename; a move
+between SD and data copies and verifies first, then removes the source. An
+existing destination is never intentionally replaced.
 
 ## Linux
 
@@ -65,7 +71,7 @@ After flashing the matching NuttX image, run this from the repository root:
 ```
 
 The test sends a protocol PING and lists the built-in ROMFS aircraft directory.
-A working link prints `USB bulk self-test PASS: lmx93-usb-file/1; ...`. The Tauri
+A working link prints `USB bulk self-test PASS: lmx93-usb-file/4; ...`. The Tauri
 command `usb_file_ping` performs the same initial check. The commands
 `usb_file_list`, `usb_file_read`, `usb_file_write`, `usb_file_delete`, and
 `usb_file_mkdir` expose the private RPC directly. Existing UI model, script,

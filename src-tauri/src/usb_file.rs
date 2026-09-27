@@ -49,6 +49,7 @@ const MKDIR: u16 = 9;
 const WRITE_ABORT: u16 = 10;
 const UPDATE: u16 = 11;
 const NSH_EXEC: u16 = 12;
+const RENAME: u16 = 13;
 const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(8);
 
 static REQUEST_ID: OnceLock<AtomicU32> = OnceLock::new();
@@ -441,7 +442,7 @@ fn write_stream_with_progress<R: Read + Seek>(
         // Firmware staging on eMMC must remain possible so it can be updated.
         if !path.starts_with("fireware/") {
             let response = transaction_locked(handle, PING, 0, 0, &[])?;
-            if response.payload != b"lmx93-usb-file/3" {
+            if response.payload != b"lmx93-usb-file/3" && response.payload != b"lmx93-usb-file/4" {
                 return Err("板端 FAT 文件名修复尚未生效，已阻止 SD 写入。请先升级至 lmx93-usb-file/3 固件并重启仿真机".into());
             }
         }
@@ -501,6 +502,127 @@ pub fn delete(path: &str) -> Result<(), String> {
 
 pub fn mkdir(path: &str) -> Result<(), String> {
     with_device(|handle| transaction_locked(handle, MKDIR, 0, 0, path.as_bytes()).map(|_| ()))
+}
+
+fn managed_volume(path: &str) -> Result<&str, String> {
+    if path.len() > 220 {
+        return Err("文件路径超过板端 220 字节限制".into());
+    }
+    let (volume, remainder) = path.split_once('/').ok_or("不能操作 SD 或 data 根目录")?;
+    if !matches!(volume, "sd" | "data") || remainder.split('/').any(|part| {
+        part.is_empty() || part == "." || part == ".." || part.len() > 32 ||
+        part.contains(['\\', '\0', ':', '*', '?', '"', '<', '>', '|']) ||
+        part.bytes().any(|byte| byte < 32)
+    }) {
+        return Err("文件路径无效，名称不能超过 32 字节".into());
+    }
+    Ok(volume)
+}
+
+fn validate_transfer_paths<'a>(source: &'a str, destination: &'a str) -> Result<(&'a str, &'a str), String> {
+    let source_volume = managed_volume(source)?;
+    let destination_volume = managed_volume(destination)?;
+    if source == destination || destination.starts_with(&format!("{source}/")) {
+        return Err("目标不能是源目录本身或其子目录".into());
+    }
+    Ok((source_volume, destination_volume))
+}
+
+fn rename_remote(source: &str, destination: &str) -> Result<(), String> {
+    let mut payload = Vec::with_capacity(2 + source.len() + destination.len());
+    payload.extend_from_slice(&(source.len() as u16).to_le_bytes());
+    payload.extend_from_slice(source.as_bytes());
+    payload.extend_from_slice(destination.as_bytes());
+    with_device(|handle| transaction_locked(handle, RENAME, 0, 0, &payload).map(|_| ()))
+}
+
+fn remove_tree(path: &str, directory: bool) -> Result<(), String> {
+    if directory {
+        for entry in list(path)? {
+            remove_tree(&format!("{path}/{}", entry.name), entry.directory)?;
+        }
+    }
+    delete(path)
+}
+
+fn copy_tree(source: &str, destination: &str, directory: bool, local_file: &Path) -> Result<(), String> {
+    if directory {
+        mkdir(destination)?;
+        for entry in list(source)? {
+            copy_tree(&format!("{source}/{}", entry.name),
+                      &format!("{destination}/{}", entry.name), entry.directory, local_file)?;
+        }
+    } else {
+        download_to(source, local_file)?;
+        let result = upload_from(destination, local_file);
+        let _ = std::fs::remove_file(local_file);
+        result?;
+    }
+    Ok(())
+}
+
+/// Copy or move a file or directory in the two managed volumes. Copies are
+/// staged under a hidden destination name, then published by board rename.
+/// A cross-volume move removes the source only after the published copy passes
+/// the normal upload readback checks.
+pub fn transfer(source: &str, destination: &str, move_source: bool) -> Result<(), String> {
+    let (source_volume, destination_volume) = validate_transfer_paths(source, destination)?;
+
+    let (parent, name) = destination.rsplit_once('/').ok_or("目标路径无效")?;
+    if !stat(parent)?.directory {
+        return Err("目标父目录不存在".into());
+    }
+    if list(parent)?.iter().any(|entry| entry.name == name) {
+        return Err("目标位置已有同名文件或目录".into());
+    }
+    let source_info = stat(source)?;
+    let identity = ping()?;
+    if identity != "lmx93-usb-file/4" {
+        return Err("重命名、拷贝和移动需要 lmx93-usb-file/4 板端固件".into());
+    }
+
+    if move_source && source_volume == destination_volume {
+        return rename_remote(source, destination);
+    }
+
+    let mut staging = None;
+    for _ in 0..16 {
+        let candidate = format!("{parent}/.usbpartcopy{:08x}", next_request_id());
+        if candidate.len() > 220 { return Err("目标路径过长，无法创建临时目录".into()); }
+        match stat(&candidate) {
+            Ok(_) => continue,
+            Err(error) if error.contains("errno 2") => { staging = Some(candidate); break; }
+            Err(error) => return Err(error),
+        }
+    }
+    let staging = staging.ok_or("无法分配临时目标目录")?;
+    let local_dir = std::env::temp_dir().join(format!("jsbsim-usb-copy-{}-{:08x}",
+                                                         std::process::id(), next_request_id()));
+    std::fs::create_dir(&local_dir).map_err(|error| format!("创建本地临时目录失败: {error}"))?;
+    let local_file = local_dir.join("transfer.part");
+    let result = (|| {
+        copy_tree(source, &staging, source_info.directory, &local_file)?;
+        rename_remote(&staging, destination)
+    })();
+    let _ = std::fs::remove_dir_all(&local_dir);
+    if let Err(error) = result {
+        let cleanup = match stat(&staging) {
+            Ok(entry) => remove_tree(&staging, entry.directory),
+            Err(missing) if missing.contains("errno 2") => Ok(()),
+            Err(other) => Err(other),
+        };
+        if let Err(cleanup_error) = cleanup {
+            return Err(format!("{error}; 临时目标 {staging} 清理失败: {cleanup_error}"));
+        }
+        return Err(error);
+    }
+
+    if move_source {
+        remove_tree(source, source_info.directory).map_err(|error| {
+            format!("目标已完整拷贝，但清理原位置失败: {error}")
+        })?;
+    }
+    Ok(())
 }
 
 /// Ask the board to install a staged firmware file and report eMMC write and
@@ -730,6 +852,19 @@ mod response_tests {
     use super::*;
 
     #[test]
+    fn transfer_paths_reject_roots_traversal_and_descendants() {
+        assert_eq!(validate_transfer_paths("sd/models", "data/models").unwrap(), ("sd", "data"));
+        assert_eq!(validate_transfer_paths("sd/a", "sd/b").unwrap(), ("sd", "sd"));
+        for (source, target) in [
+            ("sd", "data/a"), ("sd/a", "sd/a"), ("sd/a", "sd/a/b"),
+            ("sd/a", "sd/../data/a"), ("sd/a", "romfs/a"),
+            ("sd/a", "data/a/ bad"),
+        ] {
+            assert!(validate_transfer_paths(source, target).is_err(), "{source} -> {target}");
+        }
+    }
+
+    #[test]
     fn streamed_crc_matches_single_buffer_crc() {
         let data = (0..20000).map(|index| (index % 251) as u8).collect::<Vec<_>>();
         let checksum = data.chunks(517).fold(u32::MAX, crc32_fold);
@@ -813,12 +948,12 @@ mod response_tests {
             write_exact(handle, &request[..HEADER_SIZE], TIMEOUT)?;
             write_exact(handle, &request[HEADER_SIZE..], TIMEOUT)?;
             let response = transaction_locked(handle, PING, 0, 0, b"")?;
-            assert_eq!(String::from_utf8_lossy(&response.payload), "lmx93-usb-file/3");
+            assert_eq!(String::from_utf8_lossy(&response.payload), "lmx93-usb-file/4");
             Ok(())
         }).unwrap();
         println!("Recovered queued old LIST response; current PING verified");
         for _ in 0..5 {
-            assert_eq!(ping().unwrap(), "lmx93-usb-file/3");
+            assert_eq!(ping().unwrap(), "lmx93-usb-file/4");
         }
         println!("Five subsequent file-service PINGs verified");
     }

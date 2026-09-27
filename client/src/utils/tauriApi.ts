@@ -433,6 +433,10 @@ export async function usbFileMkdir(path: string): Promise<void> {
   await call('usb_file_mkdir', { path });
 }
 
+export async function usbFileTransfer(source: string, destination: string, moveSource: boolean): Promise<void> {
+  await call('usb_file_transfer', { source, destination, moveSource });
+}
+
 export async function usbFileDownload(path: string, directory: string): Promise<{ localPath: string; size: number }> {
   return call('usb_file_download', { path, directory });
 }
