@@ -6,6 +6,7 @@ mod xml_generator;
 mod expression_xml;
 mod sim_client;
 mod telemetry_recorder;
+mod plotjuggler;
 mod file_index;
 mod aircraft_library;
 mod dataflow;
@@ -14,6 +15,7 @@ mod ftp_sync;
 mod usb_file;
 mod transport;
 mod model_import;
+mod remote_model;
 mod firmware_picker;
 mod usb_file_picker;
 mod usb_file_editor;
@@ -340,26 +342,12 @@ async fn load_aircraft(
     if external_sim_mode() {
         let remote_aircraft_id = aircraft_id.clone();
         let (xml, refs) = run_blocking(move || {
-            let xml = ftp_sync::download_model(&remote_aircraft_id)?;
-            let mut refs: Vec<ReferenceFile> = Vec::new();
-            let mut cursor = xml.as_str();
-            while let Some(start) = cursor.find("file=\"") {
-                cursor = &cursor[start + 6..];
-                let Some(end) = cursor.find('"') else { break };
-                let value = &cursor[..end];
-                let stem = value.trim_end_matches(".xml");
-                let candidates = [format!("systems/{stem}.xml"), format!("engine/{stem}.xml"), format!("aircraft/{remote_aircraft_id}/{stem}.xml")];
-                for path in candidates {
-                    if let Ok(content) = ftp_sync::download_path(&path) {
-                        refs.push(ReferenceFile { name: path, xml: content, category: None });
-                        break;
-                    }
-                }
-                cursor = &cursor[end + 1..];
-            }
-            Ok((xml, refs))
+            remote_model::load(&remote_aircraft_id, ftp_sync::download_path)
         }).await?;
-        let result = parse_xml(app.clone(), xml, Some(refs))?;
+        let mut result = parse_xml(app.clone(), xml.clone(), Some(refs.iter().map(|file| ReferenceFile {
+            name: file.path.clone(), xml: file.xml.clone(), category: None,
+        }).collect()))?;
+        remote_model::attach_sources(&mut result, &aircraft_id, &xml, &refs);
         return Ok(result);
     }
     let state = app.state::<AppState>();
@@ -1285,6 +1273,18 @@ async fn telemetry_record_stop() -> Result<telemetry_recorder::Status, String> {
 #[tauri::command]
 fn telemetry_record_status() -> telemetry_recorder::Status { telemetry_recorder::global().status() }
 
+#[tauri::command]
+async fn plotjuggler_start(app: tauri::AppHandle) -> Result<plotjuggler::Status, String> {
+    let directory = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("plotjuggler");
+    run_blocking(move || plotjuggler::global().start(&directory)).await
+}
+#[tauri::command]
+fn plotjuggler_status() -> plotjuggler::Status { plotjuggler::global().status() }
+#[tauri::command]
+fn plotjuggler_set_rate(rate_hz: u16) -> Result<plotjuggler::Status, String> {
+    plotjuggler::global().set_rate(rate_hz)
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -1375,6 +1375,9 @@ fn main() {
             telemetry_record_start,
             telemetry_record_stop,
             telemetry_record_status,
+            plotjuggler_start,
+            plotjuggler_status,
+            plotjuggler_set_rate,
             sim_start,
             sim_stop,
             nsh_execute,

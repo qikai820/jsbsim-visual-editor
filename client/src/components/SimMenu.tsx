@@ -219,10 +219,13 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [fdmIsWindow, setFdmIsWindow] = useState(false);
   const [simulationDt, setSimulationDt] = useState<number | null>(null);
   const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number; peak: number }[]>([]);
-  const [fdmPopupOpen, setFdmPopupOpen] = useState(false);
+  const [performancePopupOpen, setPerformancePopupOpen] = useState(false);
+  const [hiddenPerformanceSeries, setHiddenPerformanceSeries] = useState<Record<string, boolean>>({});
+  const togglePerformanceSeries = (series: string) => {
+    setHiddenPerformanceSeries(hidden => ({ ...hidden, [series]: !hidden[series] }));
+  };
   const [fdmWindow, setFdmWindow] = useState<10 | 20 | 30>(10);
-  const [cpuHistory, setCpuHistory] = useState<number[][]>([]);
-  const [cpuPopupOpen, setCpuPopupOpen] = useState(false);
+  const [cpuHistory, setCpuHistory] = useState<{ at: number; values: number[] }[]>([]);
   const [remoteState, setRemoteState] = useState('disconnected');
   const [paused, setPaused] = useState(false);
   const [currentScript, setCurrentScript] = useState<string | null>(null);
@@ -349,7 +352,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setSimulationDt(Number.isFinite(remoteSimulationDt) && remoteSimulationDt > 0
         ? remoteSimulationDt : null);
       if (fresh && cores.length) {
-        setCpuHistory(history => [...history, cores].slice(-100));
+        const now = Date.now();
+        setCpuHistory(history => [...history, { at: now, values: cores }]
+          .filter(sample => now - sample.at <= 30000));
       }
       setRemoteState(status.state || (status.connected ? 'waiting' : 'disconnected'));
       /* LOAD recreates the remote task and may briefly return the old
@@ -410,12 +415,15 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
 
   // The model library is also a simulation source.  Selecting an item there
   // prepares it for the primary "开始" action without forcing an XML upload.
+  const lastLibraryModelRef = useRef(selectedModelFromLibrary);
   useEffect(() => {
-    if (!selectedModelFromLibrary) return;
+    if (!selectedModelFromLibrary || lastLibraryModelRef.current === selectedModelFromLibrary) return;
+    lastLibraryModelRef.current = selectedModelFromLibrary;
     /* Selecting a run script loads its aircraft into the canvas too.  That
      * model update must not be mistaken for an explicit model selection: it
      * would clear the script context and make the script editor disappear. */
-    if (selectedTest || preparedTarget.script) {
+    const scriptModel = scriptEditor.aircraft.trim() || preparedTarget.model;
+    if ((selectedTest || preparedTarget.script) && scriptModel === selectedModelFromLibrary) {
       setSelectedModel(selectedModelFromLibrary);
       setPreparedTarget(current => current.script
         ? { ...current, model: selectedModelFromLibrary }
@@ -432,7 +440,10 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setScriptEditor({ name: '', aircraft: '', initialize: '', start: '', end: '', dt: '', events: [] });
     setScriptEditorExpanded(false);
     setPhase('idle');
-  }, [selectedModelFromLibrary, selectedTest, preparedTarget.script]);
+    saveSimulationTarget('', selectedModelFromLibrary);
+    // Only an actual model-library change should replace the selected script.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModelFromLibrary]);
 
   // Close on outside click
   useEffect(() => {
@@ -478,6 +489,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     appendLog(`启动请求: ${selectedModel || selectedTest || '当前选择'}`);
     setError('');
     try {
+      if (script && modelToSync && scriptEditor.aircraft.trim() && scriptEditor.aircraft.trim() !== modelToSync) {
+        throw new Error(`脚本关联模型是 ${scriptEditor.aircraft.trim()}，当前选择的是 ${modelToSync}。请重新选择对应脚本。`);
+      }
+      if (!script && modelToSync === 'F450_PX4') {
+        throw new Error('F450_PX4 请从“脚本选择”启动 F450_PX4_lan.xml，以应用地面初始状态。');
+      }
       if (modelToSync && onSyncRemoteModel) {
         setPhase('loading');
         try {
@@ -508,7 +525,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     }
     launchInProgressRef.current = false;
     setLoading(false);
-  }, [selectedTest, selectedModel, preparedTarget, onSyncRemoteModel]);
+  }, [selectedTest, selectedModel, preparedTarget, scriptEditor.aircraft, onSyncRemoteModel]);
 
   const handleRunScript = useCallback(async (path: string) => {
     setSubmenu(null);
@@ -749,22 +766,29 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const showRuntimeStatus = external || running || phase !== 'idle';
   const fdmLoading = external && (launchInProgressRef.current || remoteState === 'loading');
   const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
+  const cpuVisibleHistory = cpuHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
+  const cpuChartMax = Math.min(100, Math.max(5,
+    Math.ceil(Math.max(0, ...cpuVisibleHistory.flatMap(sample => sample.values)) * 1.1 / 5) * 5));
   const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.peak)) * 1.1;
   const fdmValues = fdmVisibleHistory.map(sample => sample.value);
   const fdmAverage = fdmValues.length ? fdmValues.reduce((sum, value) => sum + value, 0) / fdmValues.length : 0;
   const fdmMaximum = fdmVisibleHistory.length ? Math.max(...fdmVisibleHistory.map(sample => sample.peak)) : 0;
   const fdmMinimum = fdmValues.length ? Math.min(...fdmValues) : 0;
+  const chartX = (at: number) => 35 + (1 - Math.min(fdmWindow * 1000, Math.max(0, Date.now() - at)) / (fdmWindow * 1000)) * 290;
+  const cpuChartPoints = cpuCores.map((_, core) => cpuVisibleHistory.map(sample => {
+    const x = chartX(sample.at);
+    const y = 122 - Math.max(0, Math.min(cpuChartMax, sample.values[core] ?? 0)) * 96 / cpuChartMax;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' '));
   const fdmChartPoints = fdmVisibleHistory.map(sample => {
-    const age = Date.now() - sample.at;
-    const x = 240 - Math.min(fdmWindow * 1000, age) * 240 / (fdmWindow * 1000);
-    const y = 92 - Math.min(92, sample.value * 92 / fdmChartMax);
+    const x = chartX(sample.at);
+    const y = 122 - Math.min(96, sample.value * 96 / fdmChartMax);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
 
   const fdmPeakPoints = fdmVisibleHistory.map(sample => {
-    const age = Date.now() - sample.at;
-    const x = 240 - Math.min(fdmWindow * 1000, age) * 240 / (fdmWindow * 1000);
-    const y = 92 - Math.min(92, sample.peak * 92 / fdmChartMax);
+    const x = chartX(sample.at);
+    const y = 122 - Math.min(96, sample.peak * 96 / fdmChartMax);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
 
@@ -784,8 +808,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
 
   useEffect(() => {
     if (showRuntimeStatus) return;
-    setCpuPopupOpen(false);
-    setFdmPopupOpen(false);
+    setPerformancePopupOpen(false);
   }, [showRuntimeStatus]);
 
   return (
@@ -809,68 +832,79 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           aria-label="打开仿真菜单"
         >▾</button>
       </div>
-      {activeName && (
-        <span className="sim-selected-target" title={activeName}>
-          {(selectedTest || preparedTarget.script || currentScript) ? '📋' : '🛩️'} {displayName}
+      {(activeName || showRuntimeStatus) && (
+        <span className={`sim-target-status ${connectionClass}`} title={`${activeName || '仿真机'} · ${connectionLabel}`}>
+          {showRuntimeStatus && <span className="sim-connection-dot" role="status" aria-label={connectionLabel} />}
+          {activeName && <span className="sim-selected-target" title={activeName}>
+            {(selectedTest || preparedTarget.script || currentScript) ? '📋' : '🛩️'} {displayName}
+          </span>}
+          {showRuntimeStatus && (!activeName || !connected) && <span className="sim-connection-label">{connectionLabel}</span>}
         </span>
       )}
-      {showRuntimeStatus && (
-        <span className={`sim-connection-chip ${connectionClass}`} title="仿真机连接状态">
-          <span className="sim-connection-dot" />
-          {connectionLabel}
-          {external && (
-            <button className="sim-connection-cpu" onClick={() => setCpuPopupOpen(open => !open)}>
-              CPU {healthFresh && cpuCores.length > 0
-                ? cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')
-                : '等待更新'}
-            </button>
-          )}
-          {external && memory && (
-            <span className="sim-connection-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
-              RAM {healthFresh ? `${memory.percent.toFixed(1)}%` : '等待更新'}
-            </span>
-          )}
-          {fdmLoading ? (
-            <span className="sim-connection-fdm sim-connection-fdm-loading" title="模型正在加载，FDM 尚未开始执行">FDM 加载中</span>
-          ) : external && fdmRunMs != null && (
-            <button type="button" className="sim-connection-fdm" title="FDM 周期耗时包含输入/输出等待；单击查看均值和峰值曲线" onClick={event => { event.stopPropagation(); setFdmPopupOpen(open => !open); }}>
-              FDM {fdmIsWindow ? '均值 ' : ''}{fdmRunMs.toFixed(3)} ms <small>⌁</small>
-            </button>
-          )}
+      {showRuntimeStatus && external && (
+        <span className="sim-runtime-metrics">
+          <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="查看 CPU 与 FDM 性能曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
+            <span className="sim-metric-label">CPU</span> {healthFresh && cpuCores.length > 0
+              ? cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')
+              : '等待更新'}
+          </button>
+          {memory && <span className="sim-metric-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
+            <span className="sim-metric-label">RAM</span> {healthFresh ? `${memory.percent.toFixed(1)}%` : '等待更新'}
+          </span>}
+          {fdmLoading ? <span className="sim-metric-loading"><span className="sim-metric-label">FDM</span> 加载中</span>
+            : fdmRunMs != null && <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="FDM 周期耗时包含输入/输出等待；查看 CPU 与 FDM 性能曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
+              <span className="sim-metric-label">FDM</span> {fdmRunMs.toFixed(3)} ms <small>⌄</small>
+            </button>}
         </span>
       )}
-      {showRuntimeStatus && cpuPopupOpen && cpuCores.length > 0 && (
-        <div className="sim-cpu-popup">
-          <div className="sim-cpu-popup-head"><b>双核 CPU 利用率</b><span>{healthFresh ? '10 Hz' : '等待更新'}</span></div>
-          <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
-            {[25, 50, 75].map(value => <line key={value} x1="0" x2="240" y1={92-value*.92} y2={92-value*.92} className="sim-cpu-grid" />)}
-            {cpuCores.map((_, core) => {
-              const points = cpuHistory.map((sample, index) => `${cpuHistory.length < 2 ? 0 : index * 240 / (cpuHistory.length - 1)},${92 - Math.max(0, Math.min(100, sample[core] || 0)) * .92}`).join(' ');
-              return <polyline key={core} points={points} className={`sim-cpu-line core-${core}`} />;
+      {showRuntimeStatus && external && performancePopupOpen && (
+        <div id="sim-performance-popup" className="sim-performance-popup" role="region" aria-label="性能曲线">
+          <div className="sim-performance-head">
+            <b>性能曲线</b>
+            <span>{healthFresh ? '实时' : '等待更新'}</span>
+            <div className="sim-performance-window" aria-label="时间范围">
+              {([10, 20, 30] as const).map(seconds => <button key={seconds} type="button" className={fdmWindow === seconds ? 'active' : ''} aria-pressed={fdmWindow === seconds} onClick={() => setFdmWindow(seconds)}>{seconds}s</button>)}
+            </div>
+            <button type="button" className="sim-performance-close" aria-label="收起性能曲线" onClick={() => setPerformancePopupOpen(false)}>×</button>
+          </div>
+          <div className="sim-performance-legend">
+            {cpuCores.map((value, core) => <button key={core} type="button" className={`sim-performance-series core-${core}`}
+              aria-label={`CPU${core} 曲线`} aria-pressed={!hiddenPerformanceSeries[`cpu-${core}`]}
+              title={`${hiddenPerformanceSeries[`cpu-${core}`] ? '显示' : '隐藏'} CPU${core} 曲线`}
+              onClick={() => togglePerformanceSeries(`cpu-${core}`)}>
+              <i aria-hidden="true" />CPU{core} <b>{healthFresh ? `${value.toFixed(1)}%` : '--'}</b>
+            </button>)}
+            {!fdmLoading && fdmRunMs != null && <>
+              <button type="button" className="sim-performance-series fdm-mean" aria-label="FDM 均值曲线"
+                aria-pressed={!hiddenPerformanceSeries['fdm-mean']} title={`${hiddenPerformanceSeries['fdm-mean'] ? '显示' : '隐藏'} FDM 均值曲线`}
+                onClick={() => togglePerformanceSeries('fdm-mean')}><i aria-hidden="true" />FDM 均值</button>
+              <button type="button" className="sim-performance-series fdm-peak" aria-label="FDM 峰值曲线"
+                aria-pressed={!hiddenPerformanceSeries['fdm-peak']} title={`${hiddenPerformanceSeries['fdm-peak'] ? '显示' : '隐藏'} FDM 峰值曲线`}
+                onClick={() => togglePerformanceSeries('fdm-peak')}><i aria-hidden="true" />峰值</button>
+            </>}
+          </div>
+          <svg className="sim-performance-chart" viewBox="0 0 360 152" role="img" aria-label="CPU 利用率与 FDM 周期耗时共用时间轴，左轴为 CPU 百分比，右轴为 FDM 毫秒">
+            <text x="35" y="14">CPU %</text><text x="325" y="14" textAnchor="end">FDM ms</text>
+            {[0, 1, 2, 3, 4].map(step => {
+              const y = 122 - step * 24;
+              return <g key={step}>
+                <line x1="35" x2="325" y1={y} y2={y} className="sim-performance-grid" />
+                <text x="30" y={y + 3} textAnchor="end">{(cpuChartMax * step / 4).toFixed(1)}</text>
+                <text x="330" y={y + 3}>{(fdmChartMax * step / 4).toFixed(2)}</text>
+              </g>;
             })}
+            {cpuChartPoints.map((points, core) => !hiddenPerformanceSeries[`cpu-${core}`] && <polyline key={core} points={points} className={`sim-performance-line core-${core}`} />)}
+            {!fdmLoading && <>
+              {!hiddenPerformanceSeries['fdm-mean'] && <polyline points={fdmChartPoints} className="sim-performance-line fdm-mean" />}
+              {!hiddenPerformanceSeries['fdm-peak'] && <polyline points={fdmPeakPoints} className="sim-performance-line fdm-peak" />}
+            </>}
+            <text x="35" y="145">-{fdmWindow}s</text><text x="325" y="145" textAnchor="end">现在</text>
           </svg>
-          <div className="sim-cpu-legend">
-            {cpuCores.map((value, core) => <span key={core} className={`core-${core}`}>CPU{core} <b>{healthFresh ? `${value.toFixed(1)}%` : '--'}</b></span>)}
-          </div>
-        </div>
-      )}
-      {showRuntimeStatus && !fdmLoading && fdmPopupOpen && fdmRunMs != null && (
-        <div className="sim-fdm-popup">
-          <div className="sim-cpu-popup-head"><b>FDM 周期（含 I/O）</b><span>{fdmIsWindow ? '均值' : '最近周期'} {fdmRunMs.toFixed(3)} ms</span></div>
-          <div className="sim-fdm-window-picker">
-            {([10, 20, 30] as const).map(seconds => <button key={seconds} className={fdmWindow === seconds ? 'active' : ''} onClick={() => setFdmWindow(seconds)}>{seconds}s</button>)}
-          </div>
-          <svg className="sim-cpu-chart" viewBox="0 0 240 92" preserveAspectRatio="none">
-            {[.25, .5, .75].map(value => <line key={value} x1="0" x2="240" y1={92 - value * 92} y2={92 - value * 92} className="sim-cpu-grid" />)}
-            <polyline points={fdmPeakPoints} className="sim-fdm-line" style={{ stroke: '#f59e0b', strokeDasharray: '3 2' }} />
-            <polyline points={fdmChartPoints} className="sim-fdm-line" />
-          </svg>
-          <div className="sim-fdm-chart-scale"><span>实线：均值 · 橙色虚线：峰值</span><span>{fdmChartMax.toFixed(3)} ms</span><span>0 ms</span></div>
-          <div className="sim-fdm-stats">
-            <span>平均 <b>{fdmAverage.toFixed(3)} ms</b></span>
+          {!fdmLoading && fdmVisibleHistory.length > 0 && <div className="sim-performance-stats">
+            <span>FDM 平均 <b>{fdmAverage.toFixed(3)} ms</b></span>
             <span>最大 <b>{fdmMaximum.toFixed(3)} ms</b></span>
             <span>最低均值 <b>{fdmMinimum.toFixed(3)} ms</b></span>
-          </div>
+          </div>}
         </div>
       )}
 

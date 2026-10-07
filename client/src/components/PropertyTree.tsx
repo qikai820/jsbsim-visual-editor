@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Telemetry } from '../sim/useSimSocket';
-import type { UnitSystem } from './LiveView';
-import { formatValueWithUnit } from '../utils/unitConversion';
+import { formatValueWithUnit, type UnitSystem } from '../utils/unitConversion';
 
 interface PropertyTreeProps {
   telemetry: Telemetry | null;

@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.16)
+project(JSBSimPlotJuggler LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_AUTOMOC ON)
+find_package(Qt5 REQUIRED COMPONENTS Widgets Network Xml)
+add_subdirectory("${PLOTJUGGLER_SOURCE}" upstream)
+# Upstream CSV assumes it is the top-level project for this include path.
+target_include_directories(csv_parser_lib PUBLIC "${PLOTJUGGLER_SOURCE}/3rdparty/date-3.0.4/include")
+add_library(JSBSimLive SHARED jsbsim_live.cpp)
+target_link_libraries(JSBSimLive PRIVATE plotjuggler_base Qt5::Widgets Qt5::Network Qt5::Xml)
+target_compile_definitions(JSBSimLive PRIVATE QT_PLUGIN)
+set_target_properties(JSBSimLive PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")

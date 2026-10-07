@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, loadAircraft, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
@@ -11,13 +11,12 @@ import NshConsoleDialog from './NshConsoleDialog';
 import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
-import { isTauri, selectModelImport, getSimulatorTransportMode } from '../utils/tauriApi';
+import { isTauri, selectModelImport, getSimulatorTransportMode, getPlotJugglerRate, setPlotJugglerRate, startPlotJuggler } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
 
 interface ToolbarProps {
   onShow3D?: () => void;
-  onShowLive?: () => void;
   jsbsimLogs?: string[];
   onLog?: (message: string) => void;
   onToggleJsbsimLog?: () => void;
@@ -258,7 +257,7 @@ async function buildChildUploadXml(current: any, path: string): Promise<string> 
   return generateSubfile(subFile.fileType, subFile.fileName, subFile.data);
 }
 
-export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
+export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
   const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
   const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
@@ -291,6 +290,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   const [showNshConsole, setShowNshConsole] = useState(false);
   const [showUsbFiles, setShowUsbFiles] = useState(false);
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
+  const [plotJugglerOpening, setPlotJugglerOpening] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
   const [librarySimulationModel, setLibrarySimulationModel] = useState('');
   const [recentProjects, setRecentProjects] = useState<Array<{ filename: string; path: string; openedAt: string }>>(() => JSON.parse(localStorage.getItem('jsbsim-recent-projects') || '[]'));
@@ -318,6 +318,18 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     if (action === 'min') await window.minimize();
     else if (action === 'max') await window.toggleMaximize();
     else await window.close();
+  };
+  const openPlotJuggler = async () => {
+    setShowToolsMenu(false);
+    setPlotJugglerOpening(true);
+    try {
+      await setPlotJugglerRate(getPlotJugglerRate());
+      await startPlotJuggler();
+    } catch (error) {
+      window.alert(`${isZh ? '无法打开 PlotJuggler' : 'Could not open PlotJuggler'}: ${String(error)}`);
+    } finally {
+      setPlotJugglerOpening(false);
+    }
   };
   const startWindowDrag = async (event: React.PointerEvent<HTMLDivElement>) => {
     if (!isTauri || event.button !== 0) return;
@@ -808,9 +820,10 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
   };
 
   const handleOpenRemoteModel = async (model: string) => {
+    // The aircraft XML consists mostly of file references. Fetch the whole
+    // reference tree before replacing the current canvas.
+    const data = await loadAircraft(model);
     clearAll();
-    const remote = await ftpDownloadModel(model);
-    const data = await parseXml(remote.xml);
     // Commit the selected directory before loadProject updates the parsed
     // display name, preventing a render from briefly reusing the prior model.
     localStorage.setItem('jsbsim-remote-model', model);
@@ -826,10 +839,11 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
     // Keep a separate baseline for every aircraft. A single global baseline
     // makes switching c172x -> 737 look like a local edit and can upload the
     // previous aircraft into the newly selected aircraft directory.
-    localStorage.setItem(remoteBaselineKey(model), projectFingerprint(data));
-    localStorage.setItem('jsbsim-project', JSON.stringify(data));
-    localStorage.setItem('jsbsim-raw-xml', remote.xml);
-    localStorage.setItem('jsbsim-reference-files', '[]');
+    const snapshot = projectFingerprint(useFlowStore.getState());
+    localStorage.setItem(remoteBaselineKey(model), snapshot);
+    localStorage.setItem('jsbsim-project', snapshot);
+    localStorage.setItem('jsbsim-raw-xml', data.sourceXml || '');
+    localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
     onLog?.(`[${new Date().toLocaleTimeString()}] 已从 NuttX 加载模型: ${model}`);
   };
 
@@ -846,6 +860,16 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
       subFiles: current.subFiles,
       xmlFiles: current.xmlFiles,
     };
+    const sourceMain = (current.xmlFiles || []).find(file => file.category === 'main');
+    const sourceDirectory = sourceMain?.path.match(/^aircraft\/([^/]+)\//)?.[1];
+    if (sourceDirectory && sourceDirectory !== model) {
+      onLog?.(`[${new Date().toLocaleTimeString()}] 当前工程属于 ${sourceDirectory}，已取消上传到 ${model}`);
+      return false;
+    }
+    if (!sourceMain && current.aircraft.name !== model) {
+      onLog?.(`[${new Date().toLocaleTimeString()}] 当前工程为 ${current.aircraft.name}，已取消上传到 ${model}`);
+      return false;
+    }
     const fingerprint = projectFingerprint(project);
     if (!force && localStorage.getItem(remoteBaselineKey(model)) === fingerprint) {
       onLog?.(`[${new Date().toLocaleTimeString()}] 未检测到本地修改，跳过 NuttX 模型同步`);
@@ -1070,7 +1094,6 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
             {showDisplayMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" onClick={() => { onToggleHud?.(); setShowDisplayMenu(false); }}>🛩️ HUD {hudVisible ? (isZh ? '✓ 已显示' : '✓ Shown') : (isZh ? '已隐藏' : 'Hidden')}</button>
               <button role="menuitem" onClick={() => { onToggleJsbsimLog(); setShowDisplayMenu(false); }}>🖥️ {isZh ? 'JSBSim 信息' : 'JSBSim Console'}{jsbsimLogs.length ? ` (${jsbsimLogs.length})` : ''}</button>
-              <button role="menuitem" onClick={() => { onShowLive(); setShowDisplayMenu(false); }}>🔴 {isZh ? '实时' : 'Live'}</button>
               <button role="menuitem" onClick={() => { onShow3D(); setShowDisplayMenu(false); }}>🛩️ 3D</button>
             </div>}
           </div>
@@ -1080,6 +1103,7 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
               {telemetryRecording ? '🔴' : '🧰'} {isZh ? '工具' : 'Tools'} <span className="file-menu-caret">▾</span>
             </button>
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
+              <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
               <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowToolsMenu(false); }}>📊 {isZh ? '日志中心' : 'Log Center'}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
@@ -1242,13 +1266,19 @@ export default function Toolbar({ onShow3D, onShowLive, jsbsimLogs = [], onLog, 
           onClose={() => setShowLibrary(false)}
           onLoad={(data) => {
             loadProject(data);
+            if (data.sourceXml) localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
+            if (data.referenceFiles) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles));
             localStorage.removeItem('jsbsim-import-assets');
             localStorage.removeItem('jsbsim-import-directory');
             const loadedModel = String(data?.model || data?.aircraft?.name || '').trim();
-            if (loadedModel) setLibrarySimulationModel(loadedModel);
+            if (loadedModel) {
+              setLibrarySimulationModel(loadedModel);
+              localStorage.setItem('jsbsim-remote-model', loadedModel);
+              if (data.sourceXml) localStorage.setItem(remoteBaselineKey(loadedModel), projectFingerprint(useFlowStore.getState()));
+            }
             // Persist to localStorage
             try {
-              localStorage.setItem('jsbsim-project', JSON.stringify(data));
+              localStorage.setItem('jsbsim-project', projectFingerprint(useFlowStore.getState()));
               localStorage.setItem('jsbsim-cache-version', '2');
             } catch (e) { /* ignore */ }
           }}

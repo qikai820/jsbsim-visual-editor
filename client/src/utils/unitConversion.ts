@@ -1,4 +1,4 @@
-import type { UnitSystem } from '../components/LiveView';
+export type UnitSystem = 'imperial' | 'metric';
 
 // Unit conversion utilities for JSBSim properties
 // JSBSim typically uses imperial units (feet, degrees, fps, etc.)

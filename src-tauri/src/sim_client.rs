@@ -280,6 +280,7 @@ impl SimClient {
                                     if let Ok(val) = serde_json::from_str::<Value>(text) {
                                         if val.is_object() {
                                             crate::telemetry_recorder::global().record(&peer.to_string(), &val);
+                                            crate::plotjuggler::global().forward(&val);
                                             /* Telemetry is authoritative proof of which board is
                                              * connected.  Route subsequent control packets to its
                                              * source IP: discovery packets or an outdated setting

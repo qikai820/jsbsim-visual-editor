@@ -7,7 +7,6 @@ import PropertyPanel from './components/PropertyPanel';
 import FileManager from './components/FileManager';
 import ModuleExpressionCanvas from './components/expression/ModuleExpressionCanvas';
 import Airplane3DViewer from './components/Airplane3DViewer';
-import LiveView from './components/LiveView';
 import FlightHud from './components/FlightHud';
 import LogCenter from './components/LogCenter';
 import { useSimSocket } from './sim/useSimSocket';
@@ -164,7 +163,6 @@ function AppContent() {
   const [paletteWidth, setPaletteWidth] = useState(() => Number(localStorage.getItem('jsbsim-palette-width') || 250));
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
-  const [showLive, setShowLive] = useState(false);
   const [showLogCenter, setShowLogCenter] = useState(false);
   const [webglFail, setWebglFail] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -433,8 +431,8 @@ function AppContent() {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         try {
-          const { nodes, edges, aircraft, subFiles } = useFlowStore.getState();
-          localStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles }));
+          const { nodes, edges, aircraft, subFiles, xmlFiles } = useFlowStore.getState();
+          localStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles, xmlFiles }));
         } catch (e) {
           console.warn('[AutoSave] Failed:', e);
         }
@@ -498,7 +496,7 @@ function AppContent() {
 
   return (
     <div className="app">
-      <Toolbar onShow3D={handleShow3D} onShowLive={() => setShowLive(true)}
+      <Toolbar onShow3D={handleShow3D}
         onShowLogCenter={() => setShowLogCenter(true)}
         onUndo={handleUndo} onRedo={handleRedo} onCopy={handleCopy} onPaste={handlePaste}
         modifiedXmlFiles={modifiedXmlFiles} onSaveComplete={savedFiles => setModifiedXmlFiles(current => savedFiles ? current.filter(file => !savedFiles.includes(file)) : [])}
@@ -561,7 +559,7 @@ function AppContent() {
 
       {/* HUD belongs to the main model canvas. Full-screen editors and viewers
        * deliberately do not render it, so it cannot cover their controls. */}
-      {hudVisible && !focusedModule && !show3D && !showLive && !showLogCenter && (
+      {hudVisible && !focusedModule && !show3D && !showLogCenter && (
         <div className="jsbsim-hud-window" style={{ transform: `translate(${hudPos.x}px, ${hudPos.y}px)` }}>
           <div className="jsbsim-hud-window-head" onPointerDown={e => {
             if ((e.target as HTMLElement).closest('button')) return;
@@ -603,18 +601,6 @@ function AppContent() {
         </Suspense>
       )}
 
-      {/* 实时融合显示 overlay */}
-      {showLive && (
-        <Suspense fallback={
-          <div className="viewer3d-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ color: '#fff', fontSize: 16 }}>🔴 连接仿真机...</div>
-          </div>
-        }>
-          <Viewer3DSafety onClose={() => setShowLive(false)}>
-            <LiveView onClose={() => setShowLive(false)} />
-          </Viewer3DSafety>
-        </Suspense>
-      )}
     </div>
   );
 }

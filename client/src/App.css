@@ -40,6 +40,8 @@ html, body, #root {
 
 /* ========== Toolbar ========== */
 .toolbar {
+  --toolbar-control-height: 32px;
+  --toolbar-control-radius: 7px;
   display: flex; align-items: center; justify-content: space-between;
   height: 48px; padding: 0 10px 0 12px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
@@ -49,9 +51,9 @@ html, body, #root {
 }
 .window-controls { display: flex; align-items: center; gap: 5px; margin-left: 12px; }
 .window-controls, .window-controls * { -webkit-app-region: no-drag; }
-.toolbar .window-controls button { display: grid; place-items: center; width: 30px; height: 28px; padding: 0; border: 1px solid #dde5ec; border-radius: 7px; background: #f5f8fa; color: #637585; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease; }
+.toolbar .window-controls button { display: grid; place-items: center; width: 32px; height: var(--toolbar-control-height); padding: 0; border: 1px solid #dde5ec; border-radius: var(--toolbar-control-radius); background: #f5f8fa; color: #637585; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }
 .toolbar .window-controls button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
-.toolbar .window-controls button:hover { background: #eaf1f5; border-color: #c7d5df; color: #294758; transform: translateY(-1px); }
+.toolbar .window-controls button:hover { background: #eaf1f5; border-color: #c7d5df; color: #294758; }
 .toolbar .window-controls button:active { transform: translateY(0); background: #dfe9ef; }
 .toolbar .window-controls .window-close:hover { background: #e85c62; border-color: #e85c62; color: #fff; }
 .toolbar .file-menu-trigger { border-color: #dde5ec; border-radius: 7px; background: #f5f8fa; box-shadow: 0 1px 1px rgba(31,52,68,.03); }
@@ -126,12 +128,34 @@ html, body, #root {
 .toolbar button:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }
 .toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* Scope the common sizing to the top row, leaving dropdown items independent. */
+.toolbar-left > button,
+.toolbar-left > .file-menu-anchor > .file-menu-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: var(--toolbar-control-height); padding: 0 11px;
+  border: 1px solid #dbe3ec; border-radius: var(--toolbar-control-radius);
+  background: #f8fafc; color: #405166;
+  font-size: 12px; line-height: 16px; font-weight: 500;
+  box-shadow: 0 1px 2px rgba(31, 52, 68, .035);
+}
+.toolbar-left > button:hover:not(:disabled),
+.toolbar-left > .file-menu-anchor > .file-menu-trigger:hover:not(:disabled),
+.toolbar-left > .file-menu-anchor > .file-menu-trigger.active {
+  border-color: #b9d1e8; background: #edf5fd; color: #245e96;
+}
+.toolbar-left > button:focus-visible,
+.toolbar-left > .file-menu-anchor > .file-menu-trigger:focus-visible,
+.toolbar .sim-split-trigger button:focus-visible,
+.toolbar .sim-metric-button:focus-visible {
+  outline: 2px solid #60a5fa; outline-offset: 2px;
+}
+
 .file-menu-anchor { position: relative; }
 .file-menu-section-title { padding: 5px 12px 3px; color: var(--text-muted); font-size: 10px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; }
 .toolbar .file-menu-dropdown .recent-project-item { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 280px; }
 .toolbar .file-menu-dropdown .recent-project-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar .file-menu-dropdown .recent-project-item small { overflow: hidden; color: var(--text-muted); font-size: 9px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
-.toolbar .file-menu-trigger { min-width: 82px; }
+.toolbar .file-menu-trigger { min-width: 72px; }
 .toolbar .file-menu-trigger.active {
   color: var(--accent);
   border-color: var(--accent);
@@ -1929,7 +1953,9 @@ html, body, #root {
 
 .sim-menu-wrap {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .sim-split-trigger {
@@ -1938,6 +1964,13 @@ html, body, #root {
 }
 
 .toolbar .sim-split-trigger button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--toolbar-control-height);
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 16px;
   border-radius: 0;
   background: var(--success);
   border-color: var(--success);
@@ -1945,16 +1978,18 @@ html, body, #root {
 }
 
 .toolbar .sim-split-trigger .sim-primary-action {
-  min-width: 70px;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  min-width: 60px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: var(--toolbar-control-radius) 0 0 var(--toolbar-control-radius);
   border-right-color: rgba(255, 255, 255, 0.35);
 }
 
 .toolbar .sim-split-trigger .sim-dropdown-toggle {
-  width: 28px;
-  padding-left: 7px;
-  padding-right: 7px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  width: 22px;
+  padding-left: 4px;
+  padding-right: 4px;
+  border-radius: 0 var(--toolbar-control-radius) var(--toolbar-control-radius) 0;
 }
 
 .toolbar .sim-split-trigger.active button {
@@ -2201,34 +2236,53 @@ html, body, #root {
 .sim-script-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 10px; font-family: monospace; }
 .sim-script-state { color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
 .sim-script-card.selected .sim-script-icon { background: #dcfce7; color: #16a34a; }
-.sim-selected-target { display: inline-block; max-width: 150px; margin-left: 6px; padding: 7px 10px; border: 1px solid #bfdbfe; border-radius: var(--radius-sm); background: #eff6ff; color: #2563eb; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
-.sim-connection-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 2px; padding: 7px 9px; border: 1px solid #d8e1e8; border-radius: var(--radius-sm); background: #f8fafc; color: #64748b; font-size: 11px; white-space: nowrap; vertical-align: middle; }
-.sim-connection-chip.online { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
-.sim-connection-chip.syncing { border-color: #fde68a; background: #fffbeb; color: #b45309; }
-.sim-connection-dot { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; }
-.sim-connection-chip.online .sim-connection-dot { background: #22c55e; box-shadow: 0 0 5px #86efac; }
-.sim-connection-chip.syncing .sim-connection-dot { background: #f59e0b; box-shadow: 0 0 5px #fcd34d; }
+/* Compact simulator status: the target and connection share one marker. */
+.sim-target-status { display:inline-flex; align-items:center; gap:5px; height:var(--toolbar-control-height); max-width:156px; padding:0 8px; border:1px solid #d8e1e8; border-radius:var(--toolbar-control-radius); background:#f8fafc; color:#64748b; font-size:11px; line-height:16px; white-space:nowrap; }
+.sim-target-status.online { border-color:#bbf7d0; background:#f0fdf4; color:#15803d; }
+.sim-target-status.syncing { border-color:#fde68a; background:#fffbeb; color:#b45309; }
+.sim-selected-target { display:inline-block; min-width:0; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#2563eb; font-size:11px; }
+.sim-connection-dot { flex:none; width:6px; height:6px; border-radius:50%; background:#94a3b8; }
+.sim-target-status.online .sim-connection-dot { background:#22c55e; }
+.sim-target-status.syncing .sim-connection-dot { background:#f59e0b; }
+.sim-connection-label { overflow:hidden; text-overflow:ellipsis; }
+.sim-runtime-metrics { display:inline-flex; align-items:center; gap:1px; height:var(--toolbar-control-height); padding:2px; border:1px solid #d8e1e8; border-radius:var(--toolbar-control-radius); background:#f8fafc; color:#475569; font-size:11px; line-height:16px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.toolbar .sim-runtime-metrics .sim-metric-button { display:inline-flex; align-items:center; justify-content:center; gap:3px; height:100%; padding:0 5px; border:0; border-radius:4px; background:transparent; color:inherit; font-size:11px; line-height:16px; font-weight:400; }
+.toolbar .sim-runtime-metrics .sim-metric-button:hover, .toolbar .sim-runtime-metrics .sim-metric-button:focus-visible { background:#e5edf5; color:#1d4ed8; }
+.sim-metric-memory,.sim-metric-loading { display:inline-flex; align-items:center; gap:3px; height:100%; padding:0 5px; }
+.sim-metric-label { color:#64748b; }
+.sim-metric-button small { color:#64748b; font-size:11px; }
 .nsh-console-overlay{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(15,23,42,.38)}
 .nsh-console{position:relative;width:min(760px,calc(100vw - 36px));height:min(520px,calc(100vh - 72px));min-width:420px;min-height:260px;max-width:calc(100vw - 18px);max-height:calc(100vh - 18px);display:flex;flex-direction:column;resize:both;overflow:hidden;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 24px 64px rgba(0,0,0,.35);color:#d1fae5}
 .nsh-console header{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#1f2937;border-bottom:1px solid #334155;user-select:none;cursor:move}.nsh-console header>div:first-child{display:grid;gap:2px}.nsh-console header small{color:#94a3b8;font-size:11px}.nsh-console header button{border:0;border-radius:5px;padding:6px 10px;background:#334155;color:#e2e8f0;cursor:pointer}.nsh-console-actions{display:flex;gap:8px}.nsh-console-actions button:first-child{background:#475569}
 .nsh-terminal{flex:1;min-height:0;overflow:auto;padding:14px;background:#111827;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d1fae5;cursor:text}.nsh-terminal pre{margin:0;white-space:pre-wrap;font:inherit;color:inherit;user-select:text;-webkit-user-select:text}.nsh-prompt{display:flex;align-items:center;min-height:20px;gap:8px;white-space:pre}.nsh-prompt span{color:#86efac;font-weight:700}.nsh-prompt input{flex:1;min-width:10px;border:0;outline:0;padding:0;background:transparent;color:#f8fafc;font:inherit;caret-color:#f8fafc}.nsh-prompt input:disabled{opacity:.65}.nsh-running{color:#94a3b8;font-size:11px}
 .nsh-resize-corner{position:absolute;right:4px;bottom:4px;width:12px;height:12px;pointer-events:none;opacity:.8;background:repeating-linear-gradient(135deg,transparent 0 3px,#94a3b8 3px 4px)}
-.sim-connection-cpu { padding: 0 0 0 5px; border: 0; border-left: 1px solid currentColor; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: .9; }
-.sim-connection-memory { padding-left: 5px; border-left: 1px solid currentColor; font: inherit; opacity: .9; }
-.sim-connection-fdm { margin:-3px -3px -3px 0; padding:3px 5px 3px 7px; border:0; border-left:1px solid currentColor; border-radius:4px; background:transparent; color:inherit; font:inherit; opacity:.95; cursor:pointer; user-select:none; }.sim-connection-fdm:hover,.sim-connection-fdm:focus-visible{background:rgba(16,185,129,.12);outline:none}.sim-connection-fdm small{font-size:11px;font-weight:700}
-.sim-connection-fdm-loading { cursor:default; }
-.sim-connection-fdm-loading:hover { background:transparent; }
-.sim-cpu-popup { position: absolute; z-index: 850; top: calc(100% + 7px); right: 0; width: 264px; padding: 10px 11px 9px; border: 1px solid #bfdbfe; border-radius: 9px; background: rgba(255,255,255,.97); box-shadow: 0 10px 28px rgba(15,23,42,.2); color: #334155; }
-.sim-cpu-popup-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 11px; }.sim-cpu-popup-head span { color: #94a3b8; font: 10px monospace; }
-.sim-cpu-chart { display: block; width: 100%; height: 92px; border-radius: 5px; background: #f8fafc; overflow: visible; }
-.sim-cpu-grid { stroke: #e2e8f0; stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
-.sim-cpu-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }.sim-cpu-line.core-0 { stroke: #0ea5e9; }.sim-cpu-line.core-1 { stroke: #8b5cf6; }
-.sim-cpu-legend { display: flex; gap: 14px; margin-top: 7px; font: 10px monospace; }.sim-cpu-legend .core-0 { color: #0284c7; }.sim-cpu-legend .core-1 { color: #7c3aed; }
-.sim-fdm-popup { position: absolute; z-index: 851; top: calc(100% + 7px); right: 0; width: 264px; padding: 10px 11px 9px; border: 1px solid #a7f3d0; border-radius: 9px; background: rgba(255,255,255,.98); box-shadow: 0 10px 28px rgba(15,23,42,.2); color: #334155; }
-.sim-fdm-window-picker { display:flex; gap:5px; margin-bottom:7px; }.sim-fdm-window-picker button { flex:1; padding:3px 0; border:1px solid #d1fae5; border-radius:4px; background:#f0fdf4; color:#047857; font:10px monospace; cursor:pointer; }.sim-fdm-window-picker button.active { border-color:#10b981; background:#10b981; color:#fff; }
-.sim-fdm-line { fill:none; stroke:#10b981; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
-.sim-fdm-chart-scale { display:flex; justify-content:space-between; margin-top:4px; color:#94a3b8; font:9px monospace; }
-.sim-fdm-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin-top:7px; padding-top:7px; border-top:1px solid #d1fae5; }.sim-fdm-stats span{display:flex; flex-direction:column; gap:2px; color:#64748b; font-size:9px; text-align:center}.sim-fdm-stats b{color:#047857; font:10px monospace}
+/* CPU and FDM curves use one time axis, with separate labeled unit axes. */
+.sim-performance-popup { position:absolute; z-index:850; top:calc(100% + 7px); right:0; width:min(420px,calc(100vw - 24px)); padding:10px 12px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; box-shadow:0 10px 28px rgba(15,23,42,.2); color:#334155; }
+.sim-performance-head { display:flex; align-items:center; gap:7px; font-size:11px; }
+.sim-performance-head b { font-size:12px; }
+.sim-performance-head>span { color:#94a3b8; }
+.sim-performance-window { display:flex; gap:2px; margin-left:auto; }
+.toolbar .sim-performance-window button,.toolbar .sim-performance-close { padding:3px 6px; border:0; background:transparent; color:#64748b; font-size:11px; }
+.toolbar .sim-performance-window button.active { background:#e5edf5; color:#2563eb; }
+.toolbar .sim-performance-close { font-size:17px; line-height:1; }
+.sim-performance-legend { display:flex; flex-wrap:wrap; gap:4px 12px; margin:6px 0 3px; font-size:10px; }
+.toolbar .sim-performance-legend .sim-performance-series { display:inline-flex; align-items:center; gap:4px; padding:3px 2px; border:0; border-radius:3px; background:transparent; color:var(--series-color); font:inherit; white-space:nowrap; cursor:pointer; }
+.toolbar .sim-performance-legend .sim-performance-series:hover { background:#f1f5f9; color:var(--series-color); }
+.toolbar .sim-performance-legend .sim-performance-series:focus-visible { outline:2px solid #60a5fa; outline-offset:2px; }
+.toolbar .sim-performance-legend .sim-performance-series[aria-pressed="false"] { color:#94a3b8; text-decoration:line-through; }
+.sim-performance-series b { font-weight:500; }
+.sim-performance-series i { width:14px; border-top:2px solid currentColor; }
+.sim-performance-series.core-0 { --series-color:#0284c7; }.sim-performance-series.core-1 { --series-color:#7c3aed; }
+.sim-performance-series.fdm-mean { --series-color:#059669; }.sim-performance-series.fdm-peak { --series-color:#b45309; }
+.sim-performance-series.fdm-peak i { border-top-style:dashed; }
+.sim-performance-chart { display:block; width:100%; height:152px; overflow:visible; background:#f8fafc; border-radius:4px; }
+.sim-performance-chart text { fill:#64748b; font-size:9px; font-family:monospace; }
+.sim-performance-grid { stroke:#e2e8f0; stroke-width:1; stroke-dasharray:3 3; vector-effect:non-scaling-stroke; }
+.sim-performance-line { fill:none; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.sim-performance-line.core-0 { stroke:#0ea5e9; }.sim-performance-line.core-1 { stroke:#8b5cf6; }
+.sim-performance-line.fdm-mean { stroke:#10b981; }.sim-performance-line.fdm-peak { stroke:#f59e0b; stroke-dasharray:4 3; }
+.sim-performance-stats { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px; margin-top:7px; padding-top:7px; border-top:1px solid #e2e8f0; color:#64748b; font-size:10px; }
+.sim-performance-stats b { color:#334155; font-weight:500; font-variant-numeric:tabular-nums; }
 
 /* Simulation configuration */
 .sim-config-overlay{position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.42);backdrop-filter:blur(2px)}
@@ -2241,6 +2295,7 @@ html, body, #root {
 .sim-config-dialog>header button:disabled,.simulator-version-card>button:disabled,.sim-config-layout nav button:disabled{cursor:not-allowed;opacity:.5}
 .sim-config-layout{display:grid;grid-template-columns:170px 1fr;flex:1;min-height:0}.sim-config-layout nav{display:flex;flex-direction:column;gap:4px;padding:12px;border-right:1px solid #e2e8f0;background:#f8fafc}.sim-config-layout nav button{padding:9px 11px;border:0;border-radius:6px;background:transparent;color:#475569;text-align:left;font-size:12px;cursor:pointer}.sim-config-layout nav button:hover{background:#e2e8f0}.sim-config-layout nav button.active{background:#2563eb;color:#fff;font-weight:700}
 .sim-config-layout main{overflow:auto;padding:20px 24px}.sim-config-layout section h3{margin:0 0 5px;font-size:16px}.sim-config-layout section>p{margin:0 0 16px;color:#94a3b8;font-size:11px}.sim-config-grid{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:13px 20px;margin-top:16px}.sim-config-field{display:flex;flex-direction:column;gap:5px}.sim-config-field>span{color:#64748b;font-size:11px;font-weight:600}.sim-config-field>div{display:flex;align-items:center}.sim-config-field input,.sim-config-field select,.sim-config-field>select{width:100%;height:34px;padding:6px 9px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;color:#1e293b;font-size:12px;outline:none}.sim-config-field input:focus,.sim-config-field select:focus{border-color:#3b82f6;background:#fff;box-shadow:0 0 0 2px #dbeafe}.sim-config-field em{min-width:42px;margin-left:-43px;color:#94a3b8;font:10px monospace;pointer-events:none}.sim-config-check{display:flex;align-items:center;gap:7px;min-height:34px;color:#475569;font-size:12px}.sim-config-check input{accent-color:#2563eb}.sim-config-readonly{margin-top:16px;padding:9px 11px;border-radius:6px;background:#f1f5f9;color:#64748b;font:11px monospace}
+.sim-config-plotjuggler{display:flex;flex-direction:column;gap:7px;margin-top:22px;padding-top:16px;border-top:1px solid #e2e8f0}.sim-config-plotjuggler>label{color:#334155;font-size:12px;font-weight:700}.sim-config-plotjuggler>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sim-config-plotjuggler input{width:90px;height:34px;padding:6px 9px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;color:#1e293b;font-size:12px}.sim-config-plotjuggler button{height:34px;padding:0 12px;border:1px solid #2563eb;border-radius:6px;background:#2563eb;color:#fff;font-size:12px;cursor:pointer}.sim-config-plotjuggler button:disabled{opacity:.5;cursor:not-allowed}.sim-config-plotjuggler>div>span,.sim-config-plotjuggler small,.sim-config-plotjuggler p{color:#64748b;font-size:11px}.sim-config-plotjuggler p{margin:0;line-height:1.5}
 .sim-config-dialog>footer{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;border-top:1px solid #e2e8f0;background:#f8fafc}.sim-config-dialog>footer>span{color:#64748b;font-size:11px}.sim-config-dialog>footer>div{display:flex;gap:8px}.sim-config-dialog>footer button{padding:7px 13px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#475569;cursor:pointer}.sim-config-dialog>footer button.primary{border-color:#2563eb;background:#2563eb;color:#fff}.sim-config-dialog>footer button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:700px){.sim-config-layout{grid-template-columns:130px 1fr}.sim-config-grid{grid-template-columns:1fr}.sim-config-layout main{padding:16px}}
 

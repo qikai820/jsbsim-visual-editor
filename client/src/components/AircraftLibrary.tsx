@@ -67,7 +67,10 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
       } catch (err: any) {
         if (!active) return;
         console.error(err);
-        setLoadError(err?.message || String(err) || '无法读取 NuttX 模型库');
+        const message = err?.message || String(err) || '无法读取 NuttX 模型库';
+        setLoadError(message.includes('USB file response timed out')
+          ? `${message}。可在“本地配置 → 仿真机通讯”切换到“网络”，然后重新打开模型库。`
+          : message);
         setLoading(false);
       }
     })();

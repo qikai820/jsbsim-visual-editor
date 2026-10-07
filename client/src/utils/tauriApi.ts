@@ -5,6 +5,8 @@ export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in
 
 const REMOTE_UPLOAD_KEY = 'jsbsim-remote-upload-enabled';
 const SIMULATOR_TRANSPORT_KEY = 'jsbsim-simulator-transport';
+const PLOTJUGGLER_RATE_KEY = 'jsbsim-plotjuggler-rate-hz-v2';
+const LEGACY_PLOTJUGGLER_RATE_KEY = 'jsbsim-plotjuggler-rate-hz';
 
 export type SimulatorTransportMode = 'auto' | 'network' | 'usb';
 
@@ -54,6 +56,38 @@ export async function initializeSimulatorTransport(): Promise<void> {
 }
 
 // ── Typed API functions ─────────────────────────────────────────────────────
+
+export interface PlotJugglerStatus {
+  running: boolean;
+  ready: boolean;
+  sent: number;
+  received: number;
+  dropped: number;
+  lastPacketAgeMs: number | null;
+  error: string | null;
+  logPath: string | null;
+  rateHz: number;
+}
+export async function startPlotJuggler(): Promise<PlotJugglerStatus> { return call('plotjuggler_start'); }
+export function getPlotJugglerRate(): number {
+  const saved = localStorage.getItem(PLOTJUGGLER_RATE_KEY);
+  if (saved !== null) {
+    const value = Number(saved);
+    return Number.isInteger(value) && value >= 0 && value <= 200 ? value : 50;
+  }
+  // Older versions saved the former 0 Hz default even without user input.
+  const previous = Number(localStorage.getItem(LEGACY_PLOTJUGGLER_RATE_KEY));
+  return Number.isInteger(previous) && previous > 0 && previous <= 200 ? previous : 50;
+}
+export async function setPlotJugglerRate(rateHz: number): Promise<PlotJugglerStatus> {
+  if (!Number.isInteger(rateHz) || rateHz < 0 || rateHz > 200) {
+    throw new Error('PlotJuggler 发送频率须为 0～200 Hz 的整数。');
+  }
+  const status = await call('plotjuggler_set_rate', { rateHz });
+  localStorage.setItem(PLOTJUGGLER_RATE_KEY, String(rateHz));
+  localStorage.removeItem(LEGACY_PLOTJUGGLER_RATE_KEY);
+  return status;
+}
 
 export interface ReferenceFile {
   name: string;

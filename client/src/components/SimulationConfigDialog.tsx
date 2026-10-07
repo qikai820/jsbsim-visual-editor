@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, SimulatorVersion, type FirmwareSelection } from '../utils/tauriApi';
+import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, SimulatorVersion, type FirmwareSelection } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 
 type Tab = '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
@@ -55,6 +55,10 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   const [baseline, setBaseline] = useState('');
   const [status, setStatus] = useState(tr('正在读取仿真机配置…', 'Reading simulator configuration…'));
   const [saving, setSaving] = useState(false);
+  const [plotRateInput, setPlotRateInput] = useState(() => String(getPlotJugglerRate()));
+  const [plotRateApplied, setPlotRateApplied] = useState(() => getPlotJugglerRate());
+  const [plotRateSaving, setPlotRateSaving] = useState(false);
+  const [plotRateStatus, setPlotRateStatus] = useState('');
   const [simulatorVersion, setSimulatorVersion] = useState<SimulatorVersion | null>(null);
   const [versionStatus, setVersionStatus] = useState(tr('正在读取仿真机版本…', 'Reading simulator version…'));
   const [showVersionManager, setShowVersionManager] = useState(false);
@@ -211,6 +215,24 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     setSaving(false);
   };
 
+  const applyPlotRate = async () => {
+    const rate = Number(plotRateInput);
+    if (plotRateInput.trim() === '' || !Number.isInteger(rate) || rate < 0 || rate > 200) {
+      setPlotRateStatus(tr('请输入 0～200 的整数。', 'Enter an integer from 0 to 200.'));
+      return;
+    }
+    setPlotRateSaving(true);
+    try {
+      await setPlotJugglerRate(rate);
+      setPlotRateApplied(rate);
+      setPlotRateStatus(tr('已应用并保存到本机。', 'Applied and saved locally.'));
+    } catch (error) {
+      setPlotRateStatus(`${tr('应用失败', 'Failed to apply')}: ${String(error)}`);
+    } finally {
+      setPlotRateSaving(false);
+    }
+  };
+
   return <div className="sim-config-overlay" onMouseDown={e => { if (e.target === e.currentTarget && !firmwareUpdating) onClose(); }}>
     <div className="sim-config-dialog">
       <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><span>{tr('模型', 'Model')}: {safeModel}</span></div><button disabled={firmwareUpdating} onClick={onClose}>×</button></header>
@@ -232,6 +254,16 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
             <NumberField label={tr('最大追赶迭代次数','Maximum catch-up iterations')} value={config.runtime.catchupIterations} min={1} onChange={(v:any)=>set('runtime','catchupIterations',v)} />
             <NumberField label={tr('实时倍率','Real-time factor')} value={config.runtime.realtimeFactor} step={0.1} min={0.1} unit="×" onChange={(v:any)=>set('runtime','realtimeFactor',v)} />
             <SelectField label={tr('脚本结束行为','End-of-script action')} value={config.runtime.endBehavior} onChange={(v:any)=>set('runtime','endBehavior',v)}><option value="stop">{tr('停止','Stop')}</option><option value="pause">{tr('暂停','Pause')}</option><option value="loop">{tr('循环','Loop')}</option></SelectField>
+          </div><div className="sim-config-plotjuggler">
+            <label htmlFor="sim-config-plot-rate">{tr('PlotJuggler 发送频率', 'PlotJuggler send rate')}</label>
+            <div><input id="sim-config-plot-rate" type="number" min="0" max="200" step="1" value={plotRateInput}
+              onChange={event => { setPlotRateInput(event.target.value); setPlotRateStatus(''); }}
+              onKeyDown={event => { if (event.key === 'Enter') void applyPlotRate(); }} />
+              <span>Hz</span><button type="button" disabled={plotRateSaving} onClick={() => void applyPlotRate()}>{tr('应用', 'Apply')}</button>
+              <small>{tr(`当前：${plotRateApplied === 0 ? '逐包发送' : `${plotRateApplied} Hz`}`, `Current: ${plotRateApplied === 0 ? 'every packet' : `${plotRateApplied} Hz`}`)}</small>
+            </div>
+            <p>{tr('0 为逐包发送；1～200 Hz 为上位机转发上限。本机设置立即生效，无需保存到仿真机。', '0 sends every packet; 1–200 Hz caps forwarding from this computer. Applies immediately and does not require saving to the simulator.')}</p>
+            {plotRateStatus && <small role="status">{plotRateStatus}</small>}
           </div></section>}
           {tab === '数值积分' && <section><h3>{tr('数值积分','Numerical Integration')}</h3><p>{tr('修改后需重新加载模型。','Reload the model to apply changes.')}</p><div className="sim-config-grid">
             {([['rotationalRate',tr('旋转角速度','Rotational rate')],['translationalRate',tr('平移速度','Translational rate')],['rotationalPosition',tr('旋转姿态','Rotational position')],['translationalPosition',tr('平移位置','Translational position')]] as const).map(([key,label]) => <SelectField key={key} label={label} value={String(config.integrators[key])} onChange={(v:any)=>set('integrators',key,Number(v))}>{integratorOptions(isZh)}</SelectField>)}

@@ -21,6 +21,7 @@ static FTP_LOCK: Mutex<()> = Mutex::new(());
 struct UsbProbe {
     usable: bool,
     checked: Option<Instant>,
+    file_unhealthy_until: Option<Instant>,
 }
 
 static USB_PROBE: OnceLock<Mutex<UsbProbe>> = OnceLock::new();
@@ -29,10 +30,14 @@ fn auto_usb_available() -> bool {
     let probe = USB_PROBE.get_or_init(|| Mutex::new(UsbProbe {
         usable: false,
         checked: None,
+        file_unhealthy_until: None,
     }));
     let Ok(mut probe) = probe.lock() else {
         return false;
     };
+    if probe.file_unhealthy_until.is_some_and(|until| Instant::now() < until) {
+        return false;
+    }
     if probe.checked.is_some_and(|checked| checked.elapsed() < Duration::from_secs(2)) {
         return probe.usable;
     }
@@ -43,6 +48,24 @@ fn auto_usb_available() -> bool {
     probe.usable = usb_file::available_quick();
     probe.checked = Some(Instant::now());
     probe.usable
+}
+
+fn usb_file_transport_error(error: &str) -> bool {
+    error.contains("timed out") || error.contains("USB bulk read failed") ||
+        error.contains("USB bulk write failed") || error.contains("cannot claim USB interface") ||
+        error.contains("USB device ") || error.contains("cannot initialize libusb")
+}
+
+fn mark_auto_usb_file_unhealthy() {
+    if transport::mode() != TransportMode::Auto { return; }
+    let probe = USB_PROBE.get_or_init(|| Mutex::new(UsbProbe {
+        usable: false, checked: None, file_unhealthy_until: None,
+    }));
+    if let Ok(mut probe) = probe.lock() {
+        probe.usable = false;
+        probe.checked = Some(Instant::now());
+        probe.file_unhealthy_until = Some(Instant::now() + Duration::from_secs(120));
+    }
 }
 
 /* In automatic mode, prefer USB only when the complete protocol responds.
@@ -211,12 +234,28 @@ fn verify_uploaded_file(auth: &str, path: &str, expected: &[u8]) -> Result<(), S
 fn list_directory(path: &str) -> Result<Vec<String>, String> {
     if use_usb() {
         let built_in = usb_file::list(&format!("romfs/jsbsim/{path}"));
+        if let Err(error) = &built_in {
+            if transport::mode() == TransportMode::Auto && usb_file_transport_error(error) {
+                mark_auto_usb_file_unhealthy();
+                return list_ftp_directory(path)
+                    .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"));
+            }
+        }
         let user = usb_file::list(&format!("jsbsim/{path}"));
         let mut entries = match (built_in, user) {
             (Ok(mut built_in), Ok(user)) => { built_in.extend(user); built_in },
             (Ok(built_in), Err(_)) => built_in,
             (Err(_), Ok(user)) => user,
-            (Err(_), Err(error)) => return Err(error),
+            (Err(built_in_error), Err(error)) => {
+                if transport::mode() == TransportMode::Auto {
+                    if usb_file_transport_error(&built_in_error) || usb_file_transport_error(&error) {
+                        mark_auto_usb_file_unhealthy();
+                    }
+                    return list_ftp_directory(path)
+                        .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"));
+                }
+                return Err(error);
+            },
         }.into_iter()
             .filter(|entry| path != "aircraft" || entry.directory)
             .map(|entry| entry.name)
@@ -226,6 +265,10 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
         entries.dedup();
         return Ok(entries);
     }
+    list_ftp_directory(path)
+}
+
+fn list_ftp_directory(path: &str) -> Result<Vec<String>, String> {
     let url = format!("{}/jsbsim/{}/", endpoint(), path);
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
@@ -233,6 +276,7 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
         .lines()
         .map(|line| line.trim().trim_end_matches('/'))
         .filter(|name| safe_component(name).is_ok())
+        .filter(|name| path != "aircraft" || !name.to_ascii_lowercase().ends_with(".xml"))
         .map(str::to_string)
         .collect();
     entries.sort();
@@ -243,11 +287,35 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
 fn read_usb_library(path: &str, built_in_first: bool) -> Result<String, String> {
     let built_in = format!("romfs/jsbsim/{path}");
     let user = format!("jsbsim/{path}");
-    if built_in_first {
-        usb_file::read_text(&built_in).or_else(|_| usb_file::read_text(&user))
-    } else {
-        usb_file::read_text(&user).or_else(|_| usb_file::read_text(&built_in))
+    let (first, second) = if built_in_first { (&built_in, &user) } else { (&user, &built_in) };
+    match usb_file::read_text(first) {
+        Ok(content) => Ok(content),
+        Err(first_error) => {
+            if transport::mode() == TransportMode::Auto && usb_file_transport_error(&first_error) {
+                mark_auto_usb_file_unhealthy();
+                return read_ftp_library(path)
+                    .map_err(|ftp_error| format!("{first_error}; FTP fallback failed: {ftp_error}"));
+            }
+            match usb_file::read_text(second) {
+            Ok(content) => Ok(content),
+            Err(error) if transport::mode() == TransportMode::Auto => {
+                if usb_file_transport_error(&first_error) || usb_file_transport_error(&error) {
+                    mark_auto_usb_file_unhealthy();
+                }
+                read_ftp_library(path)
+                    .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"))
+            }
+            Err(error) => Err(error),
+            }
+        },
     }
+}
+
+fn read_ftp_library(path: &str) -> Result<String, String> {
+    let url = format!("{}/jsbsim/{}", endpoint(), path);
+    let auth = credentials();
+    String::from_utf8(curl_output(&["--user", &auth, &url])?)
+        .map_err(|error| format!("remote XML is not UTF-8: {error}"))
 }
 
 fn dsdl_root() -> String {
@@ -447,10 +515,7 @@ pub fn download_path(path: &str) -> Result<String, String> {
     if use_usb() {
         return read_usb_library(path, false);
     }
-    let url = format!("{}/jsbsim/{}", endpoint(), path);
-    let auth = credentials();
-    String::from_utf8(curl_output(&["--user", &auth, &url])?)
-        .map_err(|e| format!("remote XML is not UTF-8: {e}"))
+    read_ftp_library(path)
 }
 
 pub fn download_simulator_version() -> Result<String, String> {

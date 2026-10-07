@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLanguage } from '../i18n';
 import {
   isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
@@ -72,6 +72,11 @@ function browserFolderFiles(files: FileList, directory: string) {
 type Clipboard = { source: string; move: boolean };
 type ContextMenu = { x: number; y: number; entry: UsbFileEntry | null };
 type BuiltInEditorState = UsbBuiltInDocument & { original: string };
+type WindowRect = { left: number; top: number; width: number; height: number };
+type WindowGesture = WindowRect & { pointerId: number; x: number; y: number; mode: 'drag' | 'resize' };
+const WINDOW_MARGIN = 8;
+const MIN_WINDOW_WIDTH = 520;
+const MIN_WINDOW_HEIGHT = 320;
 
 export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const { isZh } = useLanguage();
@@ -94,6 +99,9 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [windowRect, setWindowRect] = useState<WindowRect | null>(null);
+  const windowRef = useRef<HTMLDivElement>(null);
+  const windowGesture = useRef<WindowGesture | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderUploadInput = useRef<HTMLInputElement>(null);
   const resolveFolderConflict = useRef<((policy: FolderConflictPolicy | null) => void) | null>(null);
@@ -101,6 +109,54 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const refreshNotice = useRef('');
   const editorRevision = useRef(0);
   const directory = [volume, ...segments].join('/');
+  const beginWindowGesture = (event: ReactPointerEvent<HTMLElement>, mode: WindowGesture['mode']) => {
+    if (event.button !== 0 || (mode === 'drag' && (event.target as HTMLElement).closest('button, input, select, textarea'))) return;
+    const rect = windowRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    event.stopPropagation();
+    windowGesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      left: rect.left, top: rect.top, width: rect.width, height: rect.height, mode };
+    setWindowRect({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const updateWindowGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = windowGesture.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    const maxWidth = Math.max(1, window.innerWidth - WINDOW_MARGIN * 2);
+    const maxHeight = Math.max(1, window.innerHeight - WINDOW_MARGIN * 2);
+    if (start.mode === 'drag') {
+      const width = Math.min(start.width, maxWidth);
+      const height = Math.min(start.height, maxHeight);
+      setWindowRect({ width, height,
+        left: Math.max(WINDOW_MARGIN, Math.min(start.left + event.clientX - start.x, window.innerWidth - width - WINDOW_MARGIN)),
+        top: Math.max(WINDOW_MARGIN, Math.min(start.top + event.clientY - start.y, window.innerHeight - height - WINDOW_MARGIN)) });
+    } else {
+      const maxAllowedWidth = Math.max(1, window.innerWidth - start.left - WINDOW_MARGIN);
+      const maxAllowedHeight = Math.max(1, window.innerHeight - start.top - WINDOW_MARGIN);
+      setWindowRect({ left: start.left, top: start.top,
+        width: Math.max(Math.min(MIN_WINDOW_WIDTH, maxAllowedWidth), Math.min(start.width + event.clientX - start.x, maxAllowedWidth)),
+        height: Math.max(Math.min(MIN_WINDOW_HEIGHT, maxAllowedHeight), Math.min(start.height + event.clientY - start.y, maxAllowedHeight)) });
+    }
+  };
+  const endWindowGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    if (windowGesture.current?.pointerId !== event.pointerId) return;
+    windowGesture.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  useEffect(() => {
+    const keepWindowVisible = () => setWindowRect(current => {
+      if (!current) return current;
+      const width = Math.min(current.width, Math.max(1, window.innerWidth - WINDOW_MARGIN * 2));
+      const height = Math.min(current.height, Math.max(1, window.innerHeight - WINDOW_MARGIN * 2));
+      return { width, height,
+        left: Math.max(WINDOW_MARGIN, Math.min(current.left, window.innerWidth - width - WINDOW_MARGIN)),
+        top: Math.max(WINDOW_MARGIN, Math.min(current.top, window.innerHeight - height - WINDOW_MARGIN)) };
+    });
+    window.addEventListener('resize', keepWindowVisible);
+    return () => window.removeEventListener('resize', keepWindowVisible);
+  }, []);
   useEffect(() => { setRenameName(null); setContextMenu(null); }, [directory]);
   useEffect(() => {
     if (!contextMenu) return;
@@ -529,9 +585,9 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   };
 
   return <div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
-    <div className="usb-fm" role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
-    <header className="usb-fm-header">
-      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 data' : 'Manage SD and data over USB'}</small></div>
+    <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
+    <header className="usb-fm-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
+      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 data · 拖动标题栏移动，右下角缩放' : 'Manage SD and data over USB · Drag title to move, corner to resize'}</small></div>
       <button onClick={closeManager} disabled={busy || savingBuiltIn} aria-label={isZh ? '关闭' : 'Close'}>×</button>
     </header>
     <div className="usb-fm-volumes">
@@ -621,7 +677,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       </div>
     </div>}
     {builtInEditor && <div className="usb-fm-builtin" role="dialog" aria-modal="true" aria-label={isZh ? '内置文件编辑器' : 'Built-in file editor'}>
-      <header className="usb-fm-builtin-header">
+      <header className="usb-fm-builtin-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
         <div><strong>{builtInEditor.path}</strong><small>{isZh ? '内置文本编辑器 · CodeMirror' : 'Built-in text editor · CodeMirror'}</small></div>
         <button onClick={closeBuiltIn} disabled={savingBuiltIn} aria-label={isZh ? '关闭编辑器' : 'Close editor'}>×</button>
       </header>
@@ -653,6 +709,9 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>}
+    <div className="usb-fm-resize-handle" role="separator" aria-label={isZh ? '拖动调整文件管理窗口大小' : 'Drag to resize file manager'}
+      onPointerDown={event => beginWindowGesture(event, 'resize')} onPointerMove={updateWindowGesture}
+      onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture} />
     </div>
   </div>;
 }
