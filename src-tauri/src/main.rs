@@ -735,6 +735,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "cpuCores": cpu_cores,
             "healthAgeMs": health_age_ms,
             "memory": memory,
+            "network": client.network_counters(),
             "fdmRunMs": fdm_run_ms,
             "fdmWindow": client.fdm_window_stats(),
             "simulationDt": simulation_dt,
@@ -994,6 +995,14 @@ async fn usb_file_write(path: String, bytes: Vec<u8>) -> Result<serde_json::Valu
 async fn usb_file_delete(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
         usb_file::delete(&path)?;
+        Ok(serde_json::json!({ "path": path, "deleted": true, "source": "usb-bulk" }))
+    }).await
+}
+
+#[tauri::command]
+async fn usb_file_delete_directory(path: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        usb_file::delete_directory_tree(&path)?;
         Ok(serde_json::json!({ "path": path, "deleted": true, "source": "usb-bulk" }))
     }).await
 }
@@ -1412,6 +1421,7 @@ fn main() {
             usb_file_read,
             usb_file_write,
             usb_file_delete,
+            usb_file_delete_directory,
             usb_file_mkdir,
             usb_file_transfer,
             usb_file_download,

@@ -29,7 +29,7 @@ export default function TelemetryRecorder({ open, onClose, onRecordingChange }: 
   if (!open) return null;
   return <div className="telemetry-record-panel">
       <div className="telemetry-record-heading"><b>本机遥测记录</b><button type="button" aria-label="关闭遥测记录面板" onClick={onClose}>×</button></div>
-      <p>保存每条收到的遥测报文，包含 CPU、FDM、状态和属性数据。断线期间保留记录，重连后继续。</p>
+      <p>保存每条收到的遥测报文，包含 CPU、FDM、状态和属性数据。PlotJuggler 打开或关闭都不影响记录；断线期间保留文件，重连后继续。</p>
       <label>保存目录<input aria-label="遥测保存目录" value={directory} disabled={status.recording || busy}
         placeholder="默认：文档 / JSBSim / Telemetry" onChange={event => setDirectory(event.target.value)} /></label>
       <p>格式：JSONL · 每条报文附接收时间 · 属性保持原始单位</p>

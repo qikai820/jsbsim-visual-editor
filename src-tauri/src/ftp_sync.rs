@@ -722,7 +722,9 @@ pub fn download_script(file: &str) -> Result<String, String> {
     }
 
     if use_usb() {
-        return read_usb_library(&format!("scripts/{file}"), true);
+        // Edits are written to SD. Prefer that copy when a built-in script
+        // has the same name, including the read after an upload.
+        return read_usb_library(&format!("scripts/{file}"), false);
     }
 
     let url = format!("{}/jsbsim/scripts/{}", endpoint(), file);

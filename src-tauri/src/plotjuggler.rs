@@ -4,11 +4,16 @@ use std::fs;
 use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const MAX_RATE_HZ: u16 = 200;
 const DEFAULT_RATE_HZ: u16 = 50;
+const HISTORY_SECONDS: f64 = 300.0;
+const HISTORY_MAX_BYTES: usize = 32 * 1024 * 1024;
+const REPLAY_BATCH_BYTES: usize = 8192;
 
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +48,22 @@ impl Sampler {
         Some(json!({"time": time, "values": std::mem::take(&mut self.pending)}))
     }
 }
+#[derive(Default)]
+struct History {
+    samples: VecDeque<(f64, Vec<u8>)>,
+    bytes: usize,
+    sampler: Sampler,
+}
+impl History {
+    fn push(&mut self, time: f64, bytes: Vec<u8>) {
+        self.bytes += bytes.len();
+        self.samples.push_back((time, bytes));
+        while self.bytes > HISTORY_MAX_BYTES || self.samples.front()
+            .is_some_and(|(oldest, _)| time - oldest > HISTORY_SECONDS) {
+            if let Some((_, old)) = self.samples.pop_front() { self.bytes -= old.len(); }
+        }
+    }
+}
 struct Session {
     child: Child,
     socket: UdpSocket,
@@ -53,17 +74,50 @@ struct Session {
     dropped: u64,
     error: Option<String>,
     last_packet: Option<Instant>,
-    sampler: Sampler,
 }
-pub struct Bridge { session: Mutex<Option<Session>>, rate_hz: Mutex<u16> }
+pub struct Bridge {
+    session: Mutex<Option<Session>>,
+    history: Mutex<History>,
+    started: Instant,
+    rate_hz: Mutex<u16>,
+    queue_dropped: AtomicU64,
+}
 impl Default for Bridge {
     fn default() -> Self {
-        Self { session: Mutex::new(None), rate_hz: Mutex::new(DEFAULT_RATE_HZ) }
+        Self { session: Mutex::new(None), history: Mutex::new(History::default()),
+            started: Instant::now(), rate_hz: Mutex::new(DEFAULT_RATE_HZ),
+            queue_dropped: AtomicU64::new(0) }
     }
 }
 pub fn global() -> &'static Bridge {
     static BRIDGE: OnceLock<Bridge> = OnceLock::new();
     BRIDGE.get_or_init(Bridge::default)
+}
+
+// The recorder runs first on the telemetry receiver. A full or slow plotting
+// queue can lose plot samples, but it can never stall that receiver or its
+// independent JSONL writer.
+pub fn submit(raw: &[u8]) {
+    static QUEUE: OnceLock<Option<mpsc::SyncSender<Vec<u8>>>> = OnceLock::new();
+    let sender = QUEUE.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(4096);
+        std::thread::Builder::new().name("plotjuggler-forward".into())
+            .spawn(move || {
+                for raw in receiver {
+                    if let Ok(payload) = serde_json::from_slice::<Value>(&raw) {
+                        global().forward(&payload);
+                    }
+                }
+            })
+            .ok().map(|_| sender)
+    });
+    if let Some(sender) = sender {
+        if sender.try_send(raw.to_vec()).is_err() {
+            global().queue_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    } else {
+        global().queue_dropped.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 // Only actual values in this packet become samples. Never forward the UI's
@@ -100,6 +154,18 @@ fn packet(payload: &Value, time: f64) -> Option<Value> {
             other => other,
         };
         flatten(path, value, &mut values);
+    }
+    if let Some(top) = payload.get("task_top") {
+        for (source, target) in [
+            ("fdm_run_ms", "fdm/run_ms"),
+            ("fdm_avg_ms", "fdm/average_ms"),
+            ("fdm_max_ms", "fdm/max_ms"),
+            ("fdm_samples", "fdm/samples"),
+        ] {
+            if let Some(value @ Value::Number(_)) = top.get(source) {
+                values.insert(target.into(), value.clone());
+            }
+        }
     }
     if values.is_empty() { None } else { Some(json!({"time": time, "values": values})) }
 }
@@ -153,22 +219,42 @@ impl Bridge {
             .stdin(Stdio::null()).stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log)
             .spawn().map_err(|e| format!("无法启动 PlotJuggler: {e}"))?;
         *guard = Some(Session { child, socket, started: Instant::now(), status_path, log_path,
-            sent: 0, dropped: 0, error: None, last_packet: None, sampler: Sampler::default() });
+            sent: 0, dropped: 0, error: None, last_packet: None });
+        // Wait until the plugin has bound its socket. The plotting worker may
+        // queue live packets meanwhile; the recorder never waits for us.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let status = guard.as_mut().unwrap().status(rate_hz);
+            if status.ready { break; }
+            if !status.running || Instant::now() >= deadline {
+                let session = guard.as_mut().unwrap();
+                let _ = session.child.kill();
+                let _ = session.child.wait();
+                return Err(status.error.unwrap_or_else(|| "PlotJuggler 数据插件未就绪".into()));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Reopen with the same recent time axis and samples, including FDM
+        // metrics received before the window was opened or while it was closed.
+        guard.as_mut().unwrap().replay(&self.history.lock().unwrap());
         Ok(guard.as_mut().unwrap().status(rate_hz))
     }
     pub fn status(&self) -> Status {
         let rate_hz = *self.rate_hz.lock().unwrap();
-        self.session.lock().unwrap().as_mut().map(|session| session.status(rate_hz))
-            .unwrap_or(Status { rate_hz, ..Status::default() })
+        let queued = self.queue_dropped.load(Ordering::Relaxed);
+        self.session.lock().unwrap().as_mut().map(|session| {
+            let mut status = session.status(rate_hz);
+            status.dropped += queued;
+            status
+        }).unwrap_or(Status { rate_hz, dropped: queued, ..Status::default() })
     }
     pub fn set_rate(&self, rate_hz: u16) -> Result<Status, String> {
         if rate_hz > MAX_RATE_HZ { return Err(format!("发送频率须为 0～{MAX_RATE_HZ} Hz，0 表示逐包发送")); }
         let mut current = self.rate_hz.lock().unwrap();
         if *current != rate_hz {
             *current = rate_hz;
-            if let Some(session) = self.session.lock().unwrap().as_mut() {
-                session.sampler = Sampler::default();
-            }
+            let _session = self.session.lock().unwrap();
+            self.history.lock().unwrap().sampler = Sampler::default();
         }
         drop(current);
         Ok(self.status())
@@ -176,20 +262,49 @@ impl Bridge {
     pub fn forward(&self, payload: &Value) {
         let rate_hz = *self.rate_hz.lock().unwrap();
         let mut guard = self.session.lock().unwrap();
-        let Some(session) = guard.as_mut() else { return; };
-        // Check at the packet boundary so a closed child never receives further forwarding.
-        if !matches!(session.child.try_wait(), Ok(None)) { return; }
         let now = Instant::now();
-        let Some(value) = packet(payload, session.started.elapsed().as_secs_f64()) else { return; };
-        let Some(value) = session.sampler.next(value, now, rate_hz) else { return; };
+        let time = self.started.elapsed().as_secs_f64();
+        let Some(value) = packet(payload, time) else { return; };
+        let mut history = self.history.lock().unwrap();
+        let Some(value) = history.sampler.next(value, now, rate_hz) else { return; };
         let bytes = serde_json::to_vec(&value).unwrap_or_default();
-        match session.socket.send(&bytes) {
-            Ok(_) => { session.sent += 1; session.last_packet = Some(Instant::now()); session.error = None; }
-            Err(e) => { session.dropped += 1; session.error = Some(format!("遥测转发失败: {e}")); }
+        if bytes.is_empty() { return; }
+        history.push(time, bytes.clone());
+        drop(history);
+        if let Some(session) = guard.as_mut() {
+            if matches!(session.child.try_wait(), Ok(None)) { session.send(&bytes, 1); }
         }
     }
 }
 impl Session {
+    fn send(&mut self, bytes: &[u8], samples: u64) {
+        match self.socket.send(bytes) {
+            Ok(_) => { self.sent += samples; self.last_packet = Some(Instant::now()); self.error = None; }
+            Err(e) => { self.dropped += samples; self.error = Some(format!("遥测转发失败: {e}")); }
+        }
+    }
+
+    fn replay(&mut self, history: &History) {
+        let mut batch = b"{\"batch\":[".to_vec();
+        let mut count = 0;
+        for (_, sample) in &history.samples {
+            if count > 0 && batch.len() + sample.len() + 2 > REPLAY_BATCH_BYTES {
+                batch.extend_from_slice(b"]}");
+                self.send(&batch, count);
+                std::thread::sleep(Duration::from_millis(1));
+                batch = b"{\"batch\":[".to_vec();
+                count = 0;
+            }
+            if count > 0 { batch.push(b','); }
+            batch.extend_from_slice(sample);
+            count += 1;
+        }
+        if count > 0 {
+            batch.extend_from_slice(b"]}");
+            self.send(&batch, count);
+        }
+    }
+
     fn status(&mut self, rate_hz: u16) -> Status {
         let running = match self.child.try_wait() {
             Ok(None) => true,
@@ -226,7 +341,29 @@ mod tests {
         let reordered = packet(&json!({"task_top":{"tasks":[{"pid":8,"load":30},{"pid":42,"load":10}]}}), 2.0).unwrap();
         assert_eq!(tasks["values"]["task_top/tasks/pid_42/load"], 70);
         assert_eq!(reordered["values"]["task_top/tasks/pid_42/load"], 10);
+        let fdm = packet(&json!({"kind":"task_top","task_top":{
+            "fdm_run_ms":1.25,"fdm_avg_ms":1.10,"fdm_max_ms":2.0,"fdm_samples":10
+        }}), 3.0).unwrap();
+        assert_eq!(fdm["values"]["fdm/run_ms"], 1.25);
+        assert_eq!(fdm["values"]["fdm/average_ms"], 1.10);
+        assert_eq!(fdm["values"]["fdm/max_ms"], 2.0);
+        assert_eq!(fdm["values"]["fdm/samples"], 10);
         assert!(packet(&json!({"kind":"heartbeat","state":"running"}), 1.0).is_none());
+    }
+
+    #[test]
+    fn keeps_recent_fdm_history_without_a_plot_window() {
+        let bridge = Bridge::default();
+        bridge.set_rate(0).unwrap();
+        bridge.forward(&json!({"kind":"task_top","task_top":{"fdm_run_ms":1.25}}));
+        bridge.forward(&json!({"kind":"task_top","task_top":{"fdm_run_ms":1.50}}));
+        let history = bridge.history.lock().unwrap();
+        assert_eq!(history.samples.len(), 2);
+        let first: Value = serde_json::from_slice(&history.samples[0].1).unwrap();
+        let second: Value = serde_json::from_slice(&history.samples[1].1).unwrap();
+        assert_eq!(first["values"]["fdm/run_ms"], 1.25);
+        assert_eq!(second["values"]["fdm/run_ms"], 1.50);
+        assert!(first["time"].as_f64().unwrap() <= second["time"].as_f64().unwrap());
     }
 
     #[test]
@@ -256,6 +393,8 @@ mod tests {
         let bridge = Bridge::default();
         bridge.set_rate(0).unwrap();
         let directory = std::env::temp_dir().join(format!("jsbsim-pj-test-{}", std::process::id()));
+        let recorder = crate::telemetry_recorder::Recorder::default();
+        let recording = recorder.start(&directory.join("recordings")).unwrap();
         bridge.start(&directory).unwrap();
         let result = std::panic::catch_unwind(|| {
             let deadline = Instant::now() + std::time::Duration::from_secs(20);
@@ -267,8 +406,10 @@ mod tests {
             bridge.start(&directory).unwrap();
             assert_eq!(pid, bridge.session.lock().unwrap().as_ref().unwrap().child.id());
             for i in 0..100 {
-                bridge.forward(&json!({"timestamp": i as f64 * 0.01,
-                    "properties": {"/validation/sine": (i as f64 * 0.1).sin()}}));
+                let payload = json!({"timestamp": i as f64 * 0.01,
+                    "properties": {"/validation/sine": (i as f64 * 0.1).sin()}});
+                recorder.record("127.0.0.1:5801", &payload);
+                bridge.forward(&payload);
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             let deadline = Instant::now() + std::time::Duration::from_secs(5);
@@ -280,6 +421,7 @@ mod tests {
                     let report: Value = serde_json::from_slice(&fs::read(directory.join(format!("status-{}.json", std::process::id()))).unwrap()).unwrap();
                     assert_eq!(report["samples"], 200);
                     assert_eq!(report["series"], 2);
+                    assert!(report["buffer_seconds"].as_i64().unwrap_or(0) >= 299);
                     break;
                 }
                 assert!(Instant::now() < deadline, "Only received {} packets", status.received);
@@ -287,12 +429,16 @@ mod tests {
             }
             assert_eq!(bridge.set_rate(10).unwrap().rate_hz, 10);
             for i in 0..20 {
-                bridge.forward(&json!({"timestamp": 2.0 + i as f64 * 0.01,
-                    "properties": {"/validation/sine": i as f64}}));
+                let payload = json!({"timestamp": 2.0 + i as f64 * 0.01,
+                    "properties": {"/validation/sine": i as f64}});
+                recorder.record("127.0.0.1:5801", &payload);
+                bridge.forward(&payload);
             }
             assert_eq!(bridge.status().sent, 101);
             std::thread::sleep(Duration::from_millis(110));
-            bridge.forward(&json!({"timestamp": 2.2, "properties": {"/validation/sine": 20.0}}));
+            let payload = json!({"timestamp": 2.2, "properties": {"/validation/sine": 20.0}});
+            recorder.record("127.0.0.1:5801", &payload);
+            bridge.forward(&payload);
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
                 let status = bridge.status();
@@ -305,11 +451,47 @@ mod tests {
                 assert!(Instant::now() < deadline, "Only received {} limited packets", status.received);
                 std::thread::sleep(Duration::from_millis(100));
             }
+            // The process can exit while FDM samples and raw recording carry
+            // on. A new window must receive the earlier curves plus that gap.
+            {
+                let mut session = bridge.session.lock().unwrap();
+                let session = session.as_mut().unwrap();
+                session.child.kill().unwrap();
+                session.child.wait().unwrap();
+            }
+            bridge.set_rate(0).unwrap();
+            let fdm = json!({"kind":"task_top","task_top":{"fdm_run_ms":1.5}});
+            recorder.record("127.0.0.1:5801", &fdm);
+            bridge.forward(&fdm);
+            assert_eq!(bridge.history.lock().unwrap().samples.len(), 103);
+            bridge.start(&directory).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let status = bridge.status();
+                if status.received == 103 {
+                    assert_eq!(status.sent, 103);
+                    assert_eq!(status.dropped, 0);
+                    let report: Value = serde_json::from_slice(&fs::read(directory.join(format!("status-{}.json", std::process::id()))).unwrap()).unwrap();
+                    assert!(report["series"].as_u64().unwrap_or(0) >= 4);
+                    assert!(report["buffer_seconds"].as_i64().unwrap_or(0) >= 299);
+                    break;
+                }
+                assert!(Instant::now() < deadline, "Reopened PlotJuggler received {} of 103 history samples", status.received);
+                std::thread::sleep(Duration::from_millis(100));
+            }
         });
         if let Some(session) = bridge.session.lock().unwrap().as_mut() {
             let _ = session.child.kill();
             let _ = session.child.wait();
         }
+        let saved = recorder.stop();
+        assert_eq!(saved.written, 122);
+        assert_eq!(saved.dropped, 0);
+        let lines: Vec<Value> = fs::read_to_string(recording.path.unwrap()).unwrap().lines()
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(lines.len(), 124);
+        assert!(lines.iter().any(|line| line["payload"]["task_top"]["fdm_run_ms"] == 1.5));
         if let Err(error) = result { std::panic::resume_unwind(error); }
+        let _ = fs::remove_dir_all(directory);
     }
 }

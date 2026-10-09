@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLanguage } from '../i18n';
 import {
-  isTauri, usbFileDelete, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
+  isTauri, usbFileDelete, usbFileDeleteDirectory, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
   listenUsbFolderUploadProgress, usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn,
   usbFileOpenEditor, usbFilePing, usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer,
   usbFileUploadFolder, usbFileUploadLocal, usbFileWrite,
@@ -500,15 +500,18 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const remove = async (entry = selectedEntry) => {
     if (!entry) return;
     const question = entry.directory
-      ? (isZh ? `删除空目录“${entry.name}”？` : `Delete empty folder “${entry.name}”?`)
+      ? (isZh ? `永久删除文件夹“${entry.name}”及其中所有文件和子文件夹？` : `Permanently delete folder “${entry.name}” and everything inside it?`)
       : (isZh ? `永久删除文件“${entry.name}”？` : `Permanently delete “${entry.name}”?`);
     if (!window.confirm(question)) return;
     setBusy(true);
+    setStatus(isZh ? `正在删除 ${entry.name}…` : `Deleting ${entry.name}…`);
     try {
-      await usbFileDelete(`${directory}/${entry.name}`);
+      const path = `${directory}/${entry.name}`;
+      if (entry.directory) await usbFileDeleteDirectory(path);
+      else await usbFileDelete(path);
       setSelected('');
       refresh(isZh ? '已删除' : 'Deleted');
-    } catch (error) { setStatus(`${isZh ? '删除失败' : 'Delete failed'}: ${errorText(error)}`); }
+    } catch (error) { refresh(`${isZh ? '删除失败' : 'Delete failed'}: ${errorText(error)}`); }
     finally { setBusy(false); }
   };
 

@@ -280,7 +280,7 @@ impl SimClient {
                                     if let Ok(val) = serde_json::from_str::<Value>(text) {
                                         if val.is_object() {
                                             crate::telemetry_recorder::global().record(&peer.to_string(), &val);
-                                            crate::plotjuggler::global().forward(&val);
+                                            crate::plotjuggler::submit(&buf[..n]);
                                             /* Telemetry is authoritative proof of which board is
                                              * connected.  Route subsequent control packets to its
                                              * source IP: discovery packets or an outdated setting
@@ -516,7 +516,12 @@ impl SimClient {
                 .spawn(move || loop {
                     let packet = [b'V', b'C', b'M', b'D', 7u8];
                     if crate::transport::allows_usb() {
-                        let _ = crate::usb_file::sim_write(&packet);
+                        /* The USB receiver holds the shared interface during
+                         * each 100 ms read.  Give this 1 Hz heartbeat the
+                         * same bounded lock wait as lifecycle commands so
+                         * repeated try_lock misses cannot trip the board's
+                         * 10-second connection watchdog. */
+                        let _ = crate::usb_file::sim_write_control(&packet);
                     }
                     if crate::transport::allows_network() {
                         let addr = heartbeat_addr.lock().map(|a| *a).ok();
@@ -642,6 +647,13 @@ impl SimClient {
         let state = self.inner.lock().unwrap();
         state.latest_task_top.as_ref()?
             .get("task_top")?.get("memory").cloned()
+    }
+
+    /// Cumulative byte counters for the board's Ethernet interfaces.
+    pub fn network_counters(&self) -> Option<Value> {
+        let state = self.inner.lock().unwrap();
+        state.latest_task_top.as_ref()?
+            .get("task_top")?.get("network").cloned()
     }
 
     /// Wall-clock execution time of the most recent FGFDMExec::Run call.

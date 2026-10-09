@@ -597,6 +597,47 @@ pub fn delete(path: &str) -> Result<(), String> {
     with_device(|handle| transaction_locked(handle, DELETE, 0, 0, path.as_bytes()).map(|_| ()))
 }
 
+// Read the complete tree before removing anything. LIST fails rather than
+// returning a partial result when the board's response buffer is too small.
+fn plan_directory_delete(
+    root: &str,
+    mut list_children: impl FnMut(&str) -> Result<Vec<UsbFileEntry>, String>,
+) -> Result<Vec<String>, String> {
+    managed_volume(root)?; // Also excludes the sd and data volume roots.
+    let mut pending = vec![root.to_owned()];
+    let mut directories = Vec::new();
+    let mut files = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let entries = list_children(&directory)?;
+        directories.push(directory.clone());
+        for entry in entries {
+            let child = format!("{directory}/{}", entry.name);
+            managed_volume(&child)?;
+            if entry.directory {
+                pending.push(child);
+            } else {
+                files.push(child);
+            }
+        }
+    }
+    files.extend(directories.into_iter().rev());
+    Ok(files)
+}
+
+pub fn delete_directory_tree(path: &str) -> Result<(), String> {
+    managed_volume(path)?;
+    if !stat(path)?.directory {
+        return Err(format!("{path} is not a directory"));
+    }
+    let paths = plan_directory_delete(path, list)?;
+    for (index, target) in paths.iter().enumerate() {
+        delete(target).map_err(|error| {
+            format!("could not delete {target}: {error} ({index}/{} entries removed)", paths.len())
+        })?;
+    }
+    Ok(())
+}
+
 pub fn mkdir(path: &str) -> Result<(), String> {
     managed_volume(path)?;
     if has_long_component(path) && ping()? != "lmx93-usb-file/5" {
@@ -795,31 +836,8 @@ pub fn apply_firmware_with_progress(
     })
 }
 
-pub fn sim_write(payload: &[u8]) -> Result<(), String> {
-    if payload.len() > 4096 {
-        return Err("simulation USB record is too large".into());
-    }
-    /* Do not queue a simulation heartbeat behind a slow file operation.
-     * Auto mode falls back to UDP, and USB mode retries at the next beat. */
-    let _guard = USB_LOCK.try_lock()
-        .map_err(|_| "simulation USB transport is busy".to_string())?;
-    let handle = open()?;
-    let mut frame = Vec::with_capacity(payload.len() + 8);
-    frame.extend_from_slice(b"SIM1");
-    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(payload);
-    let count = handle.write_bulk(SIM_OUT, &frame, SIM_TIMEOUT)
-        .map_err(|error| format!("simulation USB write failed: {error}"))?;
-    if count != frame.len() {
-        return Err(format!("short simulation USB write: {count}/{}", frame.len()));
-    }
-    Ok(())
-}
-
-/// Send a user-requested control/lifecycle frame.  Unlike the periodic
-/// heartbeat, losing START/LOAD because the receiver owns the interface for
-/// its 100 ms read window is not acceptable.  Wait only for that short window
-/// and still leave Auto mode free to fall back to UDP on a real USB failure.
+/// Send a simulation control frame, including the periodic heartbeat.  Wait
+/// only for the receiver's short read window to release the shared USB lock.
 pub fn sim_write_control(payload: &[u8]) -> Result<(), String> {
     if payload.len() > 4096 {
         return Err("simulation USB record is too large".into());
@@ -958,6 +976,29 @@ pub fn simulation_self_test() -> Result<String, String> {
 #[cfg(test)]
 mod response_tests {
     use super::*;
+
+    #[test]
+    fn directory_delete_plans_children_before_parents_and_rejects_roots() {
+        let paths = plan_directory_delete("sd/models", |path| Ok(match path {
+            "sd/models" => vec![
+                UsbFileEntry { name: "aircraft".into(), directory: true, size: 0, modified: None },
+                UsbFileEntry { name: "root.xml".into(), directory: false, size: 1, modified: None },
+            ],
+            "sd/models/aircraft" => vec![
+                UsbFileEntry { name: "jet.xml".into(), directory: false, size: 1, modified: None },
+            ],
+            _ => unreachable!(),
+        })).unwrap();
+        assert_eq!(paths, [
+            "sd/models/root.xml", "sd/models/aircraft/jet.xml",
+            "sd/models/aircraft", "sd/models",
+        ]);
+        assert!(plan_directory_delete("sd", |_| unreachable!()).is_err());
+        assert!(plan_directory_delete("data", |_| unreachable!()).is_err());
+        assert!(plan_directory_delete("sd/models", |_| Ok(vec![
+            UsbFileEntry { name: "../other".into(), directory: false, size: 0, modified: None },
+        ])).is_err());
+    }
 
     #[test]
     fn transfer_paths_reject_roots_traversal_and_descendants() {

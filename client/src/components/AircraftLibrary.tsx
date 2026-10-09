@@ -113,18 +113,70 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const visibleModels = group === 'user' ? userModels : filtered;
   const visibleScripts = group === 'user' ? userScripts : scripts;
   const visibleComponents = tab === 'engines' ? engineFiles : propellerFiles;
+  const activeModel = selected && (group === 'user' ? userModels : library).some(item => item.id === selected.id) ? selected : null;
+  const activeScript = selectedScript && (group === 'user' ? userScripts : scripts).some(item => item.path === selectedScript.path) ? selectedScript : null;
+  const selectResource = (nextTab: typeof tab, nextGroup: typeof group) => {
+    setTab(nextTab);
+    setGroup(nextGroup);
+    setSelected(null);
+    setSelectedScript(null);
+  };
+  const saveUserModels = (next: AircraftEntry[]) => {
+    localStorage.setItem('jsbsim-user-models', JSON.stringify(next));
+    setUserModels(next);
+  };
+  const saveUserScripts = (next: ScriptEntry[]) => {
+    localStorage.setItem('jsbsim-user-scripts', JSON.stringify(next));
+    setUserScripts(next);
+  };
+  const renameUserModel = (aircraft: AircraftEntry) => {
+    const input = window.prompt('重命名用户模型', aircraft.name);
+    if (input === null) return;
+    const name = input.trim();
+    if (!name) { alert('用户模型名称不能为空'); return; }
+    if (userModels.some(item => item.id !== aircraft.id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      alert('用户模型名称已存在'); return;
+    }
+    const renamed = { ...aircraft, name };
+    saveUserModels(userModels.map(item => item.id === aircraft.id ? renamed : item));
+    setSelected(renamed);
+  };
+  const deleteUserModel = (aircraft: AircraftEntry) => {
+    if (!window.confirm(`从用户模型库删除「${aircraft.name}」？\n\n仅删除本机库中的条目，不会删除 NuttX 上的原始模型。`)) return;
+    saveUserModels(userModels.filter(item => item.id !== aircraft.id));
+    setSelected(null);
+  };
+  const renameUserScript = (script: ScriptEntry) => {
+    const input = window.prompt('重命名用户脚本', (script.name || script.file).replace(/\.xml$/i, ''));
+    if (input === null) return;
+    const name = input.trim().replace(/\.xml$/i, '').trim();
+    if (!name) { alert('用户脚本名称不能为空'); return; }
+    const filename = `${name}.xml`;
+    if (userScripts.some(item => item.path !== script.path && item.name.toLocaleLowerCase() === filename.toLocaleLowerCase())) {
+      alert('用户脚本名称已存在'); return;
+    }
+    const renamed = { ...script, name: filename };
+    saveUserScripts(userScripts.map(item => item.path === script.path ? renamed : item));
+    setSelectedScript(renamed);
+  };
+  const deleteUserScript = (script: ScriptEntry) => {
+    const name = (script.name || script.file).replace(/\.xml$/i, '');
+    if (!window.confirm(`从用户脚本库删除「${name}」？\n\n仅删除本机库中的条目，不会删除 NuttX 上的原始脚本。`)) return;
+    saveUserScripts(userScripts.filter(item => item.path !== script.path));
+    setSelectedScript(null);
+  };
   const copyModel = (aircraft: AircraftEntry) => {
     const name = window.prompt('请输入用户模型名称', `${aircraft.name} 副本`);
     if (!name?.trim()) return;
     const copy = { ...aircraft, id: `user-${Date.now()}`, name: name.trim(), sourceId: aircraft.sourceId || aircraft.id };
-    setUserModels(current => { const next = [...current, copy]; localStorage.setItem('jsbsim-user-models', JSON.stringify(next)); return next; });
+    saveUserModels([...userModels, copy]);
     setGroup('user'); setSelected(copy);
   };
   const copyScript = (script: ScriptEntry) => {
     const name = window.prompt('请输入用户脚本名称', `${(script.name || script.file).replace(/\.xml$/i, '')} 副本`);
     if (!name?.trim()) return;
     const copy = { ...script, name: `${name.trim()}.xml`, path: `user-script-${Date.now()}`, sourcePath: script.sourcePath || script.path };
-    setUserScripts(current => { const next = [...current, copy]; localStorage.setItem('jsbsim-user-scripts', JSON.stringify(next)); return next; });
+    saveUserScripts([...userScripts, copy]);
     setGroup('user'); setSelectedScript(copy);
   };
 
@@ -136,7 +188,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
       // Loading a model into the editor also makes it the launch target.
       // Keeping these as separate actions left simStart() without a model
       // parameter even though the canvas already showed that aircraft.
-      onSelectForSimulation?.(aircraft.id);
+      onSelectForSimulation?.(aircraft.sourceId || aircraft.id);
       onClose();
     } catch (err: any) {
       const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || '未知错误');
@@ -162,7 +214,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
           <button className="wizard-close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => { setTab('models'); setGroup('nuttx'); }}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => { setTab('scripts'); setGroup('nuttx'); }}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'engines' ? 'active' : ''} onClick={() => { setTab('engines'); setGroup('nuttx'); }}>⚙️ 发动机/电机库 <b>{engineFiles.length}</b></button><button className={tab === 'propellers' ? 'active' : ''} onClick={() => { setTab('propellers'); setGroup('nuttx'); }}>🌀 螺旋桨库 <b>{propellerFiles.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => { setTab('models'); setGroup('user'); }}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => { setTab('scripts'); setGroup('user'); }}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
+        <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('models', 'nuttx')}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('scripts', 'nuttx')}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'engines' ? 'active' : ''} onClick={() => selectResource('engines', 'nuttx')}>⚙️ 发动机/电机库 <b>{engineFiles.length}</b></button><button className={tab === 'propellers' ? 'active' : ''} onClick={() => selectResource('propellers', 'nuttx')}>🌀 螺旋桨库 <b>{propellerFiles.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => selectResource('models', 'user')}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => selectResource('scripts', 'user')}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
         <div className="library-toolbar">
           <input
             type="text"
@@ -217,44 +269,45 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
             ) : tab === 'scripts' ? visibleScripts.filter(script => !search || `${script.name} ${script.file} ${script.aircraft || ''}`.toLowerCase().includes(search.toLowerCase())).map(script => <div key={script.path} className={`library-item ${selectedScript?.path === script.path ? 'selected' : ''}`} onClick={() => void inspectScript(script)}><span className="library-item-icon">📋</span><div className="library-item-info"><div className="library-item-name">{(script.name || script.file).replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{group === 'user' ? '用户脚本' : '测试脚本'}</span>{script.aircraft && <span>· 模型 {script.aircraft}</span>}</div></div><span className="library-item-size">XML</span></div>) : catalogLoading ? <div className="library-loading">发动机/螺旋桨库加载中...</div> : visibleComponents.filter(file => !search || file.toLowerCase().includes(search.toLowerCase())).map(file => <div key={file} className="library-item"><span className="library-item-icon">{tab === 'engines' ? '⚙️' : '🌀'}</span><div className="library-item-info"><div className="library-item-name">{file.replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{tab === 'engines' ? '发动机 / 电机' : '螺旋桨'}</span><span>· ROMFS → SD</span></div></div><span className="library-item-size">XML</span></div>)}
           </div>
 
-          {tab === 'models' && selected && (
+          {tab === 'models' && activeModel && (
             <div className="library-detail">
               <div className="library-detail-header">
-                <span className="library-detail-icon">{TYPE_INFO[selected.type]?.icon || '🛩️'}</span>
+                <span className="library-detail-icon">{TYPE_INFO[activeModel.type]?.icon || '🛩️'}</span>
                 <div>
-                  <h3>{selected.name}</h3>
-                  <span className="library-detail-id">{selected.id}</span>
+                  <h3>{activeModel.name}</h3>
+                  <span className="library-detail-id">{activeModel.id}</span>
                 </div>
               </div>
-              {selected.description && <p className="library-detail-desc">{selected.description}</p>}
+              {activeModel.description && <p className="library-detail-desc">{activeModel.description}</p>}
               <div className="library-detail-grid">
-                <div><span>类型</span><strong>{TYPE_INFO[selected.type]?.label || selected.type}</strong></div>
-                <div><span>版本</span><strong>{selected.version || '-'}</strong></div>
-                <div><span>阶段</span><strong>{selected.release || '-'}</strong></div>
-                <div><span>作者</span><strong>{selected.author || '-'}</strong></div>
-                <div><span>主文件</span><strong>{selected.mainFile}</strong></div>
-                <div><span>文件大小</span><strong>{(selected.size / 1024).toFixed(1)} KB</strong></div>
+                <div><span>类型</span><strong>{TYPE_INFO[activeModel.type]?.label || activeModel.type}</strong></div>
+                <div><span>版本</span><strong>{activeModel.version || '-'}</strong></div>
+                <div><span>阶段</span><strong>{activeModel.release || '-'}</strong></div>
+                <div><span>作者</span><strong>{activeModel.author || '-'}</strong></div>
+                <div><span>主文件</span><strong>{activeModel.mainFile}</strong></div>
+                <div><span>文件大小</span><strong>{(activeModel.size / 1024).toFixed(1)} KB</strong></div>
               </div>
-              {selected.subFiles.length > 0 && (
+              {activeModel.subFiles.length > 0 && (
                 <div className="library-detail-files">
-                  <strong>子文件 ({selected.subFileCount}):</strong>
+                  <strong>子文件 ({activeModel.subFileCount}):</strong>
                   <div className="library-file-list">
-                    {selected.subFiles.map(f => <span key={f} className="library-file-tag">{f}</span>)}
+                    {activeModel.subFiles.map(f => <span key={f} className="library-file-tag">{f}</span>)}
                   </div>
                 </div>
               )}
               <button
                 className="library-load-btn"
-                onClick={() => handleLoad(selected)}
+                onClick={() => handleLoad(activeModel)}
                 disabled={loadingAircraft}
               >
                 {loadingAircraft ? '⏳ 加载中...' : '📥 加载此模型'}
               </button>
-              {group === 'nuttx' && <button className="library-select-sim-btn" onClick={() => copyModel(selected)}>📄 复制到用户模型并重命名</button>}
+              {group === 'nuttx' && <button className="library-select-sim-btn" onClick={() => copyModel(activeModel)}>📄 复制到用户模型并重命名</button>}
+              {group === 'user' && <div className="library-user-actions"><button onClick={() => renameUserModel(activeModel)}>✎ 重命名</button><button className="library-delete-btn" onClick={() => deleteUserModel(activeModel)}>删除</button></div>}
               {onSelectForSimulation && (
                 <button
                   className="library-select-sim-btn"
-                  onClick={() => { onSelectForSimulation(selected.id); onClose(); }}
+                  onClick={() => { onSelectForSimulation(activeModel.sourceId || activeModel.id); onClose(); }}
                   disabled={loadingAircraft}
                   title="选择后回到工具栏，点击“开始”运行该 NuttX 模型"
                 >
@@ -263,7 +316,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
               )}
             </div>
           )}
-          {tab === 'scripts' && selectedScript && <div className="library-detail"><div className="library-detail-header"><span className="library-detail-icon">📋</span><div><h3>{(selectedScript.name || selectedScript.file).replace(/\.xml$/i, '')}</h3><span className="library-detail-id">{selectedScript.path}</span></div></div>{selectedScript.error ? <p className="library-detail-desc">读取失败：{selectedScript.error}</p> : <><div className="library-detail-grid"><div><span>关联模型</span><strong>{selectedScript.aircraft || '读取中…'}</strong></div><div><span>初始化</span><strong>{selectedScript.initialize || '默认'}</strong></div><div><span>开始时间</span><strong>{selectedScript.start || '—'}</strong></div><div><span>结束时间</span><strong>{selectedScript.end || '—'}</strong></div><div><span>仿真间隔</span><strong>{selectedScript.dt || '—'}</strong></div><div><span>事件数量</span><strong>{selectedScript.events ?? '—'}</strong></div></div>{group === 'nuttx' && <button className="library-select-sim-btn" onClick={() => copyScript(selectedScript)}>📄 复制到用户脚本并重命名</button>}<button className="library-load-btn" disabled={!selectedScript.aircraft || selectedScript.aircraft === '未声明'} onClick={() => { onSelectScriptForSimulation?.(selectedScript.sourcePath || selectedScript.path); onClose(); }}>✎ 打开脚本编辑器</button></>}</div>}
+          {tab === 'scripts' && activeScript && <div className="library-detail"><div className="library-detail-header"><span className="library-detail-icon">📋</span><div><h3>{(activeScript.name || activeScript.file).replace(/\.xml$/i, '')}</h3><span className="library-detail-id">{activeScript.path}</span></div></div>{activeScript.error ? <p className="library-detail-desc">读取失败：{activeScript.error}</p> : <><div className="library-detail-grid"><div><span>关联模型</span><strong>{activeScript.aircraft || '读取中…'}</strong></div><div><span>初始化</span><strong>{activeScript.initialize || '默认'}</strong></div><div><span>开始时间</span><strong>{activeScript.start || '—'}</strong></div><div><span>结束时间</span><strong>{activeScript.end || '—'}</strong></div><div><span>仿真间隔</span><strong>{activeScript.dt || '—'}</strong></div><div><span>事件数量</span><strong>{activeScript.events ?? '—'}</strong></div></div>{group === 'nuttx' && <button className="library-select-sim-btn" onClick={() => copyScript(activeScript)}>📄 复制到用户脚本并重命名</button>}<button className="library-load-btn" disabled={!activeScript.aircraft || activeScript.aircraft === '未声明'} onClick={() => { onSelectScriptForSimulation?.(activeScript.sourcePath || activeScript.path); onClose(); }}>✎ 打开脚本编辑器</button></>}{group === 'user' && <div className="library-user-actions"><button onClick={() => renameUserScript(activeScript)}>✎ 重命名</button><button className="library-delete-btn" onClick={() => deleteUserScript(activeScript)}>删除</button></div>}</div>}
         </div>
       </div>
     </div>

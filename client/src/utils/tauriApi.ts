@@ -225,7 +225,7 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; fdmRunMs?: number; fdmWindow?: { averageMs: number; maxMs: number; samples: number }; simulationDt?: number }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: { averageMs: number; maxMs: number; samples: number }; simulationDt?: number }> {
   return call('sim_status');
 }
 
@@ -467,6 +467,10 @@ export async function usbFileWrite(path: string, bytes: Uint8Array | number[]): 
 
 export async function usbFileDelete(path: string): Promise<void> {
   await call('usb_file_delete', { path });
+}
+
+export async function usbFileDeleteDirectory(path: string): Promise<void> {
+  await call('usb_file_delete_directory', { path });
 }
 
 export async function usbFileMkdir(path: string): Promise<void> {

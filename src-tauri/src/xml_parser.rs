@@ -1295,6 +1295,28 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
                 .collect();
             if !prop_names.is_empty() {
                 params["properties"] = json!(prop_names.join(","));
+                if get_attr(out, "type") == Some("HIL_SENSOR") && prop_names.len() >= 12 {
+                    for (key, property) in [
+                        "hil_imu_accel_x", "hil_imu_accel_y", "hil_imu_accel_z",
+                        "hil_imu_gyro_x", "hil_imu_gyro_y", "hil_imu_gyro_z",
+                        "hil_imu_mag_x", "hil_imu_mag_y", "hil_imu_mag_z",
+                        "hil_pressure_abs", "hil_pressure_diff", "hil_pressure_alt",
+                    ].iter().zip(&prop_names) {
+                        params[*key] = json!(property);
+                    }
+                } else if get_attr(out, "type") == Some("HIL_GPS") && prop_names.len() >= 6 {
+                    let velocity_offset = if prop_names.len() >= 8 { 5 } else { 3 };
+                    for (key, property) in [
+                        ("hil_gps_lat", &prop_names[0]),
+                        ("hil_gps_lon", &prop_names[1]),
+                        ("hil_gps_alt", &prop_names[2]),
+                        ("hil_gps_vn", &prop_names[velocity_offset]),
+                        ("hil_gps_ve", &prop_names[velocity_offset + 1]),
+                        ("hil_gps_vd", &prop_names[velocity_offset + 2]),
+                    ] {
+                        params[key] = json!(property);
+                    }
+                }
             }
         }
 
@@ -1904,6 +1926,39 @@ mod ownership_tests {
         graph["nodes"].as_array().unwrap().iter()
             .find(|item| item["data"]["componentType"] == component_type)
             .unwrap_or_else(|| panic!("missing component {component_type}"))
+    }
+
+    #[test]
+    fn hil_output_mapping_edits_are_written_to_xml() {
+        let xml = r#"<fdm_config name="F450_PX4" version="2.0">
+  <output name="PX4" type="HIL_SENSOR" port="14560" rate="250">
+    <property>imu/ax</property><property>imu/ay</property><property>imu/az</property>
+    <property>imu/gx</property><property>imu/gy</property><property>imu/gz</property>
+    <property>imu/mx</property><property>imu/my</property><property>imu/mz</property>
+    <property>baro/pressure</property><property>aero/qbar</property><property>position/alt</property>
+  </output>
+  <output name="PX4" type="HIL_GPS" port="14560" rate="10">
+    <property>gps/lat</property><property>gps/lon</property><property>gps/alt</property>
+    <property>gps/speed</property><property>gps/course</property>
+    <property>gps/vn</property><property>gps/ve</property><property>gps/vd</property>
+  </output>
+</fdm_config>"#;
+        let mut graph = parse_xml(xml, &HashMap::new()).expect("parse HIL output");
+        let mut outputs: Vec<&mut Value> = graph["nodes"].as_array_mut().unwrap().iter_mut()
+            .filter(|item| item["data"]["componentType"] == "output")
+            .collect();
+        assert_eq!(outputs[0]["data"]["params"]["hil_pressure_abs"], "baro/pressure");
+        assert_eq!(outputs[1]["data"]["params"]["hil_gps_vd"], "gps/vd");
+        outputs[0]["data"]["params"]["hil_pressure_abs"] = json!("baro/new_pressure");
+        outputs[1]["data"]["params"]["hil_gps_vd"] = json!("gps/new_vd");
+
+        let saved = crate::xml_generator::generate_xml(&graph).expect("save HIL output");
+        assert!(saved.contains("<property>baro/new_pressure</property>"));
+        assert!(saved.contains("<property>gps/new_vd</property>"));
+        assert!(saved.contains("<property>gps/speed</property>"));
+        assert!(saved.contains("<property>gps/course</property>"));
+        assert!(!saved.contains("<property>baro/pressure</property>"));
+        assert!(!saved.contains("<property>gps/vd</property>"));
     }
 
     #[test]

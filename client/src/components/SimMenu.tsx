@@ -151,8 +151,23 @@ function serializeRunScript(sourceXml: string, value: ScriptEditorValue): string
       const notifyElement = existingNotifies[notifyIndex] || documentXml.createElement('notify');
       if (!existingNotifies[notifyIndex]) eventElement.appendChild(notifyElement);
       const text = editedNotify.trim();
-      if (notifyElement.hasAttribute('name')) setOptionalAttribute(notifyElement, 'name', text);
-      else notifyElement.textContent = text;
+      const originalText = notifyElement.textContent?.trim().replace(/\s+/g, ' ') || notifyElement.getAttribute('name') || '';
+      // An untouched <notify> may contain many <property> children and other
+      // JSBSim metadata. Keep that structure when editing another field.
+      if (existingNotifies[notifyIndex] && text === originalText) return;
+      if (notifyElement.hasAttribute('name')) {
+        setOptionalAttribute(notifyElement, 'name', text);
+      } else {
+        const properties = directChildren(notifyElement, 'property');
+        if (!text) {
+          properties.forEach(element => element.remove());
+          return;
+        }
+        const property = properties[0] || documentXml.createElement('property');
+        if (!properties[0]) notifyElement.appendChild(property);
+        property.textContent = text;
+        properties.slice(1).forEach(element => element.remove());
+      }
     });
     existingNotifies.slice(editedEvent.notifies.length).forEach(element => element.remove());
   });
@@ -202,6 +217,13 @@ function splitCondition(condition: string): [string, string, string] {
 
 type Submenu = 'model' | 'script' | null;
 type SimPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'restarting' | 'pausing' | 'paused' | 'resuming' | 'loading';
+type NetworkCounter = { at: number; rxBytes: number; txBytes: number };
+type NetworkRate = { rx: number; tx: number };
+
+function formatNetworkRate(bytesPerSecond: number): string {
+  if (bytesPerSecond >= 1048576) return `${(bytesPerSecond / 1048576).toFixed(2)} MiB/s`;
+  return `${(bytesPerSecond / 1024).toFixed(1)} KiB/s`;
+}
 
 export default function SimMenu({ loading: parentLoading = false, onLog, onOpenRemoteModel, onSyncRemoteModel, selectedModelFromLibrary = '' }: SimMenuProps) {
   const { telemetry } = useSimSocket();
@@ -226,6 +248,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   };
   const [fdmWindow, setFdmWindow] = useState<10 | 20 | 30>(10);
   const [cpuHistory, setCpuHistory] = useState<{ at: number; values: number[] }[]>([]);
+  const networkCounterRef = useRef<Record<string, NetworkCounter>>({});
+  const networkSeenRef = useRef<Record<string, number>>({});
+  const [networkRates, setNetworkRates] = useState<Record<string, NetworkRate>>({});
+  const [networkAvailable, setNetworkAvailable] = useState<string[]>([]);
+  const [networkReported, setNetworkReported] = useState(false);
   const [remoteState, setRemoteState] = useState('disconnected');
   const [paused, setPaused] = useState(false);
   const [currentScript, setCurrentScript] = useState<string | null>(null);
@@ -327,6 +354,47 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       const fresh = !!status.connected && typeof status.healthAgeMs === 'number' &&
         status.healthAgeMs <= 1500;
       setHealthFresh(fresh);
+      setNetworkReported(Array.isArray(status.network));
+      if (!fresh) {
+        networkCounterRef.current = {};
+        networkSeenRef.current = {};
+        setNetworkRates({});
+        setNetworkAvailable([]);
+      } else {
+        const counters = Array.isArray(status.network) ? status.network : [];
+        const now = Date.now();
+        const available = counters.filter(counter =>
+          (counter.name === 'eth0' || counter.name === 'eth1') &&
+          Number.isSafeInteger(counter.rxBytes) && counter.rxBytes >= 0 &&
+          Number.isSafeInteger(counter.txBytes) && counter.txBytes >= 0);
+        for (const counter of available) networkSeenRef.current[counter.name] = now;
+        const visible = ['eth0', 'eth1'].filter(name =>
+          networkSeenRef.current[name] != null && now - networkSeenRef.current[name] < 2000);
+        setNetworkAvailable(visible);
+        for (const name of ['eth0', 'eth1']) {
+          if (!visible.includes(name)) {
+            delete networkCounterRef.current[name];
+          }
+        }
+        for (const counter of available) {
+          const previous = networkCounterRef.current[counter.name];
+          if (!previous || counter.rxBytes < previous.rxBytes || counter.txBytes < previous.txBytes) {
+            networkCounterRef.current[counter.name] = { at: now, rxBytes: counter.rxBytes, txBytes: counter.txBytes };
+            setNetworkRates(rates => {
+              const next = { ...rates };
+              delete next[counter.name];
+              return next;
+            });
+          } else if (now - previous.at >= 900) {
+            const seconds = (now - previous.at) / 1000;
+            setNetworkRates(rates => ({ ...rates, [counter.name]: {
+              rx: (counter.rxBytes - previous.rxBytes) / seconds,
+              tx: (counter.txBytes - previous.txBytes) / seconds,
+            } }));
+            networkCounterRef.current[counter.name] = { at: now, rxBytes: counter.rxBytes, txBytes: counter.txBytes };
+          }
+        }
+      }
       const remoteMemory = status.memory;
       setMemory(remoteMemory && Number.isFinite(Number(remoteMemory.percent)) ? {
         total: Number(remoteMemory.total) || 0,
@@ -905,6 +973,22 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             <span>最大 <b>{fdmMaximum.toFixed(3)} ms</b></span>
             <span>最低均值 <b>{fdmMinimum.toFixed(3)} ms</b></span>
           </div>}
+          <div className="sim-network-rates" aria-label="板端网口实时速率">
+            {(['eth0', 'eth1'] as const).map(name => {
+              const rate = healthFresh && networkReported && networkAvailable.includes(name) ? networkRates[name] : undefined;
+              const status = !healthFresh ? '等待连接'
+                : !networkReported ? '遥测未上报网口统计'
+                : !networkAvailable.includes(name) ? '暂未取得统计'
+                : '采样中';
+              return <div className="sim-network-port" key={name}>
+                <b>{name}</b>
+                {rate ? <>
+                  <span title="板端接收速率">↓ {formatNetworkRate(rate.rx)}</span>
+                  <span title="板端发送速率">↑ {formatNetworkRate(rate.tx)}</span>
+                </> : <span className="sim-network-wait">{status}</span>}
+              </div>;
+            })}
+          </div>
         </div>
       )}
 

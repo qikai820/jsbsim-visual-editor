@@ -1751,6 +1751,7 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
     for out in output_nodes {
         let p = get_params(out);
         let mut out_lines = vec![];
+        let output_type = p.get("type").and_then(Value::as_str).unwrap_or("");
 
         let data_groups = [
             "simulation", "atmosphere", "massprops", "rates", "velocities", "forces", "moments",
@@ -1765,8 +1766,47 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
             }
         }
 
-        // Properties
-        if let Some(props) = p.get("properties") {
+        // The HIL property controls shown in the editor must become the
+        // ordered properties consumed by FGHILOutput.  Imported older XML
+        // without those controls keeps its original property list below.
+        let hil_keys: &[&str] = match output_type {
+            "HIL_SENSOR" => &[
+                "hil_imu_accel_x", "hil_imu_accel_y", "hil_imu_accel_z",
+                "hil_imu_gyro_x", "hil_imu_gyro_y", "hil_imu_gyro_z",
+                "hil_imu_mag_x", "hil_imu_mag_y", "hil_imu_mag_z",
+                "hil_pressure_abs", "hil_pressure_diff", "hil_pressure_alt",
+            ],
+            "HIL_GPS" => &[
+                "hil_gps_lat", "hil_gps_lon", "hil_gps_alt",
+                "hil_gps_vn", "hil_gps_ve", "hil_gps_vn", "hil_gps_ve", "hil_gps_vd",
+            ],
+            _ => &[],
+        };
+        let legacy_properties: Vec<&str> = p.get("properties").and_then(Value::as_str)
+            .unwrap_or("").split(',').map(str::trim).filter(|value| !value.is_empty())
+            .collect();
+        let hil_properties: Vec<&str> = hil_keys.iter().enumerate()
+            .map(|(index, key)| {
+                // GPS slots 3 and 4 may carry legacy speed/course fields.
+                // FGHILOutput reads velocity from slots 5..7, so preserve
+                // those two older fields when editing an imported model.
+                if output_type == "HIL_GPS" && (index == 3 || index == 4)
+                    && legacy_properties.len() >= 8 {
+                    return legacy_properties[index];
+                }
+                let legacy_index = if output_type == "HIL_GPS" && legacy_properties.len() == 6
+                    && index >= 5 { index - 2 } else { index };
+                p.get(*key).and_then(Value::as_str).map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| legacy_properties.get(legacy_index).copied())
+                    .unwrap_or("")
+            })
+            .collect();
+        if !hil_properties.is_empty() && hil_properties.iter().all(|value| !value.is_empty()) {
+            for property in hil_properties {
+                out_lines.push(xml_element("property", &[], Some(property), 1));
+            }
+        } else if let Some(props) = p.get("properties") {
             let prop_list: Vec<String> = if let Some(s) = props.as_str() {
                 s.split(',')
                     .map(|s| s.trim().to_string())
