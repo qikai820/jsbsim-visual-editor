@@ -33,17 +33,19 @@ Profile、Library、压缩方式、通道、仿真时间范围与记录时长。
 前一类曲线的点数。升级前生成的 MCAP 不会补出当时未记录的属性。
 
 板端已完成的日志位于 `/mnt/sdcard/LOG/YYYY-MM-DD/`，以 `.mcap` 结尾。
-仿真运行时使用 `.active` 临时文件；STOP 成功保存后才重命名为 `.mcap`。
-日志中心只列出 `.mcap`，所以正在运行的段和保存失败保留的 `.active` 不会显示。
+仿真运行时日志只在任务机 RAM 缓冲区中；STOP 时才创建 `.active` 临时文件并写入 SD，
+成功保存后重命名为 `.mcap`。日志中心只列出 `.mcap`，所以正在运行的段和保存失败
+保留的 `.active` 不会显示。缓冲区满时保留前段记录，后续样本会丢弃。
 每次 START 会创建新段。日期来自板端时钟；上位机启动仿真前会尝试同步该时钟。
 
 如果仿真结束后列表没有新文件：
 
 1. 在日志中心点击“刷新仿真机”，查看是否有读取失败提示，并检查其他日期目录。
 2. 确认板端 SD 卡已挂载、`/mnt/sdcard/LOG` 可写，且该模型运行配置启用了 MCAP。
-3. 在板端检查 `LOG` 日期目录内是否只有 `.active`；同时查看串口输出中的
+3. STOP 后在板端检查 `LOG` 日期目录内是否只有 `.active`；同时查看串口输出中的
    `JSBSim MCAP: cannot create`、`cannot start logger`、`save failed`、`saved` 和
-   `finalized on simulation stop`。保存失败时应保留 `.active` 与错误路径。
+   `finalized on simulation stop`。已创建文件后的保存失败会保留 `.active` 与错误路径；
+   如果创建文件就失败，任务机不会留下 `.active`。
 4. 若板端存在 `.mcap` 而列表仍为空，检查上位机“本地设置 → 仿真机通信”的
    USB/网络模式及连接状态。文件传输在自动模式下按 USB 协议探测结果选用 USB
    或网络；参见 [USB Bulk 说明](usb-bulk.md)。
