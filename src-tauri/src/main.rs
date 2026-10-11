@@ -604,6 +604,7 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 fn nsh_execute_tcp(command: &str) -> Result<String, String> {
+    let log_info = command.starts_with("jsbsim --mcap-info ");
     let host = transport::network_host_override().map(|address| address.to_string())
         .unwrap_or_else(|| std::env::var("SIM_UDP_HOST")
             .unwrap_or_else(|_| "192.168.101.81".to_owned()));
@@ -618,7 +619,7 @@ fn nsh_execute_tcp(command: &str) -> Result<String, String> {
         .map_err(|error| format!("cannot send NSH command: {}", error))?;
     let mut output = Vec::new();
     let mut buffer = [0u8; 1024];
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(if log_info { 6 } else { 2 });
     let mut interrupted = false;
     loop {
         if Instant::now() >= deadline || output.len() >= 16384 {
@@ -634,9 +635,16 @@ fn nsh_execute_tcp(command: &str) -> Result<String, String> {
             Ok(0) => break,
             Ok(length) => {
                 output.extend_from_slice(&buffer[..length]);
+                if log_info && output.iter().rposition(|byte| *byte == b'\n').is_some_and(|end| {
+                    output[..end].windows(b"MCAP_INFO:".len()).any(|part| part == b"MCAP_INFO:") ||
+                    output[..end].windows(b"MCAP_INFO_ERROR:".len()).any(|part| part == b"MCAP_INFO_ERROR:") ||
+                    output[..end].windows(b"Unknown option: --mcap-info".len()).any(|part| part == b"Unknown option: --mcap-info")
+                }) { break; }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock ||
-                          error.kind() == std::io::ErrorKind::TimedOut => break,
+                          error.kind() == std::io::ErrorKind::TimedOut => {
+                if !log_info { break; }
+            },
             Err(error) => return Err(format!("cannot read NSH output: {}", error)),
         }
     }
@@ -659,7 +667,8 @@ fn nsh_execute_tcp(command: &str) -> Result<String, String> {
     }
     let mut text = String::from_utf8_lossy(&output).replace('\r', "");
     if interrupted {
-        text.push_str("\n[continuous output stopped after 2 seconds; Ctrl+C sent]\n");
+        text.push_str(&format!("\n[continuous output stopped after {} seconds; Ctrl+C sent]\n",
+                               if log_info { 6 } else { 2 }));
     }
     Ok(text)
 }
@@ -894,6 +903,23 @@ async fn ftp_list_dsdl() -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn ftp_list_logs() -> Result<serde_json::Value, String> {
     run_blocking(|| Ok(serde_json::json!({ "files": ftp_sync::list_logs()?, "root": "/mnt/sdcard/LOG", "source": ftp_sync::transport_source() }))).await
+}
+
+#[tauri::command]
+async fn ftp_log_info(file: String) -> Result<serde_json::Value, String> {
+    run_blocking(move || {
+        let command = ftp_sync::log_info_command(&file)?;
+        let output = nsh_execute(command)?;
+        if let Some(error) = output.lines().find_map(|line| line.find("MCAP_INFO_ERROR:").map(|position| &line[position + "MCAP_INFO_ERROR:".len()..])) {
+            return Err(error.trim().to_string());
+        }
+        if output.contains("Unknown option: --mcap-info") {
+            return Err("任务机固件尚不支持读取 MCAP 信息；下载和 PlotJuggler 查看仍可使用".into());
+        }
+        let json = output.lines().find_map(|line| line.find("MCAP_INFO:").map(|position| &line[position + "MCAP_INFO:".len()..]))
+            .ok_or_else(|| format!("任务机没有返回 MCAP 信息：{}", output.trim()))?;
+        serde_json::from_str(json).map_err(|error| format!("无法解析任务机 MCAP 信息：{error}"))
+    }).await
 }
 
 #[tauri::command]
@@ -1484,6 +1510,7 @@ fn main() {
             ftp_list_engines,
             ftp_list_dsdl,
             ftp_list_logs,
+            ftp_log_info,
             ftp_download_log,
             ftp_delete_log,
             ftp_download_dsdl,

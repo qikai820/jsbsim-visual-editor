@@ -152,6 +152,15 @@ fn safe_log_path(value: &str) -> Result<&str, String> {
     Ok(value)
 }
 
+pub fn log_info_command(file: &str) -> Result<String, String> {
+    safe_log_path(file)?;
+    if !file.ends_with(".mcap") || file.len() > 100 ||
+        !file.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')) {
+        return Err("invalid MCAP log path".into());
+    }
+    Ok(format!("jsbsim --mcap-info {file}"))
+}
+
 fn curl_output(args: &[&str]) -> Result<Vec<u8>, String> {
     let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
     let output = Command::new("curl")
@@ -854,7 +863,17 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{complete_mcap_file, is_day_directory};
+    use super::{complete_mcap_file, is_day_directory, log_info_command};
+
+    #[test]
+    fn log_info_only_accepts_shell_safe_log_paths() {
+        assert_eq!(log_info_command("2026-09-27/jsbsim_quadrot_1790467200.mcap").unwrap(),
+                   "jsbsim --mcap-info 2026-09-27/jsbsim_quadrot_1790467200.mcap");
+        for path in ["../private.mcap", "2026-09-27/a;reboot.mcap", "x/../../y.mcap",
+                     "2026-09-27/a file.mcap", "2026-09-27/a.active"] {
+            assert!(log_info_command(path).is_err(), "accepted {path}");
+        }
+    }
 
     #[test]
     fn recognizes_complete_and_fat_truncated_log_dates() {

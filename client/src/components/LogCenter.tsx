@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  ftpDeleteLog, ftpDownloadLog, ftpListLogs, listenLogDownloadProgress,
+  ftpDeleteLog, ftpDownloadLog, ftpListLogs, ftpLogInfo, listenLogDownloadProgress,
   openPlotJugglerLog, pickPlotJugglerLog,
-  type LocalMcapLog, type RemoteLogFile,
+  type LocalMcapLog, type RemoteLogFile, type RemoteMcapInfo,
 } from '../utils/tauriApi';
 
 const downloadDirectory = () => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs';
@@ -15,7 +16,31 @@ const formatDate = (value?: string | number | null) => {
     : value.startsWith('epoch:') ? new Date(Number(value.slice(6)) * 1000) : new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 };
+const formatMcapTime = (nanoseconds: number) => nanoseconds >= 0
+  ? `${(nanoseconds / 1_000_000_000).toFixed(3)} s` : '—';
+const formatDuration = (start: number, end: number) => {
+  if (end < start || (start === 0 && end === 0)) return '—';
+  const seconds = Math.floor((end - start) / 1_000_000_000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  return `${hours ? `${hours} 小时 ` : ''}${minutes} 分 ${seconds % 60} 秒`;
+};
+const formatCount = (count: number | null) => count == null ? '未提供' : count.toLocaleString();
+const formatAverageFrequency = (count: number | null, startNs: number, endNs: number) => {
+  const durationNs = endNs - startNs;
+  if (count == null || !Number.isFinite(count) || !Number.isFinite(durationNs) || durationNs <= 0) return '—';
+  const hertz = count * 1_000_000_000 / durationNs;
+  if (!Number.isFinite(hertz)) return '—';
+  if (hertz === 0) return '0 Hz';
+  if (hertz < 0.01) return '<0.01 Hz';
+  return `${hertz.toFixed(2)} Hz`;
+};
 type LogItem = { key: string; name: string; size?: number | null; modified?: string | number | null };
+type WindowRect = { left: number; top: number; width: number; height: number };
+type WindowGesture = WindowRect & { pointerId: number; x: number; y: number; mode: 'drag' | 'resize' };
+const WINDOW_MARGIN = 8;
+const MIN_WINDOW_WIDTH = 520;
+const MIN_WINDOW_HEIGHT = 320;
 
 export default function LogCenter({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<'remote' | 'local'>('remote');
@@ -26,16 +51,99 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{ name: string; bytes: number; retries: number } | null>(null);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
+  const [infoResult, setInfoResult] = useState<{ file: string; value: RemoteMcapInfo } | null>(null);
+  const [infoLoading, setInfoLoading] = useState(false);
+  const [infoError, setInfoError] = useState('');
+  const infoCache = useRef(new Map<string, RemoteMcapInfo>());
+  const [windowRect, setWindowRect] = useState<WindowRect | null>(null);
+  const windowRef = useRef<HTMLDivElement>(null);
+  const windowGesture = useRef<WindowGesture | null>(null);
+
+  const beginWindowGesture = (event: ReactPointerEvent<HTMLElement>, mode: WindowGesture['mode']) => {
+    if (event.button !== 0 || (mode === 'drag' && (event.target as HTMLElement).closest('button, input, select, textarea'))) return;
+    const rect = windowRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    event.stopPropagation();
+    windowGesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      left: rect.left, top: rect.top, width: rect.width, height: rect.height, mode };
+    setWindowRect({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const updateWindowGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = windowGesture.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    const maxWidth = Math.max(1, window.innerWidth - WINDOW_MARGIN * 2);
+    const maxHeight = Math.max(1, window.innerHeight - WINDOW_MARGIN * 2);
+    if (start.mode === 'drag') {
+      const width = Math.min(start.width, maxWidth);
+      const height = Math.min(start.height, maxHeight);
+      setWindowRect({ width, height,
+        left: Math.max(WINDOW_MARGIN, Math.min(start.left + event.clientX - start.x, window.innerWidth - width - WINDOW_MARGIN)),
+        top: Math.max(WINDOW_MARGIN, Math.min(start.top + event.clientY - start.y, window.innerHeight - height - WINDOW_MARGIN)) });
+    } else {
+      const maxAllowedWidth = Math.max(1, window.innerWidth - start.left - WINDOW_MARGIN);
+      const maxAllowedHeight = Math.max(1, window.innerHeight - start.top - WINDOW_MARGIN);
+      setWindowRect({ left: start.left, top: start.top,
+        width: Math.max(Math.min(MIN_WINDOW_WIDTH, maxAllowedWidth), Math.min(start.width + event.clientX - start.x, maxAllowedWidth)),
+        height: Math.max(Math.min(MIN_WINDOW_HEIGHT, maxAllowedHeight), Math.min(start.height + event.clientY - start.y, maxAllowedHeight)) });
+    }
+  };
+  const endWindowGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    if (windowGesture.current?.pointerId !== event.pointerId) return;
+    windowGesture.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  useEffect(() => {
+    const keepWindowVisible = () => setWindowRect(current => {
+      if (!current) return current;
+      const width = Math.min(current.width, Math.max(1, window.innerWidth - WINDOW_MARGIN * 2));
+      const height = Math.min(current.height, Math.max(1, window.innerHeight - WINDOW_MARGIN * 2));
+      return { width, height,
+        left: Math.max(WINDOW_MARGIN, Math.min(current.left, window.innerWidth - width - WINDOW_MARGIN)),
+        top: Math.max(WINDOW_MARGIN, Math.min(current.top, window.innerHeight - height - WINDOW_MARGIN)) };
+    });
+    window.addEventListener('resize', keepWindowVisible);
+    return () => window.removeEventListener('resize', keepWindowVisible);
+  }, []);
 
   const refreshRemote = async () => {
     setStatus('正在读取仿真机日志…');
     try {
       const files = await ftpListLogs();
+      infoCache.current.clear();
       setRemoteLogs(files);
       setStatus(files.length ? `仿真机上有 ${files.length} 个 MCAP 日志` : '仿真机上没有 MCAP 日志');
     } catch (error) { setStatus(`读取失败：${errorText(error)}`); }
   };
   useEffect(() => { void refreshRemote(); }, []);
+  useEffect(() => {
+    if (tab !== 'remote' || !selected) {
+      setInfoResult(null); setInfoLoading(false); setInfoError('');
+      return;
+    }
+    if (busy) { setInfoLoading(false); return; }
+    const file = remoteLogs.find(item => item.name === selected);
+    if (!file) return;
+    const key = `${file.name}:${file.size ?? 'unknown'}`;
+    const cached = infoCache.current.get(key);
+    if (cached) {
+      setInfoResult({ file: selected, value: cached }); setInfoLoading(false); setInfoError('');
+      return;
+    }
+    let active = true;
+    setInfoResult(null); setInfoLoading(true); setInfoError('');
+    const timer = window.setTimeout(() => {
+      void ftpLogInfo(file.name).then(info => {
+        if (!active) return;
+        infoCache.current.set(key, info);
+        setInfoResult({ file: selected, value: info });
+      }).catch(error => { if (active) setInfoError(errorText(error)); })
+        .finally(() => { if (active) setInfoLoading(false); });
+    }, 180);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [tab, selected, remoteLogs, busy]);
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -128,6 +236,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     return [...byDay.entries()].sort(([a], [b]) => b.localeCompare(a));
   }, [tab, remoteLogs, localLogs]);
   const current = items.find(item => item.key === selected);
+  const mcapInfo = tab === 'remote' && infoResult?.file === selected ? infoResult.value : null;
   const totalBytes = remoteLogs.find(log => log.name === downloadProgress?.name)?.size;
   const progressPercent = totalBytes && downloadProgress
     ? Math.min(100, Math.floor(downloadProgress.bytes / totalBytes * 100)) : null;
@@ -141,18 +250,23 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     return next;
   });
 
-  return <div className="log-center">
-    <header className="log-center-head">
-      <div><span className="log-center-mark">▥</span><strong>日志中心</strong><small>MCAP 日志管理与 PlotJuggler 查看</small></div>
-      <div className="log-center-actions">
+  const closeCenter = () => { if (!busy) onClose(); };
+
+  return createPortal(<div className="log-center-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeCenter(); }}>
+    <div className="log-center" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined}
+      role="dialog" aria-modal="true" aria-label="日志中心">
+    <header className="log-center-head" onPointerDown={event => beginWindowGesture(event, 'drag')}
+      onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
+      <div><span className="log-center-mark">▥</span><strong>日志中心</strong><small>MCAP 日志管理与 PlotJuggler 查看 · 拖动标题栏移动，右下角缩放</small></div>
+      <button className="log-center-close" onClick={closeCenter} disabled={busy} aria-label="关闭">×</button>
+    </header>
+    <div className="log-center-actions">
         <button onClick={() => void openLocal()} disabled={busy}>＋ 打开本地 MCAP</button>
         <button onClick={() => void refreshRemote()} disabled={busy}>↻ 刷新仿真机</button>
         {current && <button onClick={() => void viewSelected()} disabled={busy}>📈 PlotJuggler 查看</button>}
         {tab === 'remote' && current && <button onClick={() => void downloadRemote(selected, false)} disabled={busy}>↓ 下载</button>}
         {tab === 'remote' && current && <button className="danger" onClick={() => void deleteRemote()} disabled={busy}>删除</button>}
-        <button className="log-center-close" onClick={onClose}>×</button>
-      </div>
-    </header>
+    </div>
     <div className="log-center-tabs">
       <button className={tab === 'remote' ? 'active' : ''} onClick={() => { setTab('remote'); setSelected(''); }}>🛰 仿真机日志 <b>{remoteLogs.length}</b></button>
       <button className={tab === 'local' ? 'active' : ''} onClick={() => { setTab('local'); setSelected(''); }}>💻 本地日志 <b>{localLogs.length}</b></button>
@@ -169,13 +283,32 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
         </div>)}
       </aside>
       <section className="log-plot-panel">
-        <div className="log-plot-toolbar"><strong>日志查看</strong></div>
-        <div className="log-plot-empty"><div className="log-wave">⌁⌁⌁</div><strong>{current?.name.split('/').pop() || '选择一个 MCAP 日志'}</strong>
+        <div className="log-plot-toolbar"><strong>{tab === 'remote' && current ? 'MCAP 信息' : '日志查看'}</strong></div>
+        {tab === 'remote' && current && !downloadProgress && (mcapInfo || infoLoading || infoError) ?
+          <div className="log-mcap-info">
+            <strong className="log-mcap-name">{current.name.split('/').pop()}</strong>
+            {infoLoading ? <p>正在从仿真机读取 MCAP 信息…</p> : infoError ?
+              <div className="log-open-error" role="alert">信息读取失败：{infoError}</div> : mcapInfo && <>
+                <div className="log-mcap-range">仿真时间 {formatMcapTime(mcapInfo.startNs)} — {formatMcapTime(mcapInfo.endNs)}</div>
+                <div className="log-mcap-metrics">
+                  <div><small>记录时长</small><strong>{formatDuration(mcapInfo.startNs, mcapInfo.endNs)}</strong></div>
+                  <div><small>消息总数</small><strong>{formatCount(mcapInfo.messageCount)}</strong></div>
+                  <div><small>通道</small><strong>{mcapInfo.channels.length}</strong></div>
+                </div>
+                <h3>通道详情</h3>
+                <div className="log-mcap-table"><table><thead><tr><th>Topic</th><th>编码</th><th>消息数</th><th>平均频率</th></tr></thead>
+                  <tbody>{mcapInfo.channels.map(channel => <tr key={channel.topic}><td>{channel.topic}</td><td>{channel.encoding}</td><td>{formatCount(channel.messageCount)}</td><td>{formatAverageFrequency(channel.messageCount, mcapInfo.startNs, mcapInfo.endNs)}</td></tr>)}</tbody>
+                </table></div>
+                <p>平均频率 = 通道消息数 ÷ 整段日志的仿真时长；间歇通道包含未发送的时间。</p>
+                {mcapInfo.statisticsSource === 'chunk-scan' && <p>此旧日志没有 Statistics；准确消息数需扫描并解压全部 Chunk。</p>}
+              </>}
+            <button className="log-open-plotjuggler" onClick={() => void viewSelected()} disabled={busy}>📈 用 PlotJuggler 查看</button>
+          </div> : <div className="log-plot-empty"><div className="log-wave">⌁⌁⌁</div><strong>{current?.name.split('/').pop() || '选择一个 MCAP 日志'}</strong>
           <span>{downloadProgress ? `下载中：${formatSize(downloadProgress.bytes)}${totalBytes ? ` / ${formatSize(totalBytes)}` : ''}` : tab === 'remote' ? '选择仿真机日志后，在 PlotJuggler 中查看曲线' : '选择本地日志后，在 PlotJuggler 中查看曲线'}</span>
           {downloadProgress && progressPercent !== null && <div className="log-download-progress"><i style={{ width: `${progressPercent}%` }} /></div>}
           {!downloadProgress && errorStatus && <div className="log-open-error" role="alert">{errorStatus}</div>}
           {current && <button className="log-open-plotjuggler" onClick={() => void viewSelected()} disabled={busy}>📈 用 PlotJuggler 查看</button>}
-        </div>
+        </div>}
       </section>
       <aside className="log-detail-panel">
         <div className="log-panel-title">日志信息</div>
@@ -183,8 +316,19 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
           <dt>格式</dt><dd>{current ? 'MCAP' : '—'}</dd>
           <dt>文件</dt><dd>{current?.name || '—'}</dd>
           {current && <><dt>日期</dt><dd>{formatDate(current.modified)}</dd><dt>大小</dt><dd>{formatSize(current.size)}</dd></>}
+          {tab === 'remote' && current && mcapInfo && <>
+            <dt>Profile</dt><dd>{mcapInfo.profile || '—'}</dd>
+            <dt>Library</dt><dd>{mcapInfo.library || '—'}</dd>
+            <dt>压缩</dt><dd>{mcapInfo.compression || '无'}</dd>
+            <dt>Chunk</dt><dd>{mcapInfo.chunkCount}</dd>
+            <dt>统计来源</dt><dd>{mcapInfo.statisticsSource === 'summary' ? 'MCAP Summary' : '板端轻量扫描'}</dd>
+          </>}
         </dl>
       </aside>
     </main>
-  </div>;
+    <div className="log-center-resize-handle" role="separator" aria-label="调整日志中心窗口大小"
+      onPointerDown={event => beginWindowGesture(event, 'resize')} onPointerMove={updateWindowGesture}
+      onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture} />
+    </div>
+  </div>, document.body);
 }

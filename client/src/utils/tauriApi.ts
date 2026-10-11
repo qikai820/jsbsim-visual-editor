@@ -296,6 +296,22 @@ export interface RemoteLogFile {
   modified?: string | null;
 }
 
+export interface RemoteMcapInfo {
+  profile: string;
+  library: string;
+  compression: string;
+  startNs: number;
+  endNs: number;
+  chunkCount: number;
+  messageCount: number | null;
+  channels: Array<{ topic: string; encoding: string; messageCount: number | null }>;
+  statisticsSource: 'summary' | 'chunk-scan';
+}
+
+export async function ftpLogInfo(file: string): Promise<RemoteMcapInfo> {
+  return call('ftp_log_info', { file });
+}
+
 export async function ftpListLogs(): Promise<RemoteLogFile[]> {
   const result = await call('ftp_list_logs');
   return (result.files || []).map((file: any) => typeof file === 'string'
