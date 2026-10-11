@@ -91,6 +91,7 @@ try {
         window.__calls.push({ command, args });
         if (command === 'select_model_import') return window.__fixture;
         if (command === 'select_firmware_file') return window.__firmwareSelection;
+        if (command === 'sim_network_read') return [{name:'eth0',address:'192.0.2.1',netmask:'255.255.255.0',gateway:'192.0.2.254'}];
         if (command === 'parse_xml') return {
           aircraft: { name: new DOMParser().parseFromString(args.xml, 'application/xml').documentElement.getAttribute('name') },
           nodes: [], edges: [], subFiles: [], xmlFiles: [],

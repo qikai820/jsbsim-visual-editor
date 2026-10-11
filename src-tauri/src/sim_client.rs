@@ -17,7 +17,10 @@ const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
  * address the useful default instead of silently sending commands to the PC. */
 const DEFAULT_CTRL_HOST: &str = "192.168.101.81";
 const DEFAULT_CTRL_PORT: u16 = 5802;
+#[cfg(not(test))]
 const DISCOVERY_PORT: u16 = 5803;
+#[cfg(test)]
+const DISCOVERY_PORT: u16 = 0;
 
 fn model_basename(model: &str) -> &str {
     model.rsplit('/').next().unwrap_or(model).trim_end_matches(".xml")
@@ -37,7 +40,7 @@ pub struct SimClient {
     /// yet).
     send_socket: Arc<UdpSocket>,
     ctrl_addr: Arc<Mutex<SocketAddr>>,
-    configured_ctrl_addr: SocketAddr,
+    configured_ctrl_addr: Arc<Mutex<SocketAddr>>,
 }
 
 struct SimClientInner {
@@ -46,6 +49,9 @@ struct SimClientInner {
     /// Most recent complete visual telemetry frame.  Only these packets carry
     /// the JSBSim lifecycle state; auxiliary packets must not overwrite it.
     latest_sim_status: Option<Value>,
+    active_load_id: Option<u32>,
+    latest_load_diagnostic: Option<Value>,
+    diagnostic_protocol: bool,
     /// Most recent task statistics packet.  Keep it separately because a
     /// lifecycle frame may arrive immediately afterwards and must not make
     /// the toolbar CPU indicator disappear.
@@ -155,9 +161,18 @@ impl SimClient {
     fn control_addresses(&self) -> std::io::Result<(SocketAddr, Option<SocketAddr>)> {
         let learned = *self.ctrl_addr.lock()
             .map_err(|_| std::io::Error::other("control address lock"))?;
-        let fallback = (self.configured_ctrl_addr != learned)
-            .then_some(self.configured_ctrl_addr);
+        let configured = *self.configured_ctrl_addr.lock()
+            .map_err(|_| std::io::Error::other("configured control address lock"))?;
+        let fallback = (configured != learned).then_some(configured);
         Ok((learned, fallback))
+    }
+
+    pub fn set_control_host(&self, host: std::net::Ipv4Addr) {
+        if let Ok(mut configured) = self.configured_ctrl_addr.lock() {
+            let address = SocketAddr::new(host.into(), configured.port());
+            *configured = address;
+            if let Ok(mut learned) = self.ctrl_addr.lock() { *learned = address; }
+        }
     }
 
     fn send_to_control_addresses(&self, packet: &[u8]) -> std::io::Result<()> {
@@ -247,6 +262,9 @@ impl SimClient {
         let inner = Arc::new(Mutex::new(SimClientInner {
                 latest: None,
                 latest_sim_status: None,
+                active_load_id: None,
+                latest_load_diagnostic: None,
+                diagnostic_protocol: false,
                 latest_task_top: None,
                 last_health_packet_time: None,
                 task_list_generation: None,
@@ -292,8 +310,19 @@ impl SimClient {
                                               }
                                             }
                                             let mut state = inner.lock().unwrap();
+                                            let xml_diagnostic = val.get("kind").and_then(Value::as_str) == Some("xml_diagnostic");
+                                            if xml_diagnostic {
+                                                state.diagnostic_protocol = true;
+                                                if val.get("request_id").and_then(Value::as_u64) == state.active_load_id.map(u64::from) {
+                                                    state.latest_load_diagnostic = Some(val.clone());
+                                                }
+                                            }
                                             let heartbeat = val.get("kind")
                                                 .and_then(Value::as_str) == Some("heartbeat");
+                                            if heartbeat {
+                                                state.diagnostic_protocol = val.get("xml_diagnostics")
+                                                    .and_then(Value::as_u64) == Some(1);
+                                            }
                                             if let Some(remote_state) = val.get("state").and_then(Value::as_str) {
                                                 let control_ack = val.get("kind")
                                                     .and_then(Value::as_str) == Some("control_ack");
@@ -401,7 +430,7 @@ impl SimClient {
                                             /* Heartbeat acknowledgements prove board reachability
                                              * but carry no model data and must not replace the
                                              * latest visual/task snapshot. */
-                                            if !heartbeat {
+                                            if !heartbeat && !xml_diagnostic {
                                                 state.latest = Some(val);
                                             }
                                             state.connected = true;
@@ -536,7 +565,7 @@ impl SimClient {
             inner,
             send_socket,
             ctrl_addr,
-            configured_ctrl_addr: initial_ctrl_addr,
+            configured_ctrl_addr: Arc::new(Mutex::new(initial_ctrl_addr)),
         }
     }
 
@@ -729,17 +758,22 @@ impl SimClient {
 
     /// Request a bridge restart.  The request identifier makes a retransmit
     /// idempotent across the old and replacement NuttX bridge tasks.
-    pub fn send_restart(&self) -> std::io::Result<()> {
-        let request = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(|error| std::io::Error::other(error.to_string()))?
-            .as_millis() as u32;
+    pub fn send_restart(&self) -> std::io::Result<u32> {
+        let request = crate::load_diagnostics::request_id();
         let mut packet = [0u8; 9];
         packet[0..4].copy_from_slice(b"VCMD");
         packet[4] = 6; // VCMD_RESTART
         packet[5..9].copy_from_slice(&request.to_le_bytes());
 
+        {
+            let mut state = self.inner.lock().unwrap();
+            state.active_load_id = Some(request);
+            state.latest_load_diagnostic = None;
+            state.latest_sim_status = None;
+        }
+
         self.send_to_control_addresses(&packet)?;
-        Ok(())
+        Ok(request)
     }
 
     /// Synchronize NuttX realtime clock only when telemetry reports a
@@ -776,59 +810,50 @@ impl SimClient {
     }
 
     /// Request a model reload.  The NuttX bridge accepts a basename only.
-    pub fn send_load(&self, model: &str) -> std::io::Result<()> {
-        let mut packet = [0u8; 80];
-        packet[0..4].copy_from_slice(b"VCMD");
-        packet[4] = 5; // VCMD_LOAD
-        let name = model_basename(model);
-        let bytes = name.as_bytes();
-        let count = bytes.len().min(packet.len() - 5);
-        packet[5..5 + count].copy_from_slice(&bytes[..count]);
-        /* A bridge reload closes and reopens its UDP control socket.  Repeat
-         * the idempotent LOAD datagram so a packet landing in that short gap
-         * does not leave the desktop UI believing a model switch succeeded.
-         * The bridge treats a duplicate request for its active model as a
-         * start, rather than reconstructing it a second time. */
+    fn send_xml_load(&self, command: u8, payload: &str) -> std::io::Result<u32> {
+        let request = crate::load_diagnostics::request_id();
+        let packet = crate::load_diagnostics::packet(command, payload, request)?;
+        {
+            let mut state = self.inner.lock().unwrap();
+            state.active_load_id = Some(request);
+            state.latest_load_diagnostic = None;
+            state.latest_sim_status = None;
+        }
         self.send_to_control_addresses(&packet)?;
-        Ok(())
+        Ok(request)
     }
 
-    /// Request a runscript reload. Payload is `script|aircraft`; both values
-    /// are basenames validated again by the NuttX bridge.
-    pub fn send_load_script(&self, script: &str, model: &str) -> std::io::Result<()> {
-        let mut packet = [0u8; 160];
-        packet[0..4].copy_from_slice(b"VCMD");
-        packet[4] = 8; // VCMD_LOAD_SCRIPT
+    pub fn send_load(&self, model: &str) -> std::io::Result<u32> {
+        self.send_xml_load(5, model_basename(model))
+    }
+
+    pub fn send_load_script(&self, script: &str, model: &str) -> std::io::Result<u32> {
         let script = script.rsplit('/').next().unwrap_or(script);
-        let model = model_basename(model);
-        let payload = format!("{}|{}", script, model);
-        let bytes = payload.as_bytes();
-        let count = bytes.len().min(packet.len() - 5);
-        packet[5..5 + count].copy_from_slice(&bytes[..count]);
-        // Unlike model LOAD, script LOAD always rebuilds the bridge. Sending
-        // duplicates can make the freshly-created task consume a trailing
-        // datagram and immediately rebuild itself again.
-        self.send_to_control_addresses(&packet)?;
-        Ok(())
+        self.send_xml_load(8, &format!("{}|{}", script, model_basename(model)))
     }
 
-    /// Wait for the board to confirm both the requested model and its running
-    /// lifecycle state.  A successful `send_to` only confirms that Linux
-    /// accepted a UDP datagram; it is not evidence that NuttX reloaded it.
-    pub fn wait_for_running_model(&self, model: &str, timeout: Duration) -> bool {
+    /// New firmware echoes this request's result; old firmware retains the
+    /// existing visual-state handshake. A diagnostic never replaces telemetry.
+    pub fn wait_for_running_model(&self, model: &str, request: u32, timeout: Duration) -> Result<bool, String> {
         let expected = model_basename(model);
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            let confirmed = self.latest_sim_status().map(|frame| {
-                frame.get("state").and_then(Value::as_str) == Some("running") &&
-                frame.get("model").and_then(Value::as_str) == Some(expected)
-            }).unwrap_or(false);
-            if confirmed {
-                return true;
+            {
+                let state = self.inner.lock().unwrap();
+                if let Some(value) = state.latest_load_diagnostic.as_ref() {
+                    if let Some(result) = crate::load_diagnostics::outcome(value, request, expected) {
+                        return result.map(|()| true);
+                    }
+                }
+                if !state.diagnostic_protocol && state.latest_sim_status.as_ref().is_some_and(|frame|
+                    frame.get("state").and_then(Value::as_str) == Some("running") &&
+                    (expected.is_empty() || frame.get("model").and_then(Value::as_str) == Some(expected))) {
+                    return Ok(true);
+                }
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        false
+        Ok(false)
     }
 
     /// Wait for a fresh lifecycle telemetry acknowledgement from the bridge.

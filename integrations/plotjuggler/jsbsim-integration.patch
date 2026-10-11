@@ -1,0 +1,279 @@
+diff --git a/plotjuggler_app/mainwindow.cpp b/plotjuggler_app/mainwindow.cpp
+index 832e5ae..0414fb6 100644
+--- a/plotjuggler_app/mainwindow.cpp
++++ b/plotjuggler_app/mainwindow.cpp
+@@ -29,6 +29,7 @@
+ #include <QPushButton>
+ #include <QKeySequence>
+ #include <QScrollBar>
++#include <QSaveFile>
+ #include <QSettings>
+ #include <QStringListModel>
+ #include <QStringRef>
+@@ -86,7 +87,9 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
+   , _toast_manager(nullptr)
+ {
+   QLocale::setDefault(QLocale::c());  // set as default
+-  setAcceptDrops(true);
++  _jsbsim_integrated = qEnvironmentVariableIsSet("JSBSIM_PLOTJUGGLER_LAYOUT");
++  _auto_layout_path = qEnvironmentVariable("JSBSIM_PLOTJUGGLER_LAYOUT");
++  setAcceptDrops(!_jsbsim_integrated);
+ 
+   _test_option = commandline_parser.isSet("test");
+   _autostart_publishers = commandline_parser.isSet("publish");
+@@ -114,6 +117,33 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
+ 
+   ui->setupUi(this);
+ 
++  if (_jsbsim_integrated)
++  {
++    // Put the remaining layout and live-stream controls on their section header
++    // rows. This keeps the original PlotJuggler tabs and tools while saving space.
++    ui->widgetLabelLoad->setMaximumHeight(32);
++    ui->label_5->setText(tr("Layout"));
++    ui->buttonHideFileFrame->hide();
++    auto layout_header = qobject_cast<QHBoxLayout*>(ui->widgetLabelLoad->layout());
++    layout_header->addStretch();
++    layout_header->addWidget(ui->buttonLoadLayout);
++    layout_header->addWidget(ui->buttonSaveLayout);
++    layout_header->addWidget(ui->buttonRecentLayout);
++    ui->frameFile->hide();
++
++    ui->widgetLabelStreaming->setMaximumHeight(32);
++    ui->label_6->setText(tr("JSBSim Live"));
++    ui->buttonHideStreamingFrame->hide();
++    auto streaming_header = qobject_cast<QHBoxLayout*>(ui->widgetLabelStreaming->layout());
++    streaming_header->addStretch();
++    streaming_header->addWidget(ui->buttonStreamingPause);
++    streaming_header->addWidget(ui->labelStreamingAnimation);
++    streaming_header->addWidget(ui->buttonStreamingNotifications);
++    streaming_header->addWidget(ui->label_3);
++    streaming_header->addWidget(ui->streamingSpinBox);
++    ui->frameStreaming->hide();
++  }
++
+   // setupUi() sets the windowTitle so the skin-based setting must be done after
+   _skin_path = "://resources/skin";
+   if (commandline_parser.isSet("skin_path"))
+@@ -267,6 +297,10 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
+   {
+     loadLayoutFromFile(commandline_parser.value("layout"));
+   }
++  else if (_jsbsim_integrated && QFile::exists(_auto_layout_path))
++  {
++    loadLayoutFromFile(_auto_layout_path);
++  }
+ 
+   restoreGeometry(settings.value("MainWindow.geometry").toByteArray());
+   restoreState(settings.value("MainWindow.state").toByteArray());
+@@ -369,6 +403,14 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
+       settings.setValue("MainWindow.previousStreamingPlugin", _default_streamer);
+     }
+   }
++
++  if (_jsbsim_integrated)
++  {
++    _auto_layout_timer = new QTimer(this);
++    _auto_layout_timer->setInterval(5000);
++    connect(_auto_layout_timer, &QTimer::timeout, this, &MainWindow::saveIntegratedLayout);
++    _auto_layout_timer->start();
++  }
+ }
+ 
+ MainWindow::~MainWindow()
+@@ -937,6 +979,57 @@ QDomDocument MainWindow::xmlSaveState() const
+ 
+ void MainWindow::checkAllCurvesFromLayout(const QDomElement& root)
+ {
++  if (_jsbsim_integrated)
++  {
++    // Native PlotJuggler layouts store plots under Tab/Container/DockSplitter/
++    // DockArea, not directly under plotmatrix. Restore empty series before the
++    // plot widgets load their curves and before JSBSim starts streaming.
++    std::set<std::string> numeric_curves;
++    std::set<std::string> scatter_curves;
++    QDomNodeList plots = root.elementsByTagName("plot");
++    for (int i = 0; i < plots.count(); ++i)
++    {
++      QDomElement plot = plots.at(i).toElement();
++      bool is_xy = plot.attribute("mode") == "XYPlot";
++      for (QDomElement curve = plot.firstChildElement("curve"); !curve.isNull();
++           curve = curve.nextSiblingElement("curve"))
++      {
++        if (curve.hasAttribute("curve_x") && curve.hasAttribute("curve_y"))
++        {
++          numeric_curves.insert(curve.attribute("curve_x").toStdString());
++          numeric_curves.insert(curve.attribute("curve_y").toStdString());
++        }
++        else if (is_xy)
++        {
++          scatter_curves.insert(curve.attribute("name").toStdString());
++        }
++        else
++        {
++          numeric_curves.insert(curve.attribute("name").toStdString());
++        }
++      }
++    }
++
++    for (const auto& name : numeric_curves)
++    {
++      if (!name.empty() && _mapped_plot_data.numeric.count(name) == 0)
++      {
++        _mapped_plot_data.addNumeric(name);
++        _curvelist_widget->addCurve(name);
++      }
++    }
++    for (const auto& name : scatter_curves)
++    {
++      if (!name.empty() && _mapped_plot_data.scatter_xy.count(name) == 0)
++      {
++        _mapped_plot_data.addScatterXY(name);
++        _curvelist_widget->addCurve(name);
++      }
++    }
++    _curvelist_widget->refreshColumns();
++    return;
++  }
++
+   std::set<std::string> curves;
+ 
+   for (QDomElement tw = root.firstChildElement("tabbed_widget"); !tw.isNull();
+@@ -1702,6 +1795,31 @@ void MainWindow::loadStyleSheet(QString file_path)
+   {
+     QString theme = SetApplicationStyleSheet(styleFile.readAll());
+ 
++    if (_jsbsim_integrated)
++    {
++      QString integrated_style = R"(
++        QTabBar::tab { min-height: 27px; padding-left: 8px; padding-right: 8px; }
++        QWidget#widgetLabelLoad, QWidget#widgetLabelStreaming,
++        QWidget#widgetLabelPublishers, QWidget#widgetLabelTimeseries {
++          border-radius: 5px; }
++      )";
++      if (theme == "light")
++      {
++        integrated_style += R"(
++          QMainWindow, QWidget#leftMainWindowFrame { background: #f5f8fc; }
++          QMenuBar { background: #ffffff; color: #294869; border-bottom: 1px solid #d8e4f1; }
++          QMenuBar::item:selected { background: #e8f1fc; color: #294869; }
++          QWidget#widgetLabelLoad, QWidget#widgetLabelStreaming,
++          QWidget#widgetLabelPublishers, QWidget#widgetLabelTimeseries {
++            background: #e8f1fc; border: 1px solid #d8e4f1; }
++          QWidget#widgetLabelLoad QLabel, QWidget#widgetLabelStreaming QLabel,
++          QWidget#widgetLabelPublishers QLabel, QWidget#widgetLabelTimeseries QLabel {
++            color: #294869; }
++        )";
++      }
++      qApp->setStyleSheet(qApp->styleSheet() + integrated_style);
++    }
++
+     forEachWidget([&](PlotWidget* plot) { plot->replot(); });
+ 
+     _curvelist_widget->updateAppearance();
+@@ -1986,7 +2104,8 @@ bool MainWindow::loadLayoutFromFile(QString filename)
+   QDomElement previously_loaded_datafile = root.firstChildElement("previouslyLoaded_"
+                                                                   "Datafiles");
+ 
+-  QDomElement datafile_elem = previously_loaded_datafile.firstChildElement("fileInfo");
++  QDomElement datafile_elem = _jsbsim_integrated ? QDomElement() :
++                                                    previously_loaded_datafile.firstChildElement("fileInfo");
+   while (!datafile_elem.isNull())
+   {
+     QString datafile_path = datafile_elem.attribute("filename");
+@@ -2009,7 +2128,7 @@ bool MainWindow::loadLayoutFromFile(QString filename)
+   }
+ 
+   QDomElement previous_streamer = root.firstChildElement("previouslyLoaded_Streamer");
+-  if (!previous_streamer.isNull())
++  if (!_jsbsim_integrated && !previous_streamer.isNull())
+   {
+     QString streamer_name = previous_streamer.attribute("name");
+ 
+@@ -2686,6 +2805,11 @@ void MainWindow::on_buttonTimeTracker_pressed()
+ 
+ void MainWindow::closeEvent(QCloseEvent* event)
+ {
++  if (_auto_layout_timer)
++  {
++    _auto_layout_timer->stop();
++    saveIntegratedLayout();
++  }
+   _replot_timer->stop();
+   _publish_timer->stop();
+ 
+@@ -2711,6 +2835,38 @@ void MainWindow::closeEvent(QCloseEvent* event)
+   _plugin_manager.unloadAllPlugins();
+ }
+ 
++void MainWindow::saveIntegratedLayout()
++{
++  if (_auto_layout_path.isEmpty())
++  {
++    return;
++  }
++
++  QDomDocument doc = xmlSaveState();
++  QDomElement root = doc.documentElement();
++  root.appendChild(savePluginState(doc));
++
++  QDomElement custom_equations = doc.createElement("customMathEquations");
++  for (const auto& custom_it : _transform_functions)
++  {
++    custom_it.second->xmlSaveState(doc, custom_equations);
++  }
++  root.appendChild(custom_equations);
++
++  QByteArray xml = doc.toByteArray(2);
++  if (xml == _last_auto_layout)
++  {
++    return;
++  }
++  QSaveFile file(_auto_layout_path);
++  if (!file.open(QIODevice::WriteOnly) || file.write(xml) != xml.size() || !file.commit())
++  {
++    qWarning() << "Could not save JSBSim PlotJuggler layout:" << file.errorString();
++    return;
++  }
++  _last_auto_layout = xml;
++}
++
+ void MainWindow::onAddCustomPlot(const std::string& plot_name)
+ {
+   ui->widgetStack->setCurrentIndex(1);
+@@ -3089,6 +3245,11 @@ void MainWindow::on_buttonSaveLayout_clicked()
+                                   "?");
+   checkbox_datasource->setFocusPolicy(Qt::NoFocus);
+   checkbox_datasource->setChecked(settings.value("MainWindow.saveLayoutDataSource", true).toBool());
++  if (_jsbsim_integrated)
++  {
++    checkbox_datasource->setChecked(false);
++    checkbox_datasource->hide();
++  }
+ 
+   auto checkbox_snippets = new QCheckBox("Save Scripts (transforms and colormaps)");
+   checkbox_snippets->setToolTip("Do you want the layout to save your Lua scripts?");
+diff --git a/plotjuggler_app/mainwindow.h b/plotjuggler_app/mainwindow.h
+index 6c5d0a4..dd54d4f 100644
+--- a/plotjuggler_app/mainwindow.h
++++ b/plotjuggler_app/mainwindow.h
+@@ -17,6 +17,7 @@
+ #include <QSignalMapper>
+ #include <QShortcut>
+ #include <QMovie>
++#include <QTimer>
+ 
+ #include "plotwidget.h"
+ #include "plot_docker.h"
+@@ -325,6 +326,11 @@ private slots:
+   void on_buttonDots_toggled(bool checked);
+ 
+ private:
++  void saveIntegratedLayout();
++  bool _jsbsim_integrated = false;
++  QString _auto_layout_path;
++  QByteArray _last_auto_layout;
++  QTimer* _auto_layout_timer = nullptr;
+   QStringList readAllCurvesFromXML(QDomElement root_node);
+   void loadAllPlugins(QStringList command_line_plugin_folders);
+ };

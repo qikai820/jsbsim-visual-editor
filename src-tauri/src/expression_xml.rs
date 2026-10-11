@@ -19,6 +19,7 @@ pub struct XmlElement {
 }
 
 pub fn parse_xml_tree(xml: &str) -> Result<XmlElement, String> {
+    crate::xml_diagnostics::validate(xml, "XML input")?;
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 

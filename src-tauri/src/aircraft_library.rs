@@ -398,6 +398,7 @@ pub fn load_aircraft(
 
     let (main_file_name, main_xml) = main_file
         .ok_or_else(|| "No valid aircraft XML found".to_string())?;
+    crate::xml_diagnostics::validate(&main_xml, &aircraft_dir.join(&main_file_name).display().to_string())?;
 
     // Collect sub-files for reference resolution
     let mut ref_files: Vec<(String, String)> = Vec::new();
@@ -419,6 +420,7 @@ pub fn load_aircraft(
                     let fname = entry.file_name().to_string_lossy().to_string();
                     if fname != main_file_name {
                         if let Ok(content) = std::fs::read_to_string(&path) {
+                            crate::xml_diagnostics::validate(&content, &path.display().to_string())?;
                             ref_files.push((fname, content));
                         }
                     }

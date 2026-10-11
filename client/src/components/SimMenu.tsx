@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   simStart,
   simStop,
@@ -13,6 +14,8 @@ import {
 } from '../utils/tauriApi';
 import ScriptEditorDialog, { type ScriptEditorValue } from './ScriptEditorDialog';
 import { useSimSocket } from '../sim/useSimSocket';
+import { validateXmlSource, showXmlDiagnostic } from '../utils/xmlDiagnostics';
+import { MAX_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod } from '../utils/performanceSettings';
 
 interface SimMenuProps {
   loading?: boolean;
@@ -77,6 +80,7 @@ function readSavedScriptEditor(path: string): ScriptEditorValue | null {
 }
 
 function parseScriptEditorValue(file: string, xml: string): ScriptEditorValue {
+  validateXmlSource(xml, file);
   const documentXml = new DOMParser().parseFromString(xml, 'application/xml');
   if (documentXml.querySelector('parsererror')) throw new Error(`脚本 XML 解析失败: ${file}`);
   const aircraft = documentXml.querySelector('use')?.getAttribute('aircraft')?.trim();
@@ -219,6 +223,8 @@ type Submenu = 'model' | 'script' | null;
 type SimPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'restarting' | 'pausing' | 'paused' | 'resuming' | 'loading';
 type NetworkCounter = { at: number; rxBytes: number; txBytes: number };
 type NetworkRate = { rx: number; tx: number };
+type NetworkPort = 'eth0' | 'eth1';
+type NetworkHistorySample = { at: number; name: NetworkPort; rx: number; tx: number };
 
 function formatNetworkRate(bytesPerSecond: number): string {
   if (bytesPerSecond >= 1048576) return `${(bytesPerSecond / 1048576).toFixed(2)} MiB/s`;
@@ -246,11 +252,14 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const togglePerformanceSeries = (series: string) => {
     setHiddenPerformanceSeries(hidden => ({ ...hidden, [series]: !hidden[series] }));
   };
-  const [fdmWindow, setFdmWindow] = useState<10 | 20 | 30>(10);
+  const [performancePeriod, setPerformancePeriod] = useState(readPerformancePeriod);
+  const [fdmMultiplier, setFdmMultiplier] = useState<1 | 2 | 3 | 4>(1);
+  const fdmWindow = performancePeriod * fdmMultiplier;
   const [cpuHistory, setCpuHistory] = useState<{ at: number; values: number[] }[]>([]);
   const networkCounterRef = useRef<Record<string, NetworkCounter>>({});
   const networkSeenRef = useRef<Record<string, number>>({});
   const [networkRates, setNetworkRates] = useState<Record<string, NetworkRate>>({});
+  const [networkHistory, setNetworkHistory] = useState<NetworkHistorySample[]>([]);
   const [networkAvailable, setNetworkAvailable] = useState<string[]>([]);
   const [networkReported, setNetworkReported] = useState(false);
   const [remoteState, setRemoteState] = useState('disconnected');
@@ -284,6 +293,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       );
     }
   }, [selectedTest, selectedModel, preparedTarget]);
+
+  useEffect(() => {
+    const updatePeriod = () => setPerformancePeriod(readPerformancePeriod());
+    window.addEventListener('jsbsim-local-settings-changed', updatePeriod);
+    return () => window.removeEventListener('jsbsim-local-settings-changed', updatePeriod);
+  }, []);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const scriptSourceRef = useRef<{ path: string; xml: string }>({ path: '', xml: '' });
@@ -380,6 +395,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           const previous = networkCounterRef.current[counter.name];
           if (!previous || counter.rxBytes < previous.rxBytes || counter.txBytes < previous.txBytes) {
             networkCounterRef.current[counter.name] = { at: now, rxBytes: counter.rxBytes, txBytes: counter.txBytes };
+            if (previous) setNetworkHistory(history => history.filter(sample => sample.name !== counter.name));
             setNetworkRates(rates => {
               const next = { ...rates };
               delete next[counter.name];
@@ -387,10 +403,13 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             });
           } else if (now - previous.at >= 900) {
             const seconds = (now - previous.at) / 1000;
-            setNetworkRates(rates => ({ ...rates, [counter.name]: {
+            const rate = {
               rx: (counter.rxBytes - previous.rxBytes) / seconds,
               tx: (counter.txBytes - previous.txBytes) / seconds,
-            } }));
+            };
+            setNetworkRates(rates => ({ ...rates, [counter.name]: rate }));
+            setNetworkHistory(history => [...history, { at: now, name: counter.name as NetworkPort, ...rate }]
+              .filter(sample => now - sample.at <= MAX_PERFORMANCE_PERIOD_SECONDS * 4 * 1000));
             networkCounterRef.current[counter.name] = { at: now, rxBytes: counter.rxBytes, txBytes: counter.txBytes };
           }
         }
@@ -413,7 +432,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         if (status.connected && status.state === 'running' && !launchInProgressRef.current) {
           const now = Date.now();
           setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs, peak: peak ?? remoteFdmRunMs }]
-            .filter(sample => now - sample.at <= 30000));
+            .filter(sample => now - sample.at <= MAX_PERFORMANCE_PERIOD_SECONDS * 4 * 1000));
         }
       }
       const remoteSimulationDt = Number(status.simulationDt);
@@ -422,7 +441,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       if (fresh && cores.length) {
         const now = Date.now();
         setCpuHistory(history => [...history, { at: now, values: cores }]
-          .filter(sample => now - sample.at <= 30000));
+          .filter(sample => now - sample.at <= MAX_PERFORMANCE_PERIOD_SECONDS * 4 * 1000));
       }
       setRemoteState(status.state || (status.connected ? 'waiting' : 'disconnected'));
       /* LOAD recreates the remote task and may briefly return the old
@@ -590,6 +609,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       localLifecycleControlUntilRef.current = 0;
       setError(message);
       appendLog(`启动失败: ${message}`);
+      setPhase('idle');
+      if (/xml|:\d+:\d+:/i.test(message)) showXmlDiagnostic(message, '仿真机加载诊断');
     }
     launchInProgressRef.current = false;
     setLoading(false);
@@ -637,8 +658,10 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setPhase('idle');
     } catch (err: any) {
       setSelectedModel('');
-      setError(err.message || '脚本加载失败');
-      appendLog(`脚本加载失败: ${err.message || '未知错误'}`);
+      const message = err?.message || String(err);
+      setError(message);
+      showXmlDiagnostic(message, '脚本 XML 加载失败');
+      appendLog(`脚本加载失败: ${message}`);
       setPhase('idle');
     }
       setLoading(false);
@@ -717,8 +740,10 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       appendLog(`模型已加载到编辑器: ${path}`);
       setPhase('idle');
     } catch (err: any) {
-      setError(err.message || '模型加载失败');
-      appendLog(`模型加载失败: ${err.message || '未知错误'}`);
+      const message = err?.message || String(err);
+      setError(message);
+      showXmlDiagnostic(message, '模型 XML 加载失败');
+      appendLog(`模型加载失败: ${message}`);
       setPhase('idle');
     }
     setLoading(false);
@@ -761,7 +786,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setPaused(false);
       setPhase('running');
     } catch (err: any) {
-      setError(err.message || '重新运行失败');
+      const message = err?.message || String(err);
+      setError(message);
+      setPhase('idle');
+      appendLog(`重新加载失败: ${message}`);
+      if (/xml|:\d+:\d+:/i.test(message)) showXmlDiagnostic(message, '仿真机加载诊断');
     }
     launchInProgressRef.current = false;
     setLoading(false);
@@ -833,8 +862,14 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // observable between runs and reloads.
   const showRuntimeStatus = external || running || phase !== 'idle';
   const fdmLoading = external && (launchInProgressRef.current || remoteState === 'loading');
-  const fdmVisibleHistory = fdmHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
-  const cpuVisibleHistory = cpuHistory.filter(sample => Date.now() - sample.at <= fdmWindow * 1000);
+  const chartNow = Date.now();
+  const fdmVisibleHistory = fdmHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
+  const cpuVisibleHistory = cpuHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
+  const networkVisibleHistory = networkHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
+  const networkPeak = networkVisibleHistory.reduce((peak, sample) => Math.max(peak, sample.rx, sample.tx), 0);
+  const networkUnitBytes = networkPeak >= 1048576 ? 1048576 : 1024;
+  const networkUnitLabel = networkUnitBytes === 1048576 ? 'MiB/s' : 'KiB/s';
+  const networkChartMax = Math.max(0.4, Math.ceil(networkPeak / networkUnitBytes * 1.1 * 10) / 10) * networkUnitBytes;
   const cpuChartMax = Math.min(100, Math.max(5,
     Math.ceil(Math.max(0, ...cpuVisibleHistory.flatMap(sample => sample.values)) * 1.1 / 5) * 5));
   const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.peak)) * 1.1;
@@ -842,7 +877,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const fdmAverage = fdmValues.length ? fdmValues.reduce((sum, value) => sum + value, 0) / fdmValues.length : 0;
   const fdmMaximum = fdmVisibleHistory.length ? Math.max(...fdmVisibleHistory.map(sample => sample.peak)) : 0;
   const fdmMinimum = fdmValues.length ? Math.min(...fdmValues) : 0;
-  const chartX = (at: number) => 35 + (1 - Math.min(fdmWindow * 1000, Math.max(0, Date.now() - at)) / (fdmWindow * 1000)) * 290;
+  const chartX = (at: number) => 35 + (1 - Math.min(fdmWindow * 1000, Math.max(0, chartNow - at)) / (fdmWindow * 1000)) * 290;
   const cpuChartPoints = cpuCores.map((_, core) => cpuVisibleHistory.map(sample => {
     const x = chartX(sample.at);
     const y = 122 - Math.max(0, Math.min(cpuChartMax, sample.values[core] ?? 0)) * 96 / cpuChartMax;
@@ -859,6 +894,19 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     const y = 122 - Math.min(96, sample.peak * 96 / fdmChartMax);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
+
+  const networkChartPath = (name: NetworkPort, direction: 'rx' | 'tx') => {
+    let path = '';
+    let previousAt = 0;
+    for (const sample of networkVisibleHistory) {
+      if (sample.name !== name) continue;
+      const x = chartX(sample.at);
+      const y = 104 - Math.min(80, sample[direction] * 80 / networkChartMax);
+      path += `${previousAt && sample.at - previousAt <= 3000 ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)} `;
+      previousAt = sample.at;
+    }
+    return path;
+  };
 
   const handlePrimaryAction = () => {
     if (running) {
@@ -911,7 +959,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       )}
       {showRuntimeStatus && external && (
         <span className="sim-runtime-metrics">
-          <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="查看 CPU 与 FDM 性能曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
+          <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="查看 CPU、FDM 与网速曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
             <span className="sim-metric-label">CPU</span> {healthFresh && cpuCores.length > 0
               ? cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')
               : '等待更新'}
@@ -920,7 +968,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             <span className="sim-metric-label">RAM</span> {healthFresh ? `${memory.percent.toFixed(1)}%` : '等待更新'}
           </span>}
           {fdmLoading ? <span className="sim-metric-loading"><span className="sim-metric-label">FDM</span> 加载中</span>
-            : fdmRunMs != null && <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="FDM 周期耗时包含输入/输出等待；查看 CPU 与 FDM 性能曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
+            : fdmRunMs != null && <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="FDM 周期耗时包含输入/输出等待；查看 CPU、FDM 与网速曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
               <span className="sim-metric-label">FDM</span> {fdmRunMs.toFixed(3)} ms <small>⌄</small>
             </button>}
         </span>
@@ -930,8 +978,9 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           <div className="sim-performance-head">
             <b>性能曲线</b>
             <span>{healthFresh ? '实时' : '等待更新'}</span>
-            <div className="sim-performance-window" aria-label="时间范围">
-              {([10, 20, 30] as const).map(seconds => <button key={seconds} type="button" className={fdmWindow === seconds ? 'active' : ''} aria-pressed={fdmWindow === seconds} onClick={() => setFdmWindow(seconds)}>{seconds}s</button>)}
+            <div className="sim-performance-window" aria-label={`${performancePeriod} 秒周期时间范围`}>
+              <span>周期 {performancePeriod}s</span>
+              {([1, 2, 3, 4] as const).map(multiplier => <button key={multiplier} type="button" className={fdmMultiplier === multiplier ? 'active' : ''} aria-pressed={fdmMultiplier === multiplier} onClick={() => setFdmMultiplier(multiplier)}>×{multiplier}</button>)}
             </div>
             <button type="button" className="sim-performance-close" aria-label="收起性能曲线" onClick={() => setPerformancePopupOpen(false)}>×</button>
           </div>
@@ -951,6 +1000,29 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
                 onClick={() => togglePerformanceSeries('fdm-peak')}><i aria-hidden="true" />峰值</button>
             </>}
           </div>
+          <div className="sim-performance-network-row" aria-label="板端网口实时速率">
+            {(['eth0', 'eth1'] as const).map(name => {
+              const rate = healthFresh && networkReported && networkAvailable.includes(name) ? networkRates[name] : undefined;
+              const status = !healthFresh ? '等待连接'
+                : !networkReported ? '遥测未上报网口统计'
+                : !networkAvailable.includes(name) ? '暂未取得统计'
+                : '采样中';
+              return <span key={name} className={`sim-performance-network network-${name}`} aria-label={`${name} 网速`}>
+                <b>{name}</b>{rate
+                  ? ([['rx', '↓'], ['tx', '↑']] as const).map(([direction, arrow]) => {
+                    const key = `${name}-${direction}`;
+                    return <button key={direction} type="button" className={`sim-network-series network-${key}`}
+                      aria-label={`${name} ${direction === 'rx' ? '接收' : '发送'}速率曲线`}
+                      aria-pressed={!hiddenPerformanceSeries[key]}
+                      title={`${hiddenPerformanceSeries[key] ? '显示' : '隐藏'} ${name} ${direction === 'rx' ? '接收' : '发送'}速率曲线`}
+                      onClick={() => togglePerformanceSeries(key)}>
+                      <i aria-hidden="true" />{arrow} {formatNetworkRate(rate[direction])}
+                    </button>;
+                  })
+                  : <b className="sim-network-wait">{status}</b>}
+              </span>;
+            })}
+          </div>
           <svg className="sim-performance-chart" viewBox="0 0 360 152" role="img" aria-label="CPU 利用率与 FDM 周期耗时共用时间轴，左轴为 CPU 百分比，右轴为 FDM 毫秒">
             <text x="35" y="14">CPU %</text><text x="325" y="14" textAnchor="end">FDM ms</text>
             {[0, 1, 2, 3, 4].map(step => {
@@ -968,27 +1040,27 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             </>}
             <text x="35" y="145">-{fdmWindow}s</text><text x="325" y="145" textAnchor="end">现在</text>
           </svg>
+          <svg className="sim-performance-chart sim-network-chart" viewBox="0 0 360 128" role="img" aria-label={`eth0 与 eth1 接收和发送速率曲线，纵轴单位 ${networkUnitLabel}`}>
+            <text x="35" y="14">网速 {networkUnitLabel}</text>
+            {[0, 1, 2, 3, 4].map(step => {
+              const y = 104 - step * 20;
+              return <g key={step}>
+                <line x1="35" x2="325" y1={y} y2={y} className="sim-performance-grid" />
+                <text x="30" y={y + 3} textAnchor="end">{(networkChartMax / networkUnitBytes * step / 4).toFixed(1)}</text>
+              </g>;
+            })}
+            {(['eth0', 'eth1'] as const).flatMap(name => (['rx', 'tx'] as const).map(direction => {
+              const key = `${name}-${direction}`;
+              return !hiddenPerformanceSeries[key] && <path key={key} d={networkChartPath(name, direction)} className={`sim-network-line network-${key}`} />;
+            }))}
+            {!networkVisibleHistory.length && <text x="180" y="68" textAnchor="middle">等待网速采样</text>}
+            <text x="35" y="123">-{fdmWindow}s</text><text x="325" y="123" textAnchor="end">现在</text>
+          </svg>
           {!fdmLoading && fdmVisibleHistory.length > 0 && <div className="sim-performance-stats">
             <span>FDM 平均 <b>{fdmAverage.toFixed(3)} ms</b></span>
             <span>最大 <b>{fdmMaximum.toFixed(3)} ms</b></span>
             <span>最低均值 <b>{fdmMinimum.toFixed(3)} ms</b></span>
           </div>}
-          <div className="sim-network-rates" aria-label="板端网口实时速率">
-            {(['eth0', 'eth1'] as const).map(name => {
-              const rate = healthFresh && networkReported && networkAvailable.includes(name) ? networkRates[name] : undefined;
-              const status = !healthFresh ? '等待连接'
-                : !networkReported ? '遥测未上报网口统计'
-                : !networkAvailable.includes(name) ? '暂未取得统计'
-                : '采样中';
-              return <div className="sim-network-port" key={name}>
-                <b>{name}</b>
-                {rate ? <>
-                  <span title="板端接收速率">↓ {formatNetworkRate(rate.rx)}</span>
-                  <span title="板端发送速率">↑ {formatNetworkRate(rate.tx)}</span>
-                </> : <span className="sim-network-wait">{status}</span>}
-              </div>;
-            })}
-          </div>
         </div>
       )}
 
@@ -1100,7 +1172,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {error && <div className="sim-error">{error}</div>}
         </div>
       )}
-      {scriptEditor.name && !scriptEditorExpanded && (
+      {scriptEditor.name && !scriptEditorExpanded && createPortal(
         <button className="script-flow-mini" onClick={() => setScriptEditorExpanded(true)} title="点击查看完整脚本逻辑">
           <span className="script-flow-mini-head">📋 {scriptEditor.name}</span>
           <span className="script-flow-mini-meta">
@@ -1111,7 +1183,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           </span>
           <span className="script-flow-mini-track"><i>▶</i>{scriptEditor.events.slice(0, 4).map((event, index) => <i key={`${event.name}-${index}`}>{index + 1}</i>)}<i>■</i></span>
           <span className="script-flow-mini-hint">点击展开完整逻辑</span>
-        </button>
+        </button>, document.body
       )}
       {scriptEditor.name && scriptEditorExpanded && <ScriptEditorDialog value={scriptEditor} variables={globalVariables} onChange={setScriptEditor} onSave={handleSaveScript} onClose={() => setScriptEditorExpanded(false)} />}
     </div>

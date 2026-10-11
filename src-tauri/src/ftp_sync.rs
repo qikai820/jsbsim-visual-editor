@@ -90,6 +90,9 @@ pub struct LogFileInfo {
 }
 
 fn endpoint() -> String {
+    if let Some(address) = transport::network_host_override() {
+        return format!("ftp://{address}");
+    }
     std::env::var("NUTTX_FTP_URL")
         .unwrap_or_else(|_| "ftp://192.168.101.81".to_string())
         .trim_end_matches('/')
@@ -403,7 +406,7 @@ pub fn list_logs() -> Result<Vec<LogFileInfo>, String> {
     Ok(files.into_iter().map(log_info).collect())
 }
 
-pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<String, String> {
+fn log_download_paths(file: &str, configured_directory: Option<&str>) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let file = safe_log_path(file)?;
     if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
     let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
@@ -415,26 +418,105 @@ pub fn download_log(file: &str, configured_directory: Option<&str>) -> Result<St
     if !directory.is_absolute() || !directory.starts_with(&home) {
         return Err("log download directory must be an absolute path inside the current user's home directory".into());
     }
-    std::fs::create_dir_all(&directory).map_err(|e| format!("cannot create download directory: {e}"))?;
     let local_name = file.rsplit('/').next().ok_or("invalid remote log path")?;
     let target = directory.join(local_name);
     let partial = directory.join(format!(".{local_name}.part"));
-    if use_usb() {
-        usb_file::download_to(&format!("LOG/{file}"), &partial)?;
-    } else {
-        let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
-        let status = Command::new("curl").args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--user", &auth, "--output"])
-            .arg(&partial).arg(&url).status().map_err(|e| format!("cannot start curl: {e}"))?;
-        if !status.success() { let _ = std::fs::remove_file(&partial); return Err("FTP log download failed".into()); }
+    Ok((target, partial))
+}
+
+pub fn log_download_partial_path(file: &str, configured_directory: Option<&str>) -> Result<std::path::PathBuf, String> {
+    log_download_paths(file, configured_directory).map(|(_, partial)| partial)
+}
+
+pub fn complete_mcap_file(path: &std::path::Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    const MAGIC: [u8; 8] = [0x89, b'M', b'C', b'A', b'P', b'0', b'\r', b'\n'];
+    if !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() >= 16) {
+        return false;
     }
-    const MCAP_MAGIC: [u8; 8] = [0x89, b'M', b'C', b'A', b'P', b'0', b'\r', b'\n'];
-    let mut prefix = [0u8; 8];
-    let prefix_ok = std::fs::File::open(&partial)
-        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut prefix)).is_ok();
-    let size = std::fs::metadata(&partial).map(|value| value.len()).unwrap_or(0);
-    if !prefix_ok || prefix != MCAP_MAGIC {
+    let Ok(mut file) = std::fs::File::open(path) else { return false; };
+    let mut first = [0u8; 8];
+    let mut last = [0u8; 8];
+    file.read_exact(&mut first).is_ok() && file.seek(SeekFrom::End(-8)).is_ok()
+        && file.read_exact(&mut last).is_ok() && first == MAGIC && last == MAGIC
+}
+
+const MCAP_MAGIC: [u8; 8] = [0x89, b'M', b'C', b'A', b'P', b'0', b'\r', b'\n'];
+
+fn check_remote_mcap_header(url: &str, auth: &str) -> Result<(), String> {
+    let prefix = curl_output(&["--user", auth, "--range", "0-7", url])
+        .map_err(|error| format!("读取仿真机日志文件头失败：{error}"))?;
+    if prefix.as_slice() != MCAP_MAGIC {
+        return Err("仿真机上的日志文件头无效，无法用 PlotJuggler 打开（可能是存储或传输数据损坏）".into());
+    }
+    Ok(())
+}
+
+fn check_usb_mcap_header(file: &str) -> Result<(), String> {
+    let prefix = usb_file::read_prefix(&format!("LOG/{file}"), MCAP_MAGIC.len())
+        .map_err(|error| format!("通过 USB 读取仿真机日志文件头失败：{error}"))?;
+    if prefix.as_slice() != MCAP_MAGIC {
+        return Err("仿真机上的日志文件头无效，无法用 PlotJuggler 打开（可能是存储数据损坏）".into());
+    }
+    Ok(())
+}
+
+pub fn download_log(file: &str, configured_directory: Option<&str>, expected_size: Option<u64>, for_viewing: bool) -> Result<String, String> {
+    let file = safe_log_path(file)?;
+    let (target, partial) = log_download_paths(file, configured_directory)?;
+    let size_matches = |path: &std::path::Path| std::fs::symlink_metadata(path).is_ok_and(|metadata|
+        metadata.file_type().is_file() && expected_size.is_none_or(|size| metadata.len() == size));
+    let usable = |path: &std::path::Path| size_matches(path) && (!for_viewing || complete_mcap_file(path));
+    // Finalized MCAP names are unique. Reopening a previously downloaded log
+    // must not start another multi-minute transfer from the board.
+    if usable(&target) {
+        return Ok(target.to_string_lossy().into_owned());
+    }
+    std::fs::create_dir_all(target.parent().ok_or("download directory is invalid")?)
+        .map_err(|e| format!("cannot create download directory: {e}"))?;
+    let valid_partial = || usable(&partial);
+    let ftp_transfer = || -> Result<(), String> {
+        let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
+        match if for_viewing { check_remote_mcap_header(&url, &auth) } else { Ok(()) } {
+            Err(error) => Err(error),
+            Ok(()) => {
+                let mut result = Err("FTP 日志下载未开始".to_string());
+                for attempt in 1..=2 {
+                    let output = Command::new("curl").args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--speed-limit", "1024", "--speed-time", "30", "--user", &auth, "--output"])
+                        .arg(&partial).arg(&url).output().map_err(|e| format!("cannot start curl: {e}"))?;
+                    result = if output.status.success() && valid_partial() { Ok(()) }
+                        else if output.status.success() { Err(format!("FTP 第 {attempt} 次下载不完整{}", if for_viewing { "或 MCAP 文件头/文件尾无效" } else { "" })) }
+                        else { Err(format!("FTP 第 {attempt} 次下载失败：{}", String::from_utf8_lossy(&output.stderr).trim())) };
+                    if result.is_ok() { break; }
+                    if attempt == 1 { std::thread::sleep(Duration::from_millis(300)); }
+                }
+                result
+            }
+        }
+    };
+    let using_usb = use_usb();
+    let mut transfer = if using_usb {
+        (if for_viewing { check_usb_mcap_header(file) } else { Ok(()) }).and_then(|()|
+            usb_file::download_to(&format!("LOG/{file}"), &partial).map(|_| ()))
+    } else { ftp_transfer() };
+    if transport::mode() == TransportMode::Auto && using_usb && (transfer.is_err() || !valid_partial()) {
+        let first_error = transfer.err().unwrap_or_else(|| "USB 收到的日志不完整".into());
+        transfer = ftp_transfer().map_err(|error| format!("USB 通道失败：{first_error}；{error}"));
+    }
+    if transport::mode() == TransportMode::Auto && !using_usb && (transfer.is_err() || !valid_partial()) {
+        let first_error = transfer.err().unwrap_or_else(|| "FTP 收到的日志不完整".into());
+        transfer = (if for_viewing { check_usb_mcap_header(file) } else { Ok(()) }).and_then(|()|
+            usb_file::download_to(&format!("LOG/{file}"), &partial).map(|_| ()))
+            .map_err(|error| format!("{first_error}；USB 备用通道失败：{error}"));
+    }
+    if let Err(error) = transfer {
         let _ = std::fs::remove_file(&partial);
-        return Err(format!("downloaded log is empty or incomplete ({size} bytes); wait for the simulation to finish and refresh"));
+        return Err(error);
+    }
+    let size = std::fs::metadata(&partial).map(|value| value.len()).unwrap_or(0);
+    if !valid_partial() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("日志下载不完整：已收到 {size} 字节，预期 {} 字节", expected_size.map_or("未知".into(), |value| value.to_string())));
     }
     std::fs::rename(&partial, &target).map_err(|e| format!("cannot finalize downloaded log: {e}"))?;
     Ok(target.to_string_lossy().to_string())
@@ -772,7 +854,7 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_day_directory;
+    use super::{complete_mcap_file, is_day_directory};
 
     #[test]
     fn recognizes_complete_and_fat_truncated_log_dates() {
@@ -780,5 +862,21 @@ mod tests {
         assert!(is_day_directory("2026-09-"));
         assert!(!is_day_directory("2026-9-18"));
         assert!(!is_day_directory("logs"));
+    }
+
+    #[test]
+    fn never_reopens_an_incomplete_or_redirected_cached_log() {
+        let path = std::env::temp_dir().join(format!("jsbsim-mcap-cache-{}", std::process::id()));
+        let magic = [0x89, b'M', b'C', b'A', b'P', b'0', b'\r', b'\n'];
+        std::fs::write(&path, magic).unwrap();
+        assert!(!complete_mcap_file(&path));
+        std::fs::write(&path, [magic, magic].concat()).unwrap();
+        assert!(complete_mcap_file(&path));
+        std::fs::remove_file(&path).unwrap();
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+            assert!(!complete_mcap_file(&path));
+            std::fs::remove_file(&path).unwrap();
+        }
     }
 }

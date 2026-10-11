@@ -1,4 +1,5 @@
 /** Tauri desktop IPC adapter. The standalone HTTP/web edition is removed. */
+import { validateXmlSource } from './xmlDiagnostics';
 
 // Detect Tauri runtime
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -69,6 +70,9 @@ export interface PlotJugglerStatus {
   rateHz: number;
 }
 export async function startPlotJuggler(): Promise<PlotJugglerStatus> { return call('plotjuggler_start'); }
+export interface LocalMcapLog { path: string; name: string; size: number; modified: number | null }
+export async function pickPlotJugglerLog(): Promise<LocalMcapLog | null> { return call('plotjuggler_pick_log'); }
+export async function openPlotJugglerLog(path: string): Promise<string> { return call('plotjuggler_open_log', { path }); }
 export function getPlotJugglerRate(): number {
   const saved = localStorage.getItem(PLOTJUGGLER_RATE_KEY);
   if (saved !== null) {
@@ -113,8 +117,10 @@ export async function generateXml(data: any): Promise<string> {
   return result.xml;
 }
 
-export async function parseXml(xml: string, files?: ReferenceFile[]): Promise<any> {
-  const result = await call('parse_xml', { xml, files: files || null });
+export async function parseXml(xml: string, files?: ReferenceFile[], sourceName = 'model.xml'): Promise<any> {
+  validateXmlSource(xml, sourceName);
+  for (const file of files || []) validateXmlSource(file.xml, file.name);
+  const result = await call('parse_xml', { xml, files: files || null, sourceName });
   if (result.error) throw new Error(result.error);
   return result;
 }
@@ -213,6 +219,21 @@ export async function nshExecute(command: string): Promise<string> {
   return call('nsh_execute', { command });
 }
 
+export interface SimulatorNetworkInterface {
+  name: string;
+  address: string;
+  netmask: string;
+  gateway: string;
+}
+
+export async function readSimulatorNetwork(): Promise<SimulatorNetworkInterface[]> {
+  return call('sim_network_read');
+}
+
+export async function setSimulatorNetwork(config: SimulatorNetworkInterface): Promise<SimulatorNetworkInterface> {
+  return call('sim_network_set', config);
+}
+
 export async function simPause(): Promise<any> {
   return call('sim_pause');
 }
@@ -282,8 +303,14 @@ export async function ftpListLogs(): Promise<RemoteLogFile[]> {
     : { name: String(file.name || ''), size: typeof file.size === 'number' ? file.size : null, modified: file.modified || null });
 }
 
-export async function ftpDownloadLog(file: string, directory?: string): Promise<{ file: string; path: string; size: number; bytes?: number[] | null }> {
-  return call('ftp_download_log', { file, directory });
+export async function ftpDownloadLog(file: string, directory?: string, expectedSize?: number | null, forViewing = true): Promise<{ file: string; path: string; size: number; hasMcapMarkers: boolean }> {
+  return call('ftp_download_log', { file, directory, expectedSize, forViewing });
+}
+
+export async function listenLogDownloadProgress(callback: (progress: { file: string; bytes: number }) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  await ensureTauri();
+  return tauriListen('ftp-log-download-progress', (event: any) => callback(event.payload));
 }
 
 export async function simSyncTime(thresholdSecs: number): Promise<{ checked: boolean; synchronized: boolean; differenceSeconds?: number | null }> {

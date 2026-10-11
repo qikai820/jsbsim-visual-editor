@@ -112,6 +112,7 @@ fn collect_xml(root: &Path, directory: &Path, files: &mut Vec<ImportXml>, bytes:
                 return Err("所选目录过大（最多 2000 个 XML / 64 MB），请选择单个模型目录。".into());
             }
             let xml = std::fs::read_to_string(&path).map_err(|e| format!("无法读取 {}: {e}", path.display()))?;
+            crate::xml_diagnostics::validate(&xml, &path.display().to_string())?;
             files.push(ImportXml {
                 name: path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"),
                 xml,

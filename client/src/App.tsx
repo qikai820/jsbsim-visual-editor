@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, Component, type ReactNode, Suspense } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
+import XmlDiagnosticDialog from './components/XmlDiagnosticDialog';
 import Palette from './components/Palette';
 import Canvas from './components/Canvas';
 import PropertyPanel from './components/PropertyPanel';
@@ -610,6 +611,7 @@ export default function App() {
     <GlobalErrorBoundary>
       <ReactFlowProvider>
         <AppContent />
+        <XmlDiagnosticDialog />
       </ReactFlowProvider>
     </GlobalErrorBoundary>
   );

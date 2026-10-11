@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useLanguage } from '../i18n';
 import {
   isTauri, usbFileDelete, usbFileDeleteDirectory, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
@@ -200,10 +201,18 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     setSelected('');
     setLoading(true);
     setStatus(isZh ? '正在读取目录…' : 'Loading directory…');
-    void usbFileListWithModified(directory).then(files => {
+    void usbFileList(directory).then(files => {
       if (cancelled) return;
       setEntries(files.sort((left, right) => Number(right.directory) - Number(left.directory) || left.name.localeCompare(right.name)));
       setStatus(notice || (files.length ? '' : (isZh ? '目录为空' : 'Directory is empty')));
+      setLoading(false);
+      if (files.length) {
+        void usbFileListWithModified(directory).then(updated => {
+          if (cancelled) return;
+          const modified = new Map(updated.map(entry => [entry.name, entry.modified]));
+          setEntries(current => current.map(entry => ({ ...entry, modified: modified.get(entry.name) ?? entry.modified })));
+        }).catch(() => { /* Modification times are optional; keep the visible listing. */ });
+      }
     }).catch(error => {
       if (cancelled) return;
       setEntries([]);
@@ -587,7 +596,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
-  return <div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
+  return createPortal(<div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
     <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
     <header className="usb-fm-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
       <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 data · 拖动标题栏移动，右下角缩放' : 'Manage SD and data over USB · Drag title to move, corner to resize'}</small></div>
@@ -716,5 +725,5 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
       onPointerDown={event => beginWindowGesture(event, 'resize')} onPointerMove={updateWindowGesture}
       onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture} />
     </div>
-  </div>;
+  </div>, document.body);
 }

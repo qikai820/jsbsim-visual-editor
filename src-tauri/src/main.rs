@@ -2,11 +2,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod xml_parser;
+mod xml_diagnostics;
+mod load_diagnostics;
 mod xml_generator;
 mod expression_xml;
 mod sim_client;
 mod telemetry_recorder;
 mod plotjuggler;
+mod log_picker;
 mod file_index;
 mod aircraft_library;
 mod dataflow;
@@ -14,6 +17,7 @@ mod jsbsim_process;
 mod ftp_sync;
 mod usb_file;
 mod transport;
+mod sim_network;
 mod model_import;
 mod remote_model;
 mod firmware_picker;
@@ -139,7 +143,13 @@ fn parse_xml(
     app: tauri::AppHandle,
     xml: String,
     files: Option<Vec<ReferenceFile>>,
+    source_name: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let source_name = source_name.as_deref().unwrap_or("model.xml");
+    xml_diagnostics::validate(&xml, source_name)?;
+    if let Some(files) = &files {
+        for file in files { xml_diagnostics::validate(&file.xml, &file.name)?; }
+    }
     let state = app.state::<AppState>();
     let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
     let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
@@ -346,7 +356,7 @@ async fn load_aircraft(
         }).await?;
         let mut result = parse_xml(app.clone(), xml.clone(), Some(refs.iter().map(|file| ReferenceFile {
             name: file.path.clone(), xml: file.xml.clone(), category: None,
-        }).collect()))?;
+        }).collect()), Some(format!("aircraft/{0}/{0}.xml", aircraft_id)))?;
         remote_model::attach_sources(&mut result, &aircraft_id, &xml, &refs);
         return Ok(result);
     }
@@ -454,21 +464,24 @@ fn sim_start_blocking(
         // a model. Synchronize the board clock first so a stale boot clock
         // cannot create logs under an old date such as 2022-03-01.
         client.sync_clock_now().map_err(|e| e.to_string())?;
-        if let Some(script_name) = script.as_deref() {
+        let request_id = if let Some(script_name) = script.as_deref() {
             let model_name = model.as_deref()
                 .ok_or("The selected script has no associated aircraft model")?;
-            client.send_load_script(script_name, model_name).map_err(|e| e.to_string())?;
+            client.send_load_script(script_name, model_name).map_err(|e| e.to_string())?
         } else if let Some(model_name) = model.as_deref() {
-            client.send_load(model_name).map_err(|e| e.to_string())?;
+            client.send_load(model_name).map_err(|e| e.to_string())?
         } else {
             client.send_command(1).map_err(|e| e.to_string())?;
-        }
+            0
+        };
         client.request_lifecycle_state("running");
         let expected_model = model.as_deref()
             .or_else(|| script.as_deref())
             .ok_or("The selected launch has no model")?;
-        if !client.wait_for_running_model(expected_model, std::time::Duration::from_secs(30)) {
+        let result = client.wait_for_running_model(expected_model, request_id, std::time::Duration::from_secs(30));
+        if !matches!(result, Ok(true)) {
             client.clear_lifecycle_request("running");
+            if let Err(error) = result { return Err(error); }
             return Err(format!(
                 "NuttX did not confirm model '{}' running within 30 seconds",
                 expected_model
@@ -547,18 +560,25 @@ fn sim_resume(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn sim_restart(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+async fn sim_restart(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+  run_blocking(move || {
     if external_sim_mode() {
         let state = app.state::<AppState>();
         let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
-        client.send_restart().map_err(|e| e.to_string())?;
+        let request = client.send_restart().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("running");
+        let result = client.wait_for_running_model("", request, Duration::from_secs(30));
+        if !matches!(result, Ok(true)) {
+            client.clear_lifecycle_request("running");
+            return Err(result.err().unwrap_or_else(|| "仿真机未在 30 秒内确认重新加载成功".into()));
+        }
         return Ok(serde_json::json!({"running": true, "restarting": true, "external": true}));
     }
     let state = app.state::<AppState>();
     let manager = state.jsbsim.lock().map_err(|e| e.to_string())?;
     manager.restart(app.clone())?;
     Ok(serde_json::json!({ "running": true }))
+  }).await
 }
 
 #[tauri::command]
@@ -584,8 +604,9 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 fn nsh_execute_tcp(command: &str) -> Result<String, String> {
-    let host = std::env::var("SIM_UDP_HOST")
-        .unwrap_or_else(|_| "192.168.101.81".to_owned());
+    let host = transport::network_host_override().map(|address| address.to_string())
+        .unwrap_or_else(|| std::env::var("SIM_UDP_HOST")
+            .unwrap_or_else(|_| "192.168.101.81".to_owned()));
     let port = std::env::var("NSH_TELNET_PORT")
         .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
     let address: SocketAddr = format!("{}:{}", host, port).parse()
@@ -658,6 +679,31 @@ fn nsh_execute(command: String) -> Result<String, String> {
                 format!("USB NSH unavailable ({usb_error}); network NSH unavailable ({network_error})")
             })),
     }
+}
+
+#[tauri::command]
+async fn sim_network_read(app: tauri::AppHandle) -> Result<Vec<sim_network::Interface>, String> {
+    let interfaces = run_blocking(sim_network::read).await?;
+    if let Some(eth0) = interfaces.iter().find(|item| item.name == "eth0") {
+        let host: std::net::Ipv4Addr = eth0.address.parse().map_err(|_| "Invalid simulator IP readback")?;
+        if !host.is_unspecified() {
+            transport::set_network_host_override(host);
+            app.state::<AppState>().sim_client.lock().map_err(|e| e.to_string())?.set_control_host(host);
+        }
+    }
+    Ok(interfaces)
+}
+
+#[tauri::command]
+async fn sim_network_set(app: tauri::AppHandle, name: String, address: String, netmask: String, gateway: String) -> Result<sim_network::Interface, String> {
+    let actual = run_blocking(move || sim_network::set(&name, &address, &netmask, &gateway)).await?;
+    if actual.name == "eth0" {
+        let host = actual.address.parse().map_err(|_| "Invalid simulator IP readback")?;
+        transport::set_network_host_override(host);
+        let state = app.state::<AppState>();
+        state.sim_client.lock().map_err(|e| e.to_string())?.set_control_host(host);
+    }
+    Ok(actual)
 }
 
 #[tauri::command]
@@ -851,19 +897,49 @@ async fn ftp_list_logs() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn ftp_download_log(file: String, directory: Option<String>) -> Result<serde_json::Value, String> {
+async fn ftp_download_log(app: tauri::AppHandle, file: String, directory: Option<String>, expected_size: Option<u64>, for_viewing: Option<bool>) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-    let path = ftp_sync::download_log(&file, directory.as_deref())?;
+    let partial = ftp_sync::log_download_partial_path(&file, directory.as_deref())?;
+    let monitoring = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let monitor_flag = monitoring.clone();
+    let monitor_app = app.clone();
+    let monitor_file = file.clone();
+    let monitor = std::thread::spawn(move || {
+        let mut last_bytes = None;
+        while monitor_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(250));
+            if let Ok(metadata) = std::fs::metadata(&partial) {
+                let bytes = metadata.len();
+                if last_bytes != Some(bytes) {
+                    let _ = monitor_app.emit("ftp-log-download-progress", serde_json::json!({
+                        "file": monitor_file, "bytes": bytes
+                    }));
+                    last_bytes = Some(bytes);
+                }
+            }
+        }
+    });
+    let downloaded = ftp_sync::download_log(&file, directory.as_deref(), expected_size, for_viewing.unwrap_or(true));
+    monitoring.store(false, std::sync::atomic::Ordering::Relaxed);
+    let _ = monitor.join();
+    let path = downloaded?;
     let metadata = std::fs::metadata(&path).map_err(|e| format!("cannot inspect downloaded log: {e}"))?;
-    /* Returning the download bytes lets the WebView open the file immediately.
-     * Keep the IPC payload bounded; the on-disk file is still available for
-     * large logs, which should be opened manually to avoid freezing the UI. */
-    const AUTO_OPEN_MAX_BYTES: u64 = 64 * 1024 * 1024;
-    let bytes = if metadata.len() <= AUTO_OPEN_MAX_BYTES {
-        Some(std::fs::read(&path).map_err(|e| format!("cannot read downloaded log: {e}"))?)
-    } else { None };
-    Ok(serde_json::json!({ "file": file, "path": path, "size": metadata.len(), "bytes": bytes }))
+    Ok(serde_json::json!({ "file": file, "path": path, "size": metadata.len(), "hasMcapMarkers": ftp_sync::complete_mcap_file(std::path::Path::new(&path)) }))
     }).await
+}
+
+#[tauri::command]
+async fn plotjuggler_open_log(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?.join("plotjuggler");
+    run_blocking(move || plotjuggler::open_log(std::path::Path::new(&path), &directory)).await
+}
+
+#[tauri::command]
+async fn plotjuggler_pick_log(window: tauri::WebviewWindow) -> Result<Option<log_picker::LogSelection>, String> {
+    #[cfg(target_os = "linux")]
+    { log_picker::pick_log(window).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = window; Err("当前仅支持 Linux 桌面版".into()) }
 }
 
 #[tauri::command]
@@ -1284,7 +1360,7 @@ fn telemetry_record_status() -> telemetry_recorder::Status { telemetry_recorder:
 
 #[tauri::command]
 async fn plotjuggler_start(app: tauri::AppHandle) -> Result<plotjuggler::Status, String> {
-    let directory = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("plotjuggler");
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?.join("plotjuggler");
     run_blocking(move || plotjuggler::global().start(&directory)).await
 }
 #[tauri::command]
@@ -1387,9 +1463,13 @@ fn main() {
             plotjuggler_start,
             plotjuggler_status,
             plotjuggler_set_rate,
+            plotjuggler_open_log,
+            plotjuggler_pick_log,
             sim_start,
             sim_stop,
             nsh_execute,
+            sim_network_read,
+            sim_network_set,
             sim_status,
             sim_pause,
             sim_resume,

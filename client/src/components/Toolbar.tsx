@@ -14,6 +14,8 @@ import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
 import { isTauri, selectModelImport, getSimulatorTransportMode, getPlotJugglerRate, setPlotJugglerRate, startPlotJuggler } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
+import { validateXmlSource, showXmlDiagnostic } from '../utils/xmlDiagnostics';
+import { getToolbarAppearance, saveToolbarAppearance, toolbarBackground, type ToolbarAppearance } from '../utils/toolbarAppearance';
 
 interface ToolbarProps {
   onShow3D?: () => void;
@@ -122,6 +124,7 @@ function renameFdmConfig(xml: string, modelName: string): string {
 }
 
 function xmlRoot(xml: string, name: string): string {
+  validateXmlSource(xml, name);
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error(`${name} 不是有效的 XML，请检查文件内容。`);
   return doc.documentElement.localName.toLowerCase();
@@ -292,6 +295,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
   const [plotJugglerOpening, setPlotJugglerOpening] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
+  const [toolbarAppearance, setToolbarAppearance] = useState<ToolbarAppearance>(getToolbarAppearance);
+  const updateToolbarAppearance = (appearance: ToolbarAppearance) => {
+    setToolbarAppearance(appearance);
+    saveToolbarAppearance(appearance);
+  };
   const [librarySimulationModel, setLibrarySimulationModel] = useState('');
   const [recentProjects, setRecentProjects] = useState<Array<{ filename: string; path: string; openedAt: string }>>(() => JSON.parse(localStorage.getItem('jsbsim-recent-projects') || '[]'));
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -400,7 +408,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         : pending.mainXml;
       const refFiles = pending.referenceFiles;
       const allXml = [mainXml, ...refFiles.map(file => file.xml)].join('\n').toLowerCase();
-      const data = await parseXml(mainXml, refFiles);
+      const data = await parseXml(mainXml, refFiles,
+        pending.sourceDirectory ? `${pending.sourceDirectory}/${pending.mainFileName}` : pending.mainFileName);
       loadProject(data);
       const selectedFiles = refFiles.map(file => file.name);
       const parsedFiles = (data.xmlFiles || []).filter((file: any) => file.category !== 'main').map((file: any) => String(file.path || ''));
@@ -436,7 +445,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       }
       setPendingImport(null);
     } catch (err: any) {
-      alert('导入失败: ' + err.message);
+      showXmlDiagnostic(err, 'XML 导入失败');
     } finally {
       setLoading(false);
     }
@@ -473,7 +482,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const scanned = await selectModelImport(directory);
       if (scanned) prepareModelImport(scanned.files, true, scanned.directory, scanned.mainFile, scanned.assets);
     } catch (err: any) {
-      alert('扫描模型目录失败: ' + (err?.message || String(err)));
+      showXmlDiagnostic(err, 'XML 导入失败');
     } finally { setLoading(false); }
   };
 
@@ -505,7 +514,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
 
       prepareModelImport(normalizedFiles, e.target === directoryInputRef.current, commonRoot.replace(/\/$/, '') || undefined);
     } catch (err: any) {
-      alert('导入失败: ' + err.message);
+      showXmlDiagnostic(err, 'XML 导入失败');
     }
     // Reset the input that actually fired. A <input type="file"> only raises
     // `change` when its value differs from the previous selection, so leaving
@@ -1027,7 +1036,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
 
   return (
     <>
-      <div className="toolbar" data-tauri-drag-region onPointerDown={event => { void startWindowDrag(event); }}>
+      <div className="toolbar" style={{ backgroundColor: toolbarBackground(toolbarAppearance) }} data-tauri-drag-region onPointerDown={event => { void startWindowDrag(event); }}>
         <div className="toolbar-left" data-tauri-drag-region>
         </div>
         <div className="toolbar-center" data-tauri-drag-region>
@@ -1136,7 +1145,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       </div>
 
       {showSimulationConfig && <SimulationConfigDialog model={aircraft.name || librarySimulationModel || 'default'} onClose={() => setShowSimulationConfig(false)} />}
-      {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} />}
+      {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} toolbarAppearance={toolbarAppearance} onToolbarAppearanceChange={updateToolbarAppearance} />}
 
       {showXmlSourceBrowser && <XmlSourceBrowser documents={xmlSourceDocuments} loadRemoteContent={async path => (await ftpDownloadXml(path)).content} onClose={() => setShowXmlSourceBrowser(false)} />}
       {uploadReview && <XmlSourceBrowser documents={uploadReview.documents} initialPath={uploadReview.documents[0]?.path} loadRemoteContent={async path => (await ftpDownloadXml(path)).content} onClose={() => {
@@ -1255,7 +1264,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               loadProject(data);
               setShowWizard(false);
             } catch (err: any) {
-              alert('导入失败: ' + err.message);
+              showXmlDiagnostic(err, 'XML 导入失败');
             }
           }}
         />

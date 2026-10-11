@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ScriptEvent {
   name: string;
@@ -40,7 +41,7 @@ export default function ScriptEditorDialog({ value, variables, onChange, onSave,
   const removeEvent = (index: number) => onChange({ ...value, events: value.events.filter((_, i) => i !== index) });
   const addEvent = () => onChange({ ...value, events: [...value.events, { name: `事件 ${value.events.length + 1}`, condition: '', sets: [], notifies: [] }] });
 
-  return <div className="script-editor-overlay" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+  return createPortal(<div className="script-editor-overlay" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="script-editor-modal script-editor-v2" onClick={event => event.stopPropagation()}>
       <header className="script-editor-head">
         <div><span className="script-editor-icon">📋</span><span>测试脚本逻辑</span><small>{value.name}</small></div>
@@ -84,5 +85,5 @@ export default function ScriptEditorDialog({ value, variables, onChange, onSave,
         <div className="script-flow-end">■ 结束仿真 <small>t = {value.end}s</small></div>
       </main>
     </div>
-  </div>;
+  </div>, document.body);
 }

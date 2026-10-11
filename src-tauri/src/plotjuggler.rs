@@ -5,6 +5,7 @@ use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::collections::VecDeque;
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -181,6 +182,53 @@ fn executable() -> Result<PathBuf, String> {
     }
     Err("未找到集成版 PlotJuggler，请先运行 integrations/plotjuggler/build.sh。".into())
 }
+
+pub fn open_log(file: &Path, directory: &Path) -> Result<String, String> {
+    let file = file.canonicalize().map_err(|e| format!("无法读取日志: {e}"))?;
+    if !file.is_file() || !file.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("mcap")) {
+        return Err("请选择 MCAP 日志文件".into());
+    }
+    let mut magic = [0u8; 8];
+    let mut footer = [0u8; 8];
+    fs::File::open(&file).and_then(|mut input| {
+        input.read_exact(&mut magic)?;
+        input.seek(SeekFrom::End(-8))?;
+        input.read_exact(&mut footer)
+    }).map_err(|e| format!("无法读取 MCAP 文件头或文件尾: {e}"))?;
+    let expected_magic = [0x89, b'M', b'C', b'A', b'P', b'0', 0x0d, 0x0a];
+    if magic != expected_magic || footer != expected_magic {
+        return Err("MCAP 文件头或文件尾无效，日志可能未写完或已经损坏".into());
+    }
+    let executable = executable()?;
+    let plugins = executable.parent().ok_or("PlotJuggler 路径无效")?;
+    if !plugins.join("libJSBSimMcap.so").is_file() {
+        return Err("缺少 PlotJuggler 日志插件，请重新运行 integrations/plotjuggler/build.sh。".into());
+    }
+    let checker = plugins.join("JSBSimMcapCheck");
+    if !checker.is_file() {
+        return Err("缺少 MCAP 校验程序，请重新运行 integrations/plotjuggler/build.sh。".into());
+    }
+    let checked = Command::new(&checker).arg(&file).output()
+        .map_err(|error| format!("无法校验 MCAP 日志：{error}"))?;
+    if !checked.status.success() {
+        let detail = String::from_utf8_lossy(&checked.stderr);
+        return Err(format!("MCAP 日志数据损坏或没有可读取的消息：{}", detail.trim()));
+    }
+    fs::create_dir_all(directory.join("config")).map_err(|e| e.to_string())?;
+    static NEXT_LOG: AtomicU64 = AtomicU64::new(0);
+    let sequence = NEXT_LOG.fetch_add(1, Ordering::Relaxed);
+    let log_path = directory.join(format!("log-view-{}-{sequence}.log", std::process::id()));
+    let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
+    Command::new(&executable)
+        .args(["--nosplash", "--datafile"]).arg(&file)
+        .args(["--window_title", "JSBSim · MCAP 日志", "--plugin_folders"])
+        .arg(plugins)
+        .args(["--enabled_plugins", "libJSBSimMcap;libPublisherCSV;libToolboxFFT;libToolboxLuaEditor;libToolboxQuaternion;libPublisherVideoViewer"])
+        .env("XDG_CONFIG_HOME", directory.join("config"))
+        .stdin(Stdio::null()).stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log)
+        .spawn().map_err(|e| format!("无法启动 PlotJuggler 日志窗口: {e}"))?;
+    Ok(file.to_string_lossy().into_owned())
+}
 impl Bridge {
     pub fn start(&self, directory: &Path) -> Result<Status, String> {
         let rate_hz = *self.rate_hz.lock().unwrap();
@@ -193,8 +241,11 @@ impl Bridge {
         }
         let executable = executable()?;
         let plugins = executable.parent().ok_or("PlotJuggler 路径无效")?;
-        if !plugins.join("libJSBSimLive.so").is_file() {
-            return Err("缺少 JSBSim Live 数据插件，请重新构建集成版 PlotJuggler。".into());
+        for plugin in ["libJSBSimLive.so", "libPublisherCSV.so", "libToolboxFFT.so",
+                       "libToolboxLuaEditor.so", "libToolboxQuaternion.so"] {
+            if !plugins.join(plugin).is_file() {
+                return Err(format!("缺少 PlotJuggler 插件 {plugin}，请重新构建集成版 PlotJuggler。"));
+            }
         }
         fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         let status_path = directory.join(format!("status-{}.json", std::process::id()));
@@ -212,9 +263,10 @@ impl Bridge {
         let child = Command::new(&executable)
             .args(["--nosplash", "--start_streamer", "--buffer_size", "300", "--window_title", "JSBSim · PlotJuggler", "--plugin_folders"])
             .arg(plugins)
-            .args(["--enabled_plugins", "libJSBSimLive;libDataLoadCSV;libPublisherCSV"])
+            .args(["--enabled_plugins", "libJSBSimLive;libPublisherCSV;libToolboxFFT;libToolboxLuaEditor;libToolboxQuaternion;libPublisherVideoViewer"])
             .env("JSBSIM_PLOTJUGGLER_PORT", port.to_string())
             .env("JSBSIM_PLOTJUGGLER_STATUS", &status_path)
+            .env("JSBSIM_PLOTJUGGLER_LAYOUT", directory.join("layout.xml"))
             .env("XDG_CONFIG_HOME", directory.join("config"))
             .stdin(Stdio::null()).stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log)
             .spawn().map_err(|e| format!("无法启动 PlotJuggler: {e}"))?;
@@ -397,6 +449,15 @@ mod tests {
         let recording = recorder.start(&directory.join("recordings")).unwrap();
         bridge.start(&directory).unwrap();
         let result = std::panic::catch_unwind(|| {
+            let startup_log = fs::read_to_string(directory.join("plotjuggler.log")).unwrap();
+            for plugin in ["libJSBSimLive.so is a DataStreamer", "libPublisherCSV.so is a StatePublisher",
+                           "libToolboxFFT.so is a Toolbox", "libToolboxLuaEditor.so is a Toolbox",
+                           "libToolboxQuaternion.so is a Toolbox"] {
+                assert!(startup_log.contains(plugin), "Missing loaded plugin {plugin} in startup log");
+            }
+            for line in startup_log.lines().filter(|line| line.contains("libDataLoadCSV.so is a DataLoader")) {
+                assert!(line.contains("skipping"), "File import plugin was loaded");
+            }
             let deadline = Instant::now() + std::time::Duration::from_secs(20);
             while !bridge.status().ready {
                 assert!(Instant::now() < deadline, "Plugin not ready; log: {}", directory.join("plotjuggler.log").display());
@@ -477,6 +538,46 @@ mod tests {
                     break;
                 }
                 assert!(Instant::now() < deadline, "Reopened PlotJuggler received {} of 103 history samples", status.received);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let layout_path = directory.join("layout.xml");
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let layout = loop {
+                if let Ok(layout) = fs::read_to_string(&layout_path) {
+                    break layout;
+                }
+                assert!(Instant::now() < deadline, "PlotJuggler did not autosave its layout");
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            assert!(layout.contains("<tabbed_widget"));
+            assert!(layout.contains("tab_name=\"tab1\""));
+            assert!(!layout.contains("previouslyLoaded_Streamer"));
+            assert!(!layout.contains("previouslyLoaded_Datafiles"));
+
+            let mut renamed = layout.replacen("tab_name=\"tab1\"", "tab_name=\"Saved tab\"", 1)
+                .replace("</root>", "<!-- restart-sentinel --></root>");
+            assert!(renamed.contains("restart-sentinel"));
+            let plot_start = renamed.find("<plot ").unwrap();
+            let plot_end = plot_start + renamed[plot_start..].find('>').unwrap();
+            renamed.insert_str(plot_end + 1,
+                "<curve name=\"missing/airspeed_mps\" color=\"#1f77b4\"/>");
+            fs::write(&layout_path, renamed).unwrap();
+            {
+                let mut session = bridge.session.lock().unwrap();
+                let session = session.as_mut().unwrap();
+                session.child.kill().unwrap();
+                session.child.wait().unwrap();
+            }
+            bridge.start(&directory).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                let saved = fs::read_to_string(&layout_path).unwrap();
+                if saved.contains("Saved tab") && saved.contains("missing/airspeed_mps")
+                    && !saved.contains("restart-sentinel") {
+                    // The timer wrote the restored native tab back to disk.
+                    break;
+                }
+                assert!(Instant::now() < deadline, "PlotJuggler did not restore the saved tab");
                 std::thread::sleep(Duration::from_millis(100));
             }
         });

@@ -12,3 +12,5 @@ where
         .await
         .map_err(|error| error.to_string())?
 }
+#[path = "../src/xml_diagnostics.rs"]
+mod xml_diagnostics;

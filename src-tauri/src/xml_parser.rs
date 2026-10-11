@@ -1792,6 +1792,7 @@ fn detect_aircraft_type(xml: &str, file_map: &HashMap<String, String>) -> String
 
 /// Parse a JSBSim aircraft XML string into a JSON graph (aircraft, nodes, edges).
 pub fn parse_xml(xml: &str, file_map: &HashMap<String, String>) -> Result<Value, String> {
+    crate::xml_diagnostics::validate_references(xml, "model.xml", file_map)?;
     if xml.is_empty() {
         return Err("Invalid XML input".to_string());
     }

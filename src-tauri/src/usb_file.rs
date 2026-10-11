@@ -6,8 +6,8 @@
 
 use rusb::{Context, DeviceHandle, UsbContext};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
 use std::{io::{Read, Seek, SeekFrom, Write}, path::Path};
@@ -53,7 +53,56 @@ const RENAME: u16 = 13;
 const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(8);
 
 static REQUEST_ID: OnceLock<AtomicU32> = OnceLock::new();
-static USB_LOCK: Mutex<()> = Mutex::new(());
+static USB_ACCESS: UsbAccess = UsbAccess::new();
+
+// std::sync::Mutex does not guarantee fairness: a continuous telemetry reader
+// can reacquire it ahead of a sleeping file writer indefinitely. Announce
+// waiting operations so the next telemetry poll yields, and bound lock waits
+// separately from the libusb I/O timeouts (which only start after acquisition).
+struct UsbAccess {
+    lock: Mutex<()>,
+    waiting: AtomicUsize,
+}
+
+struct UsbWaiter<'a>(&'a AtomicUsize);
+impl Drop for UsbWaiter<'_> {
+    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::SeqCst); }
+}
+
+impl UsbAccess {
+    const fn new() -> Self {
+        Self { lock: Mutex::new(()), waiting: AtomicUsize::new(0) }
+    }
+
+    fn acquire(&self, timeout: Duration) -> Result<MutexGuard<'_, ()>, String> {
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        let _waiter = UsbWaiter(&self.waiting);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match self.lock.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(_)) => return Err("USB transport lock poisoned".into()),
+                Err(TryLockError::WouldBlock) => {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        return Err("USB 通道忙，等待超时；本次请求尚未发送，请稍后重试 (USB transport busy: lock wait timed out)".into());
+                    }
+                    std::thread::sleep(remaining.min(Duration::from_millis(5)));
+                    if std::time::Instant::now() >= deadline {
+                        return Err("USB 通道忙，等待超时；本次请求尚未发送，请稍后重试 (USB transport busy: lock wait timed out)".into());
+                    }
+                }
+            }
+        }
+    }
+
+    fn telemetry(&self) -> Result<MutexGuard<'_, ()>, String> {
+        if self.waiting.load(Ordering::SeqCst) != 0 {
+            return Err("simulation USB transport is busy".into());
+        }
+        self.lock.try_lock().map_err(|_| "simulation USB transport is busy".into())
+    }
+}
 // Keep incomplete EP3 responses across timeouts. The next transaction must
 // consume their complete frames before looking for its own request ID.
 static FILE_RX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
@@ -260,7 +309,7 @@ fn transaction_locked(
 }
 
 fn with_device<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
-    let _guard = USB_LOCK.lock().map_err(|_| "USB transport lock poisoned".to_string())?;
+    let _guard = USB_ACCESS.acquire(TIMEOUT)?;
     let handle = open()?;
     operation(&handle)
 }
@@ -268,21 +317,7 @@ fn with_device<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, St
 /* Used only by Auto-mode library discovery.  Leave the receiver one short
  * read interval to release EP2, but never queue behind it for seconds. */
 fn with_device_quick<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
-    let deadline = std::time::Instant::now() + AUTO_LOCK_WAIT;
-    let _guard = loop {
-        match USB_LOCK.try_lock() {
-            Ok(guard) => break guard,
-            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(std::sync::TryLockError::WouldBlock) => {
-                return Err("USB interface remained busy with simulation telemetry".into());
-            }
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err("USB transport lock poisoned".into());
-            }
-        }
-    };
+    let _guard = USB_ACCESS.acquire(AUTO_LOCK_WAIT)?;
     let handle = open()?;
     operation(&handle)
 }
@@ -417,6 +452,19 @@ pub fn read_all(path: &str) -> Result<Vec<u8>, String> {
             if count < MAX_PAYLOAD { break; }
         }
         Ok(result)
+    })
+}
+
+pub fn read_prefix(path: &str, length: usize) -> Result<Vec<u8>, String> {
+    if length == 0 || length > MAX_PAYLOAD {
+        return Err("invalid USB file prefix length".into());
+    }
+    with_device(|handle| {
+        let response = transaction_locked(handle, READ, length as i32, 0, path.as_bytes())?;
+        if response.offset != response.payload.len() as u64 {
+            return Err("board returned wrong file prefix offset".into());
+        }
+        Ok(response.payload)
     })
 }
 
@@ -895,8 +943,7 @@ fn read_sim_frame(handle: &DeviceHandle<Context>, buffer: &mut Vec<u8>,
 }
 
 pub fn sim_read() -> Result<Option<Vec<u8>>, String> {
-    let _guard = USB_LOCK.try_lock()
-        .map_err(|_| "simulation USB transport is busy".to_string())?;
+    let _guard = USB_ACCESS.telemetry()?;
     let mut buffer = SIM_RX.lock().map_err(|_| "simulation USB receive lock poisoned".to_string())?;
     let handle = match open() {
         Ok(handle) => handle,
@@ -930,7 +977,7 @@ pub fn sim_read() -> Result<Option<Vec<u8>>, String> {
 /// model-file service.  The board must answer the VCMD heartbeat over EP2 IN
 /// with a SIM1-wrapped JSON heartbeat within the timeout.
 pub fn simulation_self_test() -> Result<String, String> {
-    let _guard = USB_LOCK.lock().map_err(|_| "USB transport lock poisoned".to_string())?;
+    let _guard = USB_ACCESS.acquire(TIMEOUT)?;
     let handle = open()?;
     let payload = [b'V', b'C', b'M', b'D', 7u8];
     let mut request = Vec::with_capacity(payload.len() + 8);
@@ -976,6 +1023,54 @@ pub fn simulation_self_test() -> Result<String, String> {
 #[cfg(test)]
 mod response_tests {
     use super::*;
+
+    #[test]
+    fn file_request_gets_the_usb_channel_during_continuous_telemetry() {
+        use std::sync::{Arc, mpsc};
+        let access = Arc::new(UsbAccess::new());
+        let telemetry = access.telemetry().unwrap();
+        let writer_access = Arc::clone(&access);
+        let (saved, result) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let _guard = writer_access.acquire(Duration::from_secs(1)).unwrap();
+            saved.send(()).unwrap();
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while access.waiting.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline, "writer did not queue");
+            std::thread::yield_now();
+        }
+        drop(telemetry);
+        // Keep polling just as the live receiver does when it has packets.
+        // A queued writer must be served without waiting for telemetry to stop.
+        loop {
+            match result.try_recv() {
+                Ok(()) => break,
+                Err(mpsc::TryRecvError::Disconnected) => panic!("writer failed"),
+                Err(mpsc::TryRecvError::Empty) => {},
+            }
+            let _poll = access.telemetry();
+            assert!(std::time::Instant::now() < deadline, "telemetry starved writer");
+            std::thread::yield_now();
+        }
+        writer.join().unwrap();
+        assert_eq!(access.waiting.load(Ordering::SeqCst), 0);
+        assert!(access.telemetry().is_ok(), "telemetry must resume after the save");
+    }
+
+    #[test]
+    fn busy_usb_request_expires_without_running_later() {
+        let access = UsbAccess::new();
+        let active_transfer = access.acquire(Duration::from_secs(1)).unwrap();
+        let started = std::time::Instant::now();
+        let error = access.acquire(Duration::from_millis(30)).unwrap_err();
+        assert!(error.contains("lock wait timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(access.waiting.load(Ordering::SeqCst), 0);
+        drop(active_transfer);
+        assert!(access.telemetry().is_ok(), "expired requests must leave the queue");
+        assert!(access.acquire(Duration::from_millis(30)).is_ok(), "retry must work");
+    }
 
     #[test]
     fn directory_delete_plans_children_before_parents_and_rejects_roots() {

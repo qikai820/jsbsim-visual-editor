@@ -74,6 +74,7 @@ where F: FnMut(&str) -> Result<String, String> {
     let mut seen = HashSet::from([main_path]);
     let mut files = Vec::new();
     while let Some((parent, xml)) = queue.pop_front() {
+        crate::xml_diagnostics::validate(&xml, &parent)?;
         for reference in references(&xml).map_err(|error| format!("{parent} XML 解析失败: {error}"))? {
             let paths = candidates(model, &parent, &reference)?;
             if paths.iter().any(|path| seen.contains(path)) { continue; }

@@ -1,7 +1,8 @@
 //! Runtime selection for every board communication channel.
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::OnceLock;
+use std::net::Ipv4Addr;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -31,6 +32,17 @@ impl TransportMode {
 }
 
 static MODE: OnceLock<AtomicU8> = OnceLock::new();
+static NETWORK_HOST_OVERRIDE: OnceLock<Mutex<Option<Ipv4Addr>>> = OnceLock::new();
+
+pub fn network_host_override() -> Option<Ipv4Addr> {
+    *NETWORK_HOST_OVERRIDE.get_or_init(|| Mutex::new(None)).lock().ok()?
+}
+
+pub fn set_network_host_override(address: Ipv4Addr) {
+    if let Ok(mut current) = NETWORK_HOST_OVERRIDE.get_or_init(|| Mutex::new(None)).lock() {
+        *current = Some(address);
+    }
+}
 
 fn state() -> &'static AtomicU8 {
     MODE.get_or_init(|| {

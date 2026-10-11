@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { type Language, useLanguage } from '../i18n';
+import type { ToolbarAppearance } from '../utils/toolbarAppearance';
+import { MAX_PERFORMANCE_PERIOD_SECONDS, MIN_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod, savePerformancePeriod } from '../utils/performanceSettings';
 import {
   getSimulatorTransportMode,
   isRemoteUploadEnabled,
@@ -8,12 +10,19 @@ import {
   type SimulatorTransportMode,
 } from '../utils/tauriApi';
 
-export default function LocalSettingsDialog({ onClose }: { onClose: () => void }) {
+interface LocalSettingsDialogProps {
+  onClose: () => void;
+  toolbarAppearance: ToolbarAppearance;
+  onToolbarAppearanceChange: (appearance: ToolbarAppearance) => void;
+}
+
+export default function LocalSettingsDialog({ onClose, toolbarAppearance, onToolbarAppearanceChange }: LocalSettingsDialogProps) {
   const { language, setLanguage, isZh } = useLanguage();
   const [remoteUpload, setRemoteUpload] = useState(() => isRemoteUploadEnabled());
   const [transportMode, setTransportMode] = useState<SimulatorTransportMode>(() => getSimulatorTransportMode());
   const [transportError, setTransportError] = useState('');
   const [timeThreshold, setTimeThreshold] = useState(() => Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
+  const [performancePeriod, setPerformancePeriod] = useState(readPerformancePeriod);
   const [logDirectory, setLogDirectory] = useState(() => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
   const [usbDownloadDirectory, setUsbDownloadDirectory] = useState(() => localStorage.getItem('jsbsim-usb-download-directory') || '~/Downloads/JSBSim-Files');
   const saveRemoteUpload = (value: boolean) => {
@@ -36,6 +45,11 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
     setTimeThreshold(next); localStorage.setItem('jsbsim-time-sync-threshold-secs', String(next));
     window.dispatchEvent(new Event('jsbsim-local-settings-changed'));
   };
+  const savePerformancePeriodSetting = (value: number) => {
+    const next = savePerformancePeriod(value);
+    setPerformancePeriod(next);
+    window.dispatchEvent(new Event('jsbsim-local-settings-changed'));
+  };
   const saveLogDirectory = (value: string) => {
     setLogDirectory(value); localStorage.setItem('jsbsim-log-download-directory', value.trim() || '~/Downloads/JSBSim-Logs');
   };
@@ -54,6 +68,20 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
           </select>
         </div>
         <div className="local-settings-row">
+          <div><b>{isZh ? '状态菜单栏颜色' : 'Status menu bar color'}</b><small>{isZh ? '仅调整顶部菜单栏背景' : 'Changes the top menu bar background only'}</small></div>
+          <label className="local-settings-color">
+            <input type="color" value={toolbarAppearance.color} aria-label={isZh ? '状态菜单栏颜色' : 'Status menu bar color'} onChange={event => onToolbarAppearanceChange({ ...toolbarAppearance, color: event.target.value })} />
+            <span>{toolbarAppearance.color.toUpperCase()}</span>
+          </label>
+        </div>
+        <div className="local-settings-row">
+          <div><b>{isZh ? '状态菜单栏透明度' : 'Status menu bar transparency'}</b><small>{isZh ? '0% 不透明，100% 完全透明；调整后立即生效' : '0% opaque, 100% transparent; applies immediately'}</small></div>
+          <label className="local-settings-opacity">
+            <input type="range" min="0" max="100" step="1" value={toolbarAppearance.transparency} aria-label={isZh ? '状态菜单栏透明度' : 'Status menu bar transparency'} onChange={event => onToolbarAppearanceChange({ ...toolbarAppearance, transparency: Number(event.target.value) })} />
+            <span>{toolbarAppearance.transparency}%</span>
+          </label>
+        </div>
+        <div className="local-settings-row">
           <div><b>{isZh ? '仿真机通讯' : 'Simulator communication'}</b><small>{isZh ? '网络使用 UDP/FTP；自动模式在 USB 异常时继续使用网络' : 'Network uses UDP/FTP; Auto keeps network fallback available'}</small>{transportError && <small>{transportError}</small>}</div>
           <select value={transportMode} onChange={event => void saveTransportMode(event.target.value as SimulatorTransportMode)}>
             <option value="auto">{isZh ? '自动' : 'Auto'}</option>
@@ -68,6 +96,10 @@ export default function LocalSettingsDialog({ onClose }: { onClose: () => void }
         <div className="local-settings-row">
           <div><b>{isZh ? '仿真机校时阈值' : 'Simulator clock threshold'}</b><small>{isZh ? '上位机每 15 秒检查；偏差超过阈值才自动同步' : 'Checked every 15 seconds; synchronize only above this difference'}</small></div>
           <label className="local-settings-number"><input type="number" min="1" max="86400" value={timeThreshold} onChange={event => saveTimeThreshold(Number(event.target.value))} /><span>s</span></label>
+        </div>
+        <div className="local-settings-row">
+          <div><b>{isZh ? '性能曲线周期' : 'Performance chart period'}</b><small>{isZh ? '×1 到 ×4 时间范围的基础周期' : 'Base period for the ×1 to ×4 chart ranges'}</small></div>
+          <label className="local-settings-number"><input type="number" min={MIN_PERFORMANCE_PERIOD_SECONDS} max={MAX_PERFORMANCE_PERIOD_SECONDS} step="1" value={performancePeriod} onChange={event => savePerformancePeriodSetting(Number(event.target.value))} /><span>s</span></label>
         </div>
         <div className="local-settings-path">
           <b>{isZh ? '日志下载目录' : 'Log download directory'}</b>

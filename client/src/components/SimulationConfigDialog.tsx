@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, SimulatorVersion, type FirmwareSelection } from '../utils/tauriApi';
+import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 
-type Tab = '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
+type Tab = '系统设置' | '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
 type VariableCategory = 'attitude' | 'position' | 'inertia' | 'controls' | 'propulsion' | 'environment' | 'simulation' | 'other';
-const tabs: Tab[] = ['运行与时间', '数值积分', '初始状态', '环境模型', 'MCAP日志', '性能与安全', '固件升级'];
+const tabs: Tab[] = ['系统设置', '运行与时间', '数值积分', '初始状态', '环境模型', 'MCAP日志', '性能与安全', '固件升级'];
 const categoryOrder: VariableCategory[] = ['attitude', 'position', 'inertia', 'controls', 'propulsion', 'environment', 'simulation', 'other'];
 const variableCategory = (path: string): VariableCategory => {
   const value = path.replace(/^\/+/, '').toLowerCase();
@@ -50,7 +50,11 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   const tr = (zh: string, en: string) => isZh ? zh : en;
   const safeModel = (model || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_');
   const path = `config/models/${safeModel}.json`;
-  const [tab, setTab] = useState<Tab>('运行与时间');
+  const [tab, setTab] = useState<Tab>('系统设置');
+  const [networkInterfaces, setNetworkInterfaces] = useState<SimulatorNetworkInterface[]>([]);
+  const [networkInput, setNetworkInput] = useState<SimulatorNetworkInterface>({ name: 'eth0', address: '', netmask: '', gateway: '' });
+  const [networkBusy, setNetworkBusy] = useState(false);
+  const [networkStatus, setNetworkStatus] = useState('');
   const [config, setConfig] = useState<any>(defaults);
   const [baseline, setBaseline] = useState('');
   const [status, setStatus] = useState(tr('正在读取仿真机配置…', 'Reading simulator configuration…'));
@@ -204,15 +208,55 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
 
   useEffect(() => { void refreshSimulatorVersion(); }, []);
 
+  const refreshNetwork = async () => {
+    setNetworkBusy(true);
+    setNetworkStatus(tr('正在从仿真机回读网口…', 'Reading simulator interfaces…'));
+    try {
+      const interfaces = await readSimulatorNetwork();
+      setNetworkInterfaces(interfaces);
+      setNetworkInput(current => interfaces.find(item => item.name === current.name) || interfaces[0]);
+      setNetworkStatus(tr('已从仿真机回读当前配置', 'Current configuration read from simulator'));
+    } catch (error: any) {
+      setNetworkStatus(`${tr('回读失败', 'Readback failed')}: ${error?.message || error}`);
+    } finally { setNetworkBusy(false); }
+  };
+
+  useEffect(() => { void refreshNetwork(); }, []);
+
+  const applyNetwork = async () => {
+    if (networkBusy || !window.confirm(tr(
+      `将 ${networkInput.name} 改为 ${networkInput.address}，当前网络连接可能立即中断。请保持 USB 连接以完成回读。继续吗？`,
+      `Change ${networkInput.name} to ${networkInput.address}? The network connection may drop immediately. Keep USB connected for readback.`
+    ))) return;
+    setNetworkBusy(true);
+    setNetworkStatus(tr('正在通过 USB 写入并回读…', 'Writing and reading back over USB…'));
+    try {
+      const actual = await setSimulatorNetwork(networkInput);
+      setNetworkInterfaces(current => [...current.filter(item => item.name !== actual.name), actual].sort((a, b) => a.name.localeCompare(b.name)));
+      setNetworkInput(actual);
+      setNetworkStatus(tr('写入成功，IP、掩码和网关均已从仿真机核对', 'Applied; IP, mask and gateway verified from simulator'));
+    } catch (error: any) {
+      setNetworkStatus(`${tr('写入或回读失败', 'Apply or readback failed')}: ${error?.message || error}`);
+    } finally { setNetworkBusy(false); }
+  };
+
   const save = async () => {
+    if (saving) return;
     const changedGroups = Object.keys(defaults).filter(key => key !== 'version' && JSON.stringify((config as any)[key]) !== JSON.stringify((baseline ? JSON.parse(baseline) : defaults as any)[key]));
     if (!window.confirm(isZh
       ? `保存到仿真机：\n/mnt/sdcard/jsbsim/${path}\n\n变更分组：${changedGroups.join('、') || '无'}\n配置将在下次重新加载模型时生效。`
       : `Save to simulator:\n/mnt/sdcard/jsbsim/${path}\n\nChanged groups: ${changedGroups.join(', ') || 'None'}\nThe configuration takes effect after the model is reloaded.`)) return;
     setSaving(true);
-    try { await ftpUploadSimConfig(path, serialized); setBaseline(serialized); setStatus(tr('已保存到仿真机SD卡（掉电保持）', 'Saved to simulator SD card (persistent)')); }
-    catch (error: any) { setStatus(`${tr('保存失败', 'Save failed')}: ${error?.message || error}`); }
-    setSaving(false);
+    setStatus(tr('正在写入仿真机SD卡并回读校验…', 'Writing to simulator SD card and verifying…'));
+    try {
+      await ftpUploadSimConfig(path, serialized);
+      setBaseline(serialized);
+      setStatus(tr('已保存并回读校验，重新加载模型后生效', 'Saved and verified; reload the model to apply'));
+    } catch (error: any) {
+      setStatus(`${tr('保存失败，修改已保留', 'Save failed; edits retained')}: ${error?.message || error}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const applyPlotRate = async () => {
@@ -245,8 +289,17 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
       </div>
       <div className="sim-config-path">{tr('SD卡路径', 'SD card path')}: /mnt/sdcard/jsbsim/{path}</div>
       <div className="sim-config-layout">
-        <nav>{tabs.map(item => <button key={item} disabled={firmwareUpdating} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety',固件升级:'Firmware Upgrade'} as any)[item] && !isZh ? ({运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety',固件升级:'Firmware Upgrade'} as any)[item] : item}</button>)}</nav>
+        <nav>{tabs.map(item => <button key={item} disabled={firmwareUpdating} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{({系统设置:'System Settings',运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety',固件升级:'Firmware Upgrade'} as any)[item] && !isZh ? ({系统设置:'System Settings',运行与时间:'Runtime & Time',数值积分:'Integration',初始状态:'Initial State',环境模型:'Environment',MCAP日志:'MCAP Logging',性能与安全:'Performance & Safety',固件升级:'Firmware Upgrade'} as any)[item] : item}</button>)}</nav>
         <main>
+          {tab === '系统设置' && <section className="sim-config-network"><h3>{tr('系统设置', 'System Settings')}</h3><p>{tr('仿真机网口 IPv4 配置与实时回读。', 'Simulator Ethernet IPv4 configuration and live readback.')}</p>
+            <div className="sim-config-network-head"><b>{tr('仿真机 IP', 'Simulator IP')}</b><button type="button" disabled={networkBusy} onClick={() => void refreshNetwork()}>{tr('回读', 'Read Back')}</button></div>
+            <div className="sim-config-grid">
+              <label className="sim-config-field"><span>{tr('网口', 'Interface')}</span><select value={networkInput.name} onChange={event => { const selected = networkInterfaces.find(item => item.name === event.target.value); if (selected) setNetworkInput(selected); }} disabled={networkBusy}>{networkInterfaces.length ? networkInterfaces.map(item => <option key={item.name} value={item.name}>{item.name}</option>) : <option value="eth0">eth0</option>}</select></label>
+              {([['address', tr('IP 地址', 'IP address')], ['netmask', tr('子网掩码', 'Subnet mask')], ['gateway', tr('网关', 'Gateway')]] as const).map(([key, label]) => <label className="sim-config-field" key={key}><span>{label}</span><input type="text" inputMode="decimal" value={networkInput[key]} onChange={event => setNetworkInput(current => ({ ...current, [key]: event.target.value }))} disabled={networkBusy} placeholder="192.168.101.81" /></label>)}
+            </div>
+            <div className="sim-config-network-actions"><button type="button" disabled={networkBusy || networkInterfaces.length === 0 || !networkInput.address || !networkInput.netmask || !networkInput.gateway} onClick={() => void applyNetwork()}>{tr('通过 USB 应用并回读', 'Apply over USB and read back')}</button><span role="status">{networkStatus}</span></div>
+            <p>{tr('修改仅对当前运行生效；重启后恢复固件默认网络配置。修改 IP 时请保持 USB 连接。', 'Changes apply to this runtime only; reboot restores firmware defaults. Keep USB connected when changing the IP.')}</p>
+          </section>}
           {tab === '运行与时间' && <section><h3>{tr('运行与时间','Runtime & Time')}</h3><div className="sim-config-grid">
             <NumberField label={tr('仿真步长','Time step')} value={config.runtime.dt} step={0.0001} min={0.00001} unit="s" onChange={(v:any)=>set('runtime','dt',v)} />
             <NumberField label={tr('仿真频率（只读）','Simulation rate (read-only)')} value={(1/config.runtime.dt).toFixed(1)} unit="Hz" onChange={()=>{}} />
@@ -284,11 +337,11 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
             <NumberField label={tr('湍流强度','Turbulence severity')} value={config.environment.turbulenceSeverity} step={1} min={0} unit="0–7" onChange={(v:any)=>set('environment','turbulenceSeverity',Math.min(7, Math.max(0, v)))} />
           </div></section>}
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
-            <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 Protobuf + MCAP 日志','Enable Protobuf + MCAP logging')}</label>
-            <NumberField label={tr('记录频率','Logging rate')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',v)} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',v)} />
+            <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 MCAP 日志','Enable MCAP logging')}</label>
+            <NumberField label={tr('高频字段记录频率','High-rate field frequency')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',v)} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',v)} />
             <NumberField label={tr('RAM日志缓冲区','RAM log buffer')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>set('mcap','bufferMb',Math.min(1536,v))} />
             <NumberField label={tr('单文件上限','Maximum file size')} value={config.mcap.maxFileMb} min={16} unit="MiB" onChange={(v:any)=>set('mcap','maxFileMb',v)} /><NumberField label={tr('最长记录时间','Maximum duration')} value={config.mcap.maxDurationMin} min={1} unit="min" onChange={(v:any)=>set('mcap','maxDurationMin',v)} /><NumberField label={tr('最小剩余空间','Minimum free space')} value={config.mcap.minFreeMb} min={32} unit="MiB" onChange={(v:any)=>set('mcap','minFreeMb',v)} />
-          </div><div className="mcap-variable-selector"><div><b>{tr('日志变量选择器','Log Variable Selector')}</b><small>{tr(`已选 ${selectedVariables.length} 项；按分类选择实时属性，重新加载模型后生效。`,`Selected ${selectedVariables.length}; select live properties by category. Applies after model reload.`)}</small></div><div className="mcap-variable-toolbar"><button type="button" onClick={() => selectPaths(allVariables)} disabled={allVariables.length === 0}>{tr('全选','Select All')}</button><button type="button" onClick={() => set('mcap', 'selectedVariables', [])} disabled={selectedVariables.length === 0}>{tr('清空选择','Clear')}</button><span>{tr(`已发现 ${allVariables.length} 项`, `${allVariables.length} discovered`)}</span></div><input value={variableFilter} onChange={event => setVariableFilter(event.target.value)} placeholder={tr('搜索属性路径…','Search property paths…')} />{selectedVariables.length > 0 && <div className="mcap-selected-variables">{selectedVariables.map(path => <button key={path} onClick={() => toggleVariable(path)} title={tr('移除','Remove')}>× {path}</button>)}</div>}<div className="mcap-variable-list">{variableGroups.map(group => <section className="mcap-variable-category" key={group.category}><header><b>{categoryLabel(group.category)}</b><span>{group.paths.length}</span><button type="button" onClick={() => selectPaths(group.paths)} disabled={group.paths.every(path => selectedVariables.includes(path))}>{tr('选择本类','Select category')}</button></header>{group.paths.map(path => <label key={path}><input type="checkbox" checked={selectedVariables.includes(path)} onChange={() => toggleVariable(path)} /><span>{path}</span></label>)}</section>)}{availableVariables.length === 0 && <span className="mcap-variable-empty">{tr('暂无可选变量。请先打开“实时”属性浏览器并等待遥测属性树加载。','No variables discovered yet. Open the Live property browser and wait for telemetry.')}</span>}{availableVariables.length > 0 && variableGroups.length === 0 && <span className="mcap-variable-empty">{tr('没有匹配的变量。','No matching variables.')}</span>}</div></div><div className="sim-config-readonly">{tr('目录','Directory')}: {config.mcap.directory}<br />{tr('变量数量不再设上限；可记录数量取决于仿真机可用内存和存储空间。压缩：LZ4 Frame；Chunk：1 MiB/最长5秒；CRC：开启；正常关闭后 .active 重命名为 .mcap。','The variable count is unlimited; the practical limit is available simulator memory and storage. Compression: LZ4 Frame; chunk: 1 MiB/maximum 5 seconds; CRC enabled; .active is renamed to .mcap after a clean close.')}</div></section>}
+          </div><div className="mcap-variable-selector"><div><b>{tr('高频记录变量选择器','High-rate Variable Selector')}</b><small>{tr(`已选 ${selectedVariables.length} 项；所选属性按上方频率记录，全部实时数值属性另按遥测频率记录。重新加载模型后生效。`,`Selected ${selectedVariables.length}; selected properties use the high-rate setting, while all live numeric properties are also recorded at telemetry rate. Applies after model reload.`)}</small></div><div className="mcap-variable-toolbar"><button type="button" onClick={() => selectPaths(allVariables)} disabled={allVariables.length === 0}>{tr('全选','Select All')}</button><button type="button" onClick={() => set('mcap', 'selectedVariables', [])} disabled={selectedVariables.length === 0}>{tr('清空选择','Clear')}</button><span>{tr(`已发现 ${allVariables.length} 项`, `${allVariables.length} discovered`)}</span></div><input value={variableFilter} onChange={event => setVariableFilter(event.target.value)} placeholder={tr('搜索属性路径…','Search property paths…')} />{selectedVariables.length > 0 && <div className="mcap-selected-variables">{selectedVariables.map(path => <button key={path} onClick={() => toggleVariable(path)} title={tr('移除','Remove')}>× {path}</button>)}</div>}<div className="mcap-variable-list">{variableGroups.map(group => <section className="mcap-variable-category" key={group.category}><header><b>{categoryLabel(group.category)}</b><span>{group.paths.length}</span><button type="button" onClick={() => selectPaths(group.paths)} disabled={group.paths.every(path => selectedVariables.includes(path))}>{tr('选择本类','Select category')}</button></header>{group.paths.map(path => <label key={path}><input type="checkbox" checked={selectedVariables.includes(path)} onChange={() => toggleVariable(path)} /><span>{path}</span></label>)}</section>)}{availableVariables.length === 0 && <span className="mcap-variable-empty">{tr('暂无可选变量。请先打开“实时”属性浏览器并等待遥测属性树加载。','No variables discovered yet. Open the Live property browser and wait for telemetry.')}</span>}{availableVariables.length > 0 && variableGroups.length === 0 && <span className="mcap-variable-empty">{tr('没有匹配的变量。','No matching variables.')}</span>}</div></div><div className="sim-config-readonly">{tr('目录','Directory')}: {config.mcap.directory}<br />{tr('变量数量不再设上限；可记录数量取决于仿真机可用内存和存储空间。压缩：LZ4 Frame；Chunk：1 MiB/最长5秒；CRC：开启；正常关闭后 .active 重命名为 .mcap。','The variable count is unlimited; the practical limit is available simulator memory and storage. Compression: LZ4 Frame; chunk: 1 MiB/maximum 5 seconds; CRC enabled; .active is renamed to .mcap after a clean close.')}</div></section>}
           {tab === '性能与安全' && <section><h3>{tr('性能与安全','Performance & Safety')}</h3><div className="sim-config-grid">
             <NumberField label={tr('CPU核心','CPU core')} value={config.safety.cpuCore} min={0} onChange={(v:any)=>set('safety','cpuCore',v)} /><NumberField label={tr('任务优先级','Task priority')} value={config.safety.taskPriority} min={1} onChange={(v:any)=>set('safety','taskPriority',v)} /><NumberField label={tr('任务栈','Task stack')} value={config.safety.stackKb} min={64} unit="KiB" onChange={(v:any)=>set('safety','stackKb',v)} />
             <NumberField label={tr('FDM超时阈值','FDM timeout')} value={config.safety.fdmTimeoutMs} step={0.1} unit="ms" onChange={(v:any)=>set('safety','fdmTimeoutMs',v)} /><NumberField label={tr('CPU告警','CPU warning')} value={config.safety.cpuWarningPercent} unit="%" onChange={(v:any)=>set('safety','cpuWarningPercent',v)} /><NumberField label={tr('RAM告警','RAM warning')} value={config.safety.ramWarningPercent} unit="%" onChange={(v:any)=>set('safety','ramWarningPercent',v)} />
@@ -312,7 +365,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
           </section>}
         </main>
       </div>
-      <footer><span>{tab === '固件升级' ? firmwareStatus : status}</span>{tab !== '固件升级' && <div><button onClick={()=>setConfig(defaults)}>{tr('恢复默认值','Restore Defaults')}</button><button className="primary" disabled={saving || serialized === baseline} onClick={()=>void save()}>{saving?tr('保存中…','Saving…'):tr('保存到仿真机','Save to Simulator')}</button></div>}</footer>
+      <footer><span role="status">{tab === '固件升级' ? firmwareStatus : tab === '系统设置' ? networkStatus : status}</span>{tab !== '固件升级' && tab !== '系统设置' && <div><button disabled={saving} onClick={()=>setConfig(defaults)}>{tr('恢复默认值','Restore Defaults')}</button><button className="primary" disabled={saving || serialized === baseline} onClick={()=>void save()}>{saving?tr('保存中…','Saving…'):tr('保存到仿真机','Save to Simulator')}</button></div>}</footer>
       {showVersionManager && <div className="sim-config-version-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !firmwareUpdating) setShowVersionManager(false); }}>
         <section className="sim-config-version-manager">
           <header><b>{tr('仿真机版本管理', 'Simulator Version Manager')}</b><button type="button" disabled={firmwareUpdating} onClick={() => setShowVersionManager(false)}>×</button></header>

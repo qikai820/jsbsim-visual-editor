@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Visual drag-and-drop aircraft configuration editor for JSBSim"
 authors = []
 edition = "2021"
+default-run = "jsbsim-visual-editor"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
