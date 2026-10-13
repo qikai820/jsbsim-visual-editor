@@ -50,6 +50,7 @@ const WRITE_ABORT: u16 = 10;
 const UPDATE: u16 = 11;
 const NSH_EXEC: u16 = 12;
 const RENAME: u16 = 13;
+const CONSOLE_READ: u16 = 14;
 const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(8);
 
 static REQUEST_ID: OnceLock<AtomicU32> = OnceLock::new();
@@ -356,6 +357,28 @@ pub fn nsh_execute(command: &str) -> Result<String, String> {
     })
 }
 
+#[derive(Serialize)]
+pub struct ConsoleChunk {
+    pub data: Vec<u8>,
+    pub next: u64,
+    pub lost: bool,
+}
+
+/// Read a bounded piece of the board's debug UART output over the existing
+/// vendor bulk endpoint.  A busy endpoint is retried by the caller later.
+pub fn console_read(cursor: u64) -> Result<ConsoleChunk, String> {
+    with_device_quick(|handle| {
+        let response = transaction_locked_with_timeout(
+            handle, CONSOLE_READ, 0, cursor, &[], AUTO_FILE_TIMEOUT,
+        )?;
+        Ok(ConsoleChunk {
+            data: response.payload,
+            next: response.offset,
+            lost: response.status != 0,
+        })
+    })
+}
+
 /// Probe USB without letting a missing or occupied endpoint suspend the
 /// realtime transport.  It is intentionally not used for explicit USB mode.
 pub fn available_quick() -> bool {
@@ -584,10 +607,10 @@ fn write_stream_with_progress<R: Read + Seek>(
         // Firmware staging on eMMC must remain possible so it can be updated.
         if !path.starts_with("fireware/") {
             let response = transaction_locked(handle, PING, 0, 0, &[])?;
-            if response.payload != b"lmx93-usb-file/3" && response.payload != b"lmx93-usb-file/4" && response.payload != b"lmx93-usb-file/5" {
+            if response.payload != b"lmx93-usb-file/3" && response.payload != b"lmx93-usb-file/4" && response.payload != b"lmx93-usb-file/5" && response.payload != b"lmx93-usb-file/6" {
                 return Err("板端 FAT 文件名修复尚未生效，已阻止 SD 写入。请先升级至 lmx93-usb-file/3 固件并重启仿真机".into());
             }
-            if has_long_component(path) && response.payload != b"lmx93-usb-file/5" {
+            if has_long_component(path) && response.payload != b"lmx93-usb-file/5" && response.payload != b"lmx93-usb-file/6" {
                 return Err("文件名超过 32 字节，需要升级至 lmx93-usb-file/5 板端固件".into());
             }
         }
@@ -688,7 +711,7 @@ pub fn delete_directory_tree(path: &str) -> Result<(), String> {
 
 pub fn mkdir(path: &str) -> Result<(), String> {
     managed_volume(path)?;
-    if has_long_component(path) && ping()? != "lmx93-usb-file/5" {
+    if has_long_component(path) && !matches!(ping()?.as_str(), "lmx93-usb-file/5" | "lmx93-usb-file/6") {
         return Err("文件名超过 32 字节，需要升级至 lmx93-usb-file/5 板端固件".into());
     }
     with_device(|handle| transaction_locked(handle, MKDIR, 0, 0, path.as_bytes()).map(|_| ()))
@@ -771,10 +794,10 @@ pub fn transfer(source: &str, destination: &str, move_source: bool) -> Result<()
     }
     let source_info = stat(source)?;
     let identity = ping()?;
-    if identity != "lmx93-usb-file/4" && identity != "lmx93-usb-file/5" {
+    if identity != "lmx93-usb-file/4" && identity != "lmx93-usb-file/5" && identity != "lmx93-usb-file/6" {
         return Err("重命名、拷贝和移动需要 lmx93-usb-file/4 或更新板端固件".into());
     }
-    if (has_long_component(source) || has_long_component(destination)) && identity != "lmx93-usb-file/5" {
+    if (has_long_component(source) || has_long_component(destination)) && identity != "lmx93-usb-file/5" && identity != "lmx93-usb-file/6" {
         return Err("文件名超过 32 字节，需要升级至 lmx93-usb-file/5 板端固件".into());
     }
 

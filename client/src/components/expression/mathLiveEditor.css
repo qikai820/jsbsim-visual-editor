@@ -1,0 +1,43 @@
+.mathlive-editor { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border, #cbd5e1); border-radius: 8px; background: var(--bg-primary, #fff); color: var(--text-primary, #1e293b); }
+.mathlive-operator-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mathlive-operator-toolbar button { min-width: 28px; min-height: 32px; padding: 5px 9px; border: 1px solid #d4dde0; border-radius: 5px; background: #f9fbfb; color: #25546a; font-size: 12px; line-height: 1; }
+.mathlive-operator-toolbar button:hover, .mathlive-operator-toolbar button:focus-visible { background: #e8f2f5; border-color: #7caab9; }
+.mathlive-operator-toolbar .mathlive-keyboard-trigger { margin-left: auto; color: #155e75; background: #e9f4f7; }
+.mathlive-symbol-toolbar { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.mathlive-symbol-toolbar span { margin-right: 5px; color: #607687; font-size: 11px; }
+.mathlive-symbol-toolbar button { min-width: 27px; min-height: 28px; padding: 3px 7px; border: 1px solid #ccd9dc; border-radius: 5px; background: #edf4f4; color: #264f62; font: italic 17px/1 Georgia, serif; }
+.mathlive-symbol-toolbar button:hover, .mathlive-symbol-toolbar button:focus-visible { background: #dceeed; border-color: #7caab9; }
+.mathlive-editor math-field { display: block; min-height: 56px; padding: 8px; border: 1px solid var(--border, #94a3b8); border-radius: 6px; font-size: 24px; }
+.mathlive-editor textarea { min-height: 110px; padding: 8px; border: 1px solid var(--border, #94a3b8); border-radius: 6px; font: 13px/1.6 monospace; }
+.mathlive-signals { display: grid; gap: 5px; }
+.mathlive-signals > div { display: flex; align-items: center; gap: 8px; }
+.mathlive-signals label { min-width: 34px; }
+.mathlive-symbol-binding label { font: italic 19px/1.4 Georgia, serif; color: #254f67; }
+.mathlive-signals .signal-path-input > input { min-height: 30px; padding: 5px 8px; box-sizing: border-box; }
+.mathlive-editor button { cursor: pointer; }
+.mathlive-hint { font-size: 11px; opacity: .7; margin: 0; }
+.mathlive-error { color: #b91c1c; font-size: 12px; }
+.mathlive-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.mathlive-actions button:last-child { background: #2563eb; color: white; border: 0; border-radius: 4px; padding: 6px 10px; }
+.mathlive-keyboard-popup {
+  position: fixed; z-index: 10000; width: min(720px, calc(100vw - 16px));
+  height: min(307px, calc(100vh - 16px)); overflow: hidden;
+  border: 1px solid #8995a5; border-radius: 9px; background: #cacfd7;
+  box-shadow: 0 14px 36px #13223555;
+}
+.mathlive-keyboard-popup[hidden] { display: none; }
+.mathlive-keyboard-popup-header {
+  display: flex; justify-content: space-between; align-items: center;
+  height: 31px; padding: 0 8px 0 13px; color: #344457;
+  background: #e5e9ef; border-bottom: 1px solid #aeb7c4;
+  font: 600 12px/1 'Noto Sans', sans-serif;
+}
+.mathlive-keyboard-popup-header button {
+  width: 25px; height: 25px; border: 0; border-radius: 4px;
+  color: #48566a; background: transparent; font-size: 21px; line-height: 1; cursor: pointer;
+}
+.mathlive-keyboard-popup-header button:hover { background: #cbd4e0; }
+.mathlive-keyboard-popup-content { height: calc(100% - 31px); --keycap-height: 48px; --keycap-gap: 6px; --keycap-max-width: 70px; }
+.mathlive-keyboard-popup-content .ML__keyboard.is-visible > .MLK__backdrop {
+  bottom: 0; height: 100%; transform: none;
+}

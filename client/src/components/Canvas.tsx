@@ -119,15 +119,15 @@ export default function Canvas({ dragType }: CanvasProps) {
     }
   }, []);
 
-  // Double-click a module (system / flight_control / aero_coefficients) to drill into its internal
-  // signal-flow canvas. Ensure channels/layout params exist so the embedded
-  // ModuleExpressionCanvas can mount cleanly on a fresh module node.
+  // Double-click a module to drill into its internal signal-flow canvas.
+  // Only initialize canvas layout metadata; that does not change XML.
   const onNodeDoubleClick = useCallback((_: any, node: any) => {
     const t = node.data?.componentType;
     if (!MODULE_TYPES.has(t)) return;
     const params = node.data?.params || {};
     const patch: Record<string, any> = {};
-    if (t !== 'aero_coefficients' && (!('channels' in params) || !params.channels)) patch.channels = '[]';
+    // Opening an empty module does not edit its XML. The signal canvas already
+    // accepts a missing channels value and creates one on the first real edit.
     if (!('layout' in params) || !params.layout) patch.layout = '{}';
     if (Object.keys(patch).length) updateNodeParams(node.id, patch);
     setFocusedNodeId(node.id);

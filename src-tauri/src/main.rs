@@ -691,6 +691,11 @@ fn nsh_execute(command: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn usb_console_read(cursor: u64) -> Result<usb_file::ConsoleChunk, String> {
+    run_blocking(move || usb_file::console_read(cursor)).await
+}
+
+#[tauri::command]
 async fn sim_network_read(app: tauri::AppHandle) -> Result<Vec<sim_network::Interface>, String> {
     let interfaces = run_blocking(sim_network::read).await?;
     if let Some(eth0) = interfaces.iter().find(|item| item.name == "eth0") {
@@ -1494,6 +1499,7 @@ fn main() {
             sim_start,
             sim_stop,
             nsh_execute,
+            usb_console_read,
             sim_network_read,
             sim_network_set,
             sim_status,

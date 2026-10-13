@@ -12,11 +12,13 @@ import {
 } from '../../utils/expressionConverter';
 import {
   buildSignalGraph, graphToChannels, SINGLE_INPUT_TYPES, COMPONENT_META,
-  assignSignalEdgeRouting, collectPropertyNodes,
+  assignSignalEdgeRouting, collectPropertyNodes, insertProductTables,
 } from '../../utils/signalGraph';
 import SignalEdge from './SignalEdge';
 import { SignalEdgeActionsContext } from './signalEdgeActions';
 import type { Bendpoint } from '../edges/bendpoints';
+import { layoutSignalGraph } from '../../utils/signalLayout';
+import { routeSignalGraph } from '../../utils/signalRouting';
 import FunctionBlockNode from './FunctionBlockNode';
 import SignalBlockNode from './SignalBlockNode';
 import SignalEndNode from './SignalEndNode';
@@ -25,6 +27,8 @@ import { BlockPropertyPanel } from './BlockPropertyPanel';
 import ComponentPropertyPanel from './ComponentPropertyPanel';
 import ExpressionEditor from './ExpressionEditor';
 import LutTablePreview from './LutTablePreview';
+import FormulaNotebook from './FormulaNotebook';
+import SignalPathInput from '../SignalPathInput';
 
 const nodeTypes = {
   functionBlock: FunctionBlockNode,
@@ -60,6 +64,9 @@ interface ModuleExpressionCanvasProps {
   modelId?: string;
   initialLayout?: Record<string, { x: number; y: number }>;
   onLayoutChange?: (layout: Record<string, { x: number; y: number }>) => void;
+  initialOpenComponentId?: string;
+  findPropertySource?: (signal: string) => { label: string } | null;
+  onOpenPropertySource?: (signal: string) => void;
 }
 
 // ── Merge multiple expression trees into one graph (expr mode) ───────────────
@@ -131,7 +138,7 @@ function buildMergedGraph(expressions: ModuleExpression[]) {
 // prevEdges lets in-canvas expression subgraphs (expanded functions) survive the
 // rebuild: their internal edges are carried over and their block nodes are kept.
 function recomputeGraph(nodes: any[], prevEdges: any[] = []): { nodes: any[]; edges: any[] } {
-  const comps = nodes.filter(n => n.data?.kind === 'component');
+  const comps = nodes.filter(n => n.data?.kind === 'component').map(n => ({ ...n, data: { ...n.data } }));
   const exprNodes = nodes.filter(n => n.data?.kind === 'exprBlock');
   // Expanded function: ownerId -> subgraph root node; ownerId -> leaf (signal inlet) nodes.
   const expandedOf = new Map<string, any>();
@@ -220,11 +227,11 @@ function recomputeGraph(nodes: any[], prevEdges: any[] = []): { nodes: any[]; ed
       }
       continue;
     }
-    // Merge duplicate wires: same signal into the same component drawn once.
-    const seen = new Set<string>();
+    // Preserve a terminal connection for every declared input occurrence.
     (c.data.inputs || []).forEach((s: string, i: number) => {
-      if (!s || seen.has(s)) return;
-      seen.add(s);
+      // Repeated references still have separate ports; only their routed
+      // trunk is shared. Keep every terminal when rebuilding the graph.
+      if (!s) return;
       const prod = producers.get(s);
       const src = prod && prod !== c.id ? srcOf(prod) : { node: `src-${s}`, handle: 'out' };
       edges.push({ id: `e-${src.node}-${c.id}-${i}`, source: src.node, sourceHandle: src.handle, target: c.id, targetHandle: `in-${i}`, label: s, data: { signal: s }, type: 'signal' });
@@ -239,6 +246,7 @@ function recomputeGraph(nodes: any[], prevEdges: any[] = []): { nodes: any[]; ed
   for (const e of prevEdges) {
     if (e.data?.kind === 'expr-internal' && alive.has(e.source) && alive.has(e.target)) edges.push(e);
   }
+  insertProductTables(finalNodes, edges, nodes);
   // Preserve signal-edge waypoints (bendpoints) across the rebuild, keyed by edge id.
   const prevBp = new Map<string, Bendpoint[]>();
   for (const e of prevEdges) {
@@ -249,6 +257,13 @@ function recomputeGraph(nodes: any[], prevEdges: any[] = []): { nodes: any[]; ed
     for (const e of edges) {
       const b = prevBp.get(e.id);
       if (b) e.data = { ...(e.data || {}), bendpoints: b };
+    }
+  }
+  const previous = new Map(prevEdges.map(e => [e.id, e]));
+  for (const e of edges) {
+    const old = previous.get(e.id);
+    if (old?.data?.elkRoute && old.sourceHandle === e.sourceHandle && old.targetHandle === e.targetHandle) {
+      e.data = { ...e.data, elkRoute: old.data.elkRoute };
     }
   }
   // Recreate common fan-out trunks after edits/reloads as well as auto-layout.
@@ -274,6 +289,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     initialLayout, onLayoutChange,
   } = props;
   const isSignal = mode === 'signal' || channels != null;
+  const hasFormulaView = mode === 'signal' || props.channels != null;
 
   const initial = useMemo(() => {
     const g = isSignal ? buildSignalGraph(channels, topLevelProps) : buildMergedGraph(expressions);
@@ -282,6 +298,29 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       for (const n of g.nodes) {
         const p = initialLayout[n.id];
         if (p) n.position = { x: p.x, y: p.y };
+        const size = (initialLayout as any).__sizes?.[n.id];
+        if (size && Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0) {
+          n.data = { ...n.data, manualSize: size };
+          n.style = { ...n.style, width: size.width, height: size.height };
+          n.width = size.width;
+          n.height = size.height;
+        }
+      }
+      // Older saved layouts predate the derived LUT nodes. Place each new
+      // table in its owner's existing input corridor instead of mixing old
+      // component coordinates with the freshly calculated graph coordinates.
+      for (const table of g.nodes.filter(n => n.data?.kind === 'tablePreview' && !initialLayout[n.id])) {
+        const owner = g.nodes.find(n => n.id === table.data.ownerId);
+        const incoming = g.edges.find(e => e.target === table.id);
+        const source = g.nodes.find(n => n.id === incoming?.source);
+        if (!owner) continue;
+        const tableWidth = 88;
+        const sourceRight = source ? source.position.x + (source.data?.kind === 'signal' ? 126 : 94) : owner.position.x - 180;
+        table.position = {
+          x: (sourceRight + owner.position.x - tableWidth) / 2,
+          y: source && Math.abs(source.position.y - owner.position.y) < 80
+            ? (source.position.y + owner.position.y) / 2 : owner.position.y,
+        };
       }
       // Restore edge waypoints saved alongside the layout.
       const savedBps = (initialLayout as any).__bendpoints as Record<string, Bendpoint[]> | undefined;
@@ -299,6 +338,10 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           }
         }
       }
+      const elkRoutes = (initialLayout as any).__elkRoutes;
+      for (const e of g.edges) {
+        if (elkRoutes?.[e.id]) e.data = { ...e.data, elkRoute: elkRoutes[e.id] };
+      }
     }
     return g;
   }, []); // build once on mount
@@ -311,6 +354,12 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const [expandedFnId, setExpandedFnId] = useState<string | null>(null);
   const rfWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
+  const [layoutBusy, setLayoutBusy] = useState(false);
+  const [routingBusy, setRoutingBusy] = useState(false);
+  const [formulaView, setFormulaView] = useState(false);
+  const [layoutError, setLayoutError] = useState('');
+  const layoutRequest = useRef(0);
+  useEffect(() => () => { layoutRequest.current++; }, []);
 
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
@@ -323,11 +372,14 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   function layoutFromNodes(ns: any[]): Record<string, { x: number; y: number }> {
     const layout: Record<string, { x: number; y: number }> = {};
+    const sizes: Record<string, unknown> = {};
     for (const n of ns) {
-      if (n.type === 'signalBlock' || n.type === 'functionBlock') {
-        layout[n.id] = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
+      if (n.type === 'signalBlock' || n.type === 'functionBlock' || n.type === 'signalEnd') {
+        layout[n.id] = { ...n.position };
+        if (n.data?.manualSize) sizes[n.id] = n.data.manualSize;
       }
     }
+    if (Object.keys(sizes).length) (layout as any).__sizes = sizes;
     return layout;
   }
   const persistLayout = useCallback(() => {
@@ -346,12 +398,19 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       if (typeof routeX === 'number') routes[e.id] = routeX;
     }
     if (Object.keys(routes).length) (layout as any).__routes = routes;
+    const elkRoutes: Record<string, unknown> = {};
+    for (const e of edgesRef.current) {
+      if (e.data?.elkRoute) elkRoutes[e.id] = e.data.elkRoute;
+    }
+    if (Object.keys(elkRoutes).length) (layout as any).__elkRoutes = elkRoutes;
     onLayoutChangeRef.current(layout);
   }, []);
 
   // ── Signal-mode commit (recompute edges + report channel changes) ──
   const commitSignal = useCallback((nextNodes: any[]) => {
     const { nodes: rn, edges: re } = recomputeGraph(nextNodes, edgesRef.current);
+    nodesRef.current = rn;
+    edgesRef.current = re;
     setNodes(rn);
     setEdges(re);
     const ch = graphToChannels(rn, re);
@@ -364,7 +423,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   // away by recomputeGraph. persistLayout bundles them into the layout JSON.
   const updateEdgeBendpoints = useCallback((edgeId: string, bps: Bendpoint[]) => {
     setEdges(prev => {
-      const next = prev.map(e => (e.id === edgeId ? { ...e, data: { ...(e.data || {}), bendpoints: bps } } : e));
+      const next = prev.map(e => (e.id === edgeId ? { ...e, data: { ...(e.data || {}), elkRoute: undefined, bendpoints: bps } } : e));
       edgesRef.current = next;
       return next;
     });
@@ -520,7 +579,21 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // ── Expr-mode handlers ──
   const onNodesChange = useCallback((changes: any) => {
-    setNodes(ns => applyNodeChanges(changes, ns));
+    if (changes.some((c: any) => c.type === 'position' || c.type === 'remove' || c.type === 'dimensions' && c.resizing)) {
+      // Moving any obstacle invalidates the automatically routed paths.
+      layoutRequest.current++;
+      setLayoutBusy(false);
+      setEdges(es => {
+        const next = es.map(e => e.data?.elkRoute ? { ...e, data: { ...e.data, elkRoute: undefined } } : e);
+        edgesRef.current = next;
+        return next;
+      });
+    }
+    setNodes(ns => {
+      const next = applyNodeChanges(changes, ns);
+      nodesRef.current = next;
+      return next;
+    });
   }, []);
   const onNodeDragStop = useCallback(() => {
     if (isSignal) {
@@ -531,33 +604,95 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     }
   }, [isSignal, commitSignal, syncToTree, persistLayout]);
 
-  // Re-run the optimized auto-layout (barycenter ordering + channel lanes).
-  // Bound the layout to <=150% of the canvas so it stays readable (fitView
-  // then shows it at zoom >= ~0.67). Flow units == px at zoom 1.
-  const handleAutoLayout = useCallback(() => {
-    let canvas: { w: number; h: number } | undefined;
-    if (isSignal && rfWrapper.current) {
-      canvas = {
-        w: rfWrapper.current.clientWidth,
-        h: rfWrapper.current.clientHeight,
-      };
+  // Layout the current graph, so expanded functions and unsaved edits survive.
+  const handleAutoLayout = useCallback(async () => {
+    const instance = rfInstance.current;
+    if (!instance) return;
+    const request = ++layoutRequest.current;
+    const inputNodes = nodesRef.current;
+    const inputEdges = edgesRef.current;
+    setLayoutBusy(true);
+    setLayoutError('');
+    try {
+      const bounds = rfWrapper.current;
+      const g = isSignal
+        ? await layoutSignalGraph(inputNodes, inputEdges, instance.getInternalNode,
+          bounds ? bounds.clientWidth / Math.max(1, bounds.clientHeight) : 1.6)
+        : buildMergedGraph(expressions);
+      if (request !== layoutRequest.current) return;
+      // Never overwrite graph edits made while the asynchronous solver ran.
+      if (nodesRef.current !== inputNodes || edgesRef.current !== inputEdges) {
+        setLayoutError('画布已变化，请重新整理布局。');
+        return;
+      }
+      nodesRef.current = g.nodes;
+      edgesRef.current = g.edges;
+      setNodes(g.nodes);
+      setEdges(g.edges);
+      persistLayout();
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (request === layoutRequest.current) instance.fitView({ padding: 0.08, maxZoom: 1.4, duration: 300 });
+      }));
+    } catch (error) {
+      console.error('[signal layout]', error);
+      if (request === layoutRequest.current) setLayoutError('自动布局失败，已保留原布局，请重试。');
+    } finally {
+      if (request === layoutRequest.current) setLayoutBusy(false);
     }
-    // Pass the real canvas size; buildSignalGraph derives the 150% cap itself.
-    const g = isSignal
-      ? buildSignalGraph(channels, topLevelProps, { canvas })
-      : buildMergedGraph(expressions);
-    setNodes(g.nodes);
-    setEdges(g.edges);
-    if (onLayoutChangeRef.current) onLayoutChangeRef.current(layoutFromNodes(g.nodes));
-    setTimeout(() => rfInstance.current?.fitView({ padding: 0.2, duration: 300 }), 0);
-  }, [isSignal, channels, topLevelProps, expressions]);
+  }, [isSignal, expressions, persistLayout]);
+
+  // Reroute after moves, resizes, port edits and saved-layout restoration.
+  // Positions remain user-controlled; only the paths are recomputed here.
+  const routingKey = JSON.stringify([
+    nodes.map(n => [n.id, n.hidden, n.position, n.measured, n.dragging, n.resizing,
+      n.data?.inputs, n.data?.inputCount, n.data?.manualSize]),
+    edges.map(e => [e.id, e.source, e.sourceHandle, e.target, e.targetHandle, e.hidden, e.data?.bendpoints]),
+  ]);
+  useEffect(() => {
+    if (!isSignal || layoutBusy || !nodes.length || nodes.some(n => n.dragging || n.resizing)) return;
+    let cancelled = false;
+    setRoutingBusy(true);
+    const timer = setTimeout(async () => {
+      const instance = rfInstance.current;
+      if (!instance) { setRoutingBusy(false); return; }
+      try {
+        const routed = await routeSignalGraph(nodesRef.current, edgesRef.current, instance.getInternalNode);
+        if (cancelled) return;
+        const byId = new Map(routed.map(e => [e.id, e]));
+        const next = edgesRef.current.map(e => {
+          const r = byId.get(e.id);
+          return r ? { ...e, type: r.type, data: { ...e.data, ...r.data } } : e;
+        });
+        edgesRef.current = next;
+        setEdges(next);
+        const blocked = next.filter(e => e.data?.routingBlocked).length;
+        setLayoutError(blocked ? `${blocked} 条连线空间不足，请移动相邻组件或调整手动折点；也可点击自动布局。` : '');
+        persistLayout();
+      } catch (error) {
+        console.error('[signal routing]', error);
+        if (!cancelled) setLayoutError('连线整理失败，请点击自动布局重试。');
+      } finally {
+        if (!cancelled) setRoutingBusy(false);
+      }
+    }, 100);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [routingKey, isSignal, layoutBusy, persistLayout]);
 
   // On mount, fill the canvas with the adaptive layout — but only when no
   // saved layout exists (otherwise respect the user's persisted positions).
   useEffect(() => {
-    if (isSignal && !initialLayout && rfWrapper.current) {
-      handleAutoLayout();
-    }
+    if (!isSignal || initialLayout) return;
+    let frame: number;
+    let cancelled = false;
+    const arrangeWhenMeasured = () => {
+      if (cancelled || !nodesRef.current.length) return;
+      const instance = rfInstance.current;
+      if (instance && nodesRef.current.filter(n => !n.hidden).every(n => instance.getInternalNode(n.id)?.measured?.width)) {
+        void handleAutoLayout();
+      } else frame = requestAnimationFrame(arrangeWhenMeasured);
+    };
+    frame = requestAnimationFrame(arrangeWhenMeasured);
+    return () => { cancelled = true; cancelAnimationFrame(frame); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const onEdgesChange = useCallback((changes: any) => {
@@ -568,6 +703,28 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       const src: any = nodesRef.current.find(n => n.id === connection.source);
       const tgt: any = nodesRef.current.find(n => n.id === connection.target);
       if (!src || !tgt) return;
+      // The visible LUT is derived from the function expression. Reconnecting
+      // an axis edits that expression's independent variable, then rebuilds
+      // the derived node and its wires.
+      if (tgt.data?.kind === 'tablePreview') {
+        const port = Number(String(connection.targetHandle).replace('in-', ''));
+        const index = tgt.data.inputIndices?.[port];
+        const signal = src.data?.kind === 'component'
+          ? src.data.outputSignal || src.data.name : src.data?.signalName;
+        if (!Number.isInteger(index) || !signal) return;
+        const next = nodesRef.current.map(n => {
+          if (n.id !== tgt.data.ownerId) return n;
+          const expression = structuredClone(n.data.expression);
+          const ref = collectPropertyNodes(expression)[index];
+          if (!ref?.__tableRef) return n;
+          ref.__tableRef[ref.__tableKey] = signal;
+          const inputs = [...((n.data.inputs as string[]) || [])];
+          inputs[index] = signal;
+          return { ...n, data: { ...n.data, expression, inputs } };
+        });
+        commitSignal(next);
+        return;
+      }
       const srcExp = src.data?.kind === 'exprBlock';
       const tgtExp = tgt.data?.kind === 'exprBlock';
 
@@ -645,6 +802,11 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   // the formula editor as before.
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
     const d = node.data;
+    if (d?.kind === 'tablePreview') {
+      setSelectedNodeId(node.id);
+      setLutPreviewId(String(d.ownerId));
+      return;
+    }
     if (d?.kind === 'component' && d.itemType === 'aero_table') {
       setSelectedNodeId(node.id);
       setLutPreviewId(node.id);
@@ -673,6 +835,16 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const [lutPreviewId, setLutPreviewId] = useState<string | null>(null);
   const editingNode = nodes.find(n => n.id === editingExprId);
   const lutPreviewNode = nodes.find(n => n.id === lutPreviewId);
+  useEffect(() => {
+    const id = props.initialOpenComponentId;
+    if (!id) return;
+    const target = nodesRef.current.find(n => n.id === id);
+    if (target?.data?.kind === 'component' &&
+        (target.data.itemType === 'function' || target.data.itemType === 'fcs_function')) {
+      setSelectedNodeId(id);
+      setEditingExprId(id);
+    }
+  }, [props.initialOpenComponentId]);
   const handleExprSave = useCallback((expr: ExprNode) => {
     if (editingExprId) updateComponent(editingExprId, { expression: expr });
     setEditingExprId(null);
@@ -682,8 +854,18 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const handleAddComponent = useCallback((type: string, dropPosition?: { x: number; y: number }) => {
     const meta = COMPONENT_META[type] || { label: type, icon: '•', color: '#64748b' };
     const id = `c-new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const inputs = SINGLE_INPUT_TYPES.has(type) ? [''] : ['', ''];
+    const inputs = type === 'constant' ? [] : SINGLE_INPUT_TYPES.has(type) ? [''] : ['', ''];
     const compProps: any = {};
+    // A constant needs both a value and an output property before it can be
+    // represented in JSBSim XML. Give a new block a usable, unique draft.
+    let name = '';
+    if (type === 'constant') {
+      const names = new Set(nodesRef.current.map(node => String((node.data as any)?.name || '')));
+      let index = 1;
+      while (names.has(`fcs/constant-${index}`)) index++;
+      name = `fcs/constant-${index}`;
+      compProps.constant = { value: '0', attrs: {} };
+    }
     if (type === 'pure_gain') compProps.gain = { value: '1', attrs: {} };
     if (type === 'pid') { compProps.kp = { value: '1', attrs: {} }; compProps.ki = { value: '0', attrs: {} }; compProps.kd = { value: '0', attrs: {} }; }
     let position = dropPosition || { x: 400, y: 200 };
@@ -695,12 +877,33 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     const newNode: any = {
       id, type: 'signalBlock', position,
       data: {
-        kind: 'component', itemType: type, name: '', outputSignal: '',
+        kind: 'component', itemType: type, name, outputSignal: name,
         inputs, expression: type === 'function' ? { kind: 'value', value: 0 } : undefined,
-        compProps, ch: 0, chName: '', itemIdx: 0, meta,
+        compProps, ch: 0,
+        chName: String((nodesRef.current.find(node => (node.data as any)?.kind === 'component' && (node.data as any)?.ch === 0)?.data as any)?.chName || ''),
+        itemIdx: 0, meta,
       },
     };
     commitSignal([...nodesRef.current, newNode]);
+    setSelectedNodeId(id);
+  }, [commitSignal]);
+
+  const createFormula = useCallback((name: string, expression: ExprNode) => {
+    const id = `c-formula-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const existing = nodesRef.current.find(node => node.data?.kind === 'component' &&
+      (node.data as any).chName === '__JSBSIM_SYSTEM_TOP_LEVEL_FUNCTIONS__') ||
+      nodesRef.current.find(node => node.data?.kind === 'component' &&
+        ['function', 'fcs_function'].includes(String((node.data as any).itemType))) ||
+      nodesRef.current.find(node => node.data?.kind === 'component');
+    const ch = Number((existing?.data as any)?.ch ?? 0);
+    const chName = String((existing?.data as any)?.chName ?? '');
+    const node: Node = {
+      id, type: 'signalBlock', position: { x: 400, y: 180 + nodesRef.current.length * 16 },
+      data: { kind: 'component', itemType: 'function', name, outputSignal: name,
+        inputs: collectPropertyNodes(expression).map(property => property.name), expression, compProps: {}, ch, chName, itemIdx: 0,
+        meta: COMPONENT_META.function },
+    };
+    commitSignal([...nodesRef.current, node]);
     setSelectedNodeId(id);
   }, [commitSignal]);
 
@@ -708,6 +911,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     if (!selectedNodeId) return;
     const sel: any = nodesRef.current.find(n => n.id === selectedNodeId);
     if (!sel) return;
+    if (sel.data?.kind === 'tablePreview') return;
     // Deleting an expanded function carrier: cascade to its subgraph.
     if (sel.data?.kind === 'component') {
       const ownerId = sel.id;
@@ -789,7 +993,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   }, [isSignal, commitSignal, syncToTree, onBack]);
 
   const handleFitView = useCallback(() => {
-    if (rfInstance.current) rfInstance.current.fitView({ padding: 0.2, duration: 300 });
+    if (rfInstance.current) rfInstance.current.fitView({ padding: 0.08, maxZoom: 1.4, duration: 300 });
   }, []);
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
@@ -807,11 +1011,19 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             : `${isSignal ? '🔗 模块信号流画布 (Simulink 风格)' : '📐 模块表达式画布 (Simulink 风格)'}${title ? ` — ${title}` : ''}`}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="expr-layout-btn" onClick={handleAutoLayout} title="重新自动布局（减少连线交叉）">⤢ 自动布局</button>
-          <button className="expr-fit-btn" onClick={handleFitView} title="适应视图">⊞ 居中</button>
+          {hasFormulaView && <button className={`formula-view-toggle${formulaView ? ' active' : ''}`}
+            onClick={() => setFormulaView(value => !value)}
+            aria-pressed={formulaView} title={formulaView ? '返回原信号画布' : '查看多行公式'}>
+            {formulaView ? '▦ 返回画布' : '✎ 多行公式'}
+          </button>}
+          {routingBusy && <span role="status" style={{ alignSelf: 'center', color: '#64748b', fontSize: 11 }}>整理连线…</span>}
+          {!formulaView && <button className="expr-layout-btn" onClick={handleAutoLayout} disabled={layoutBusy} title="紧凑排列模块，按端口整理直角连线">{layoutBusy ? '整理中…' : '⤢ 自动布局'}</button>}
+          {!formulaView && <button className="expr-fit-btn" onClick={handleFitView} title="适应视图">⊞ 居中</button>}
           <button className="expr-apply-btn" onClick={handleBack}>✓ 完成</button>
         </div>
       </div>
+
+      {layoutError && <div role="status" style={{ padding: '6px 12px', color: '#b45309' }}>{layoutError}</div>}
 
       {isSignal && expandedFnId && (
         <div className="expr-subgraph-bar">
@@ -825,7 +1037,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           该模块没有可编辑的公式
         </div>
       ) : (
-      <div className="expr-editor-main">
+      <div className={`expr-editor-main${hasFormulaView && formulaView ? ' expr-editor-main--formula' : ''}`}>
         {isSignal ? (
           expandedFnId ? (
             <ExpressionPalette onAddBlock={handleAddExprBlock} />
@@ -861,11 +1073,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             onNodeDoubleClick={onNodeDoubleClick}
             onPaneClick={onPaneClick}
             fitView
+            fitViewOptions={{ padding: 0.08, maxZoom: 1.4 }}
+            minZoom={0.05}
             deleteKeyCode={null}
             snapToGrid
             snapGrid={[20, 20]}
-            nodesDraggable
-            nodesConnectable
+            nodesDraggable={!layoutBusy}
+            nodesConnectable={!layoutBusy}
             elementsSelectable
             connectionMode={ConnectionMode.Loose}
             edgeTypes={edgeTypes}
@@ -888,6 +1102,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
               expression={(editingNode.data as any).expression as ExprNode}
               onChange={handleExprSave}
               onBack={() => setEditingExprId(null)}
+              propertySource={(() => {
+                const expr = (editingNode.data as any).expression as ExprNode;
+                if (expr?.kind !== 'property') return null;
+                const source = props.findPropertySource?.(expr.name);
+                return source ? { signal: expr.name, label: source.label } : null;
+              })()}
+              onOpenPropertySource={props.onOpenPropertySource}
             />
           ) : selectedNode && (selectedNode.data as any)?.kind === 'exprBlock' ? (
             <BlockPropertyPanel
@@ -904,14 +1125,21 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
               onEditExpression={((selectedNode.data as any).itemType === 'function' || (selectedNode.data as any).itemType === 'fcs_function')
                 ? () => setEditingExprId(selectedNode.id) : undefined}
             />
+          ) : selectedNode && (selectedNode.data as any)?.kind === 'tablePreview' ? (
+            <div className="expr-props-empty">
+              <p>{String((selectedNode.data as any).expression?.tableType || '')} 插值表</p>
+              <p className="expr-props-hint">输入：{((selectedNode.data as any).inputs || []).join('、')}</p>
+              <button onClick={() => setLutPreviewId(String((selectedNode.data as any).ownerId))}>查看插值数据</button>
+              <button onClick={() => setEditingExprId(String((selectedNode.data as any).ownerId))}>编辑所属函数</button>
+            </div>
           ) : selectedNode && (selectedNode.data as any)?.kind === 'signal' ? (
             <div className="expr-props-empty signal-end-editor">
               <p>信号端点</p>
               <label>类型</label>
               <input value={(selectedNode.data as any).signalRole === 'source' ? '输入信号' : '输出信号'} readOnly />
               <label>变量名</label>
-              <input value={String((selectedNode.data as any).signalName || '')}
-                onChange={event => updateComponent(selectedNode.id, { signalName: event.target.value })}
+              <SignalPathInput value={String((selectedNode.data as any).signalName || '')}
+                onChange={signalName => updateComponent(selectedNode.id, { signalName })}
                 placeholder="例如 position/h-sl-ft" />
               <p className="expr-props-hint">修改后会自动更新同名信号连线。</p>
             </div>
@@ -942,6 +1170,11 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             </div>
           )}
         </div>
+        {hasFormulaView && formulaView && <FormulaNotebook nodes={nodes}
+          onUpdate={(id, expression) => updateComponent(id, {
+            expression, inputs: collectPropertyNodes(expression).map(property => property.name),
+          })}
+          onCreate={createFormula} />}
       </div>
       )}
       {lutPreviewNode && (
@@ -960,7 +1193,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       {embedded ? (
         <div className="module-canvas-root">{editorInner}</div>
       ) : (
-        <div className="expr-modal-overlay" onClick={handleBack}>
+        <div className="expr-modal-overlay" onPointerDown={event => { if (event.target === event.currentTarget) handleBack(); }}>
           <div className="expr-editor" onClick={(e) => e.stopPropagation()}>{editorInner}</div>
         </div>
       )}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
+import SignalPathInput from './SignalPathInput';
 
 interface ScriptEvent {
   name: string;
@@ -41,7 +42,7 @@ export default function ScriptEditorDialog({ value, variables, onChange, onSave,
   const removeEvent = (index: number) => onChange({ ...value, events: value.events.filter((_, i) => i !== index) });
   const addEvent = () => onChange({ ...value, events: [...value.events, { name: `事件 ${value.events.length + 1}`, condition: '', sets: [], notifies: [] }] });
 
-  return createPortal(<div className="script-editor-overlay" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+  return createPortal(<div className="script-editor-overlay" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="script-editor-modal script-editor-v2" onClick={event => event.stopPropagation()}>
       <header className="script-editor-head">
         <div><span className="script-editor-icon">📋</span><span>测试脚本逻辑</span><small>{value.name}</small></div>
@@ -72,12 +73,12 @@ export default function ScriptEditorDialog({ value, variables, onChange, onSave,
           const updateCondition = (a: string, op: string, b: string) => updateEvent(eventIndex, { condition: `${a} ${op} ${b}`.trim() });
           return <article className="script-flow-event script-flow-event-v2" key={`${eventIndex}-${scriptEvent.name}`}>
             <header className="script-flow-node-title"><span>{eventIndex + 1}</span><input value={scriptEvent.name} onChange={event => updateEvent(eventIndex, { name: event.target.value })} /><button className="script-event-delete" onClick={() => removeEvent(eventIndex)} title="删除这个事件">×</button></header>
-            <div className="script-flow-condition">◇ 条件：<select aria-label="条件变量" title={left} value={left} onChange={event => updateCondition(event.target.value, operator, right)}><option value="">选择变量</option>{Array.from(new Set([left, ...variables].filter(Boolean))).map(variable => <option key={variable}>{variable}</option>)}</select><select aria-label="条件运算符" value={operator} onChange={event => updateCondition(left, event.target.value, right)}><option value="==">=</option><option value="!=">≠</option><option value=">">&gt;</option><option value="<">&lt;</option><option value=">=">≥</option><option value="<=">≤</option></select><input aria-label="条件比较值" title={right} value={right} onChange={event => updateCondition(left, operator, event.target.value)} /></div>
+            <div className="script-flow-condition">◇ 条件：<SignalPathInput title={left} value={left} onChange={variable => updateCondition(variable, operator, right)} placeholder={variables[0] || '选择变量'} /><select aria-label="条件运算符" value={operator} onChange={event => updateCondition(left, event.target.value, right)}><option value="==">=</option><option value="!=">≠</option><option value=">">&gt;</option><option value="<">&lt;</option><option value=">=">≥</option><option value="<=">≤</option></select><SignalPathInput title={right} value={right} onChange={value => updateCondition(left, operator, value)} placeholder="数值或信号" /></div>
             <section className="script-action-group">
-              {scriptEvent.sets.map((set, setIndex) => <div className="script-flow-detail" key={`set-${setIndex}`}>⚙ <select aria-label="设置变量" title={set.name} value={set.name} onChange={event => updateEvent(eventIndex, { sets: scriptEvent.sets.map((item, i) => i === setIndex ? { ...item, name: event.target.value } : item) })}><option value="">选择变量</option>{Array.from(new Set([set.name, ...variables].filter(Boolean))).map(variable => <option key={variable}>{variable}</option>)}</select><span>=</span><input title={set.value} value={set.value} onChange={event => updateEvent(eventIndex, { sets: scriptEvent.sets.map((item, i) => i === setIndex ? { ...item, value: event.target.value } : item) })}/><button className="script-row-delete" onClick={() => updateEvent(eventIndex, { sets: scriptEvent.sets.filter((_, i) => i !== setIndex) })}>−</button></div>)}
+              {scriptEvent.sets.map((set, setIndex) => <div className="script-flow-detail" key={`set-${setIndex}`}>⚙ <SignalPathInput title={set.name} value={set.name} onChange={name => updateEvent(eventIndex, { sets: scriptEvent.sets.map((item, i) => i === setIndex ? { ...item, name } : item) })} placeholder={variables[0] || '选择变量'} /><span>=</span><SignalPathInput title={set.value} value={set.value} onChange={nextValue => updateEvent(eventIndex, { sets: scriptEvent.sets.map((item, i) => i === setIndex ? { ...item, value: nextValue } : item) })} placeholder="数值或信号" /><button className="script-row-delete" onClick={() => updateEvent(eventIndex, { sets: scriptEvent.sets.filter((_, i) => i !== setIndex) })}>−</button></div>)}
               <button className="script-row-insert" onClick={() => updateEvent(eventIndex, { sets: [...scriptEvent.sets, { name: '', value: '' }] })}><span>＋</span> 添加下一行变量</button>
             </section>
-            {scriptEvent.notifies.map((notify, notifyIndex) => <div className="script-flow-detail" key={`notify-${notifyIndex}`}>📣 <input className="script-notify-input" title={notify} value={notify} onChange={event => updateEvent(eventIndex, { notifies: scriptEvent.notifies.map((item, i) => i === notifyIndex ? event.target.value : item) })}/><button className="script-row-delete" onClick={() => updateEvent(eventIndex, { notifies: scriptEvent.notifies.filter((_, i) => i !== notifyIndex) })}>−</button></div>)}
+            {scriptEvent.notifies.map((notify, notifyIndex) => <div className="script-flow-detail" key={`notify-${notifyIndex}`}>📣 <SignalPathInput className="script-notify-input" title={notify} value={notify} onChange={path => updateEvent(eventIndex, { notifies: scriptEvent.notifies.map((item, i) => i === notifyIndex ? path : item) })}/><button className="script-row-delete" onClick={() => updateEvent(eventIndex, { notifies: scriptEvent.notifies.filter((_, i) => i !== notifyIndex) })}>−</button></div>)}
             <button className="script-row-insert notify" onClick={() => updateEvent(eventIndex, { notifies: [...scriptEvent.notifies, ''] })}><span>＋</span> 添加下一行通知</button>
           </article>;
         })}

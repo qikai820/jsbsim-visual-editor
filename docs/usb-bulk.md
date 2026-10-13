@@ -44,6 +44,14 @@ communication** control applies to both file transfer and live simulation:
 The selected mode is stored on the desktop computer and restored when the
 application starts.
 
+Board protocol v6 adds opcode `14` on the same file-service endpoints for the
+debug console mirror. A request has no payload and puts the last read byte
+position in the header offset. The response returns up to 1024 console bytes
+and the next offset. A positive status means the 64 KiB ring buffer wrapped
+before the requested position. **JSBSim 信息 > NSH 打印** starts or stops desktop
+polling; the board continues writing to the physical debug UART. The mirror
+includes ongoing serial NSH output and other text sent through that UART.
+
 The in-app file manager can rename, copy, and move files and directories.
 Right-click a file or folder for its actions; right-click an empty area to
 paste into the current directory, or right-click a folder to paste into it.
@@ -91,7 +99,7 @@ After flashing the matching NuttX image, run this from the repository root:
 ```
 
 The test sends a protocol PING and lists the built-in ROMFS aircraft directory.
-A working link prints `USB bulk self-test PASS: lmx93-usb-file/4; ...`. The Tauri
+A board with the console mirror prints `USB bulk self-test PASS: lmx93-usb-file/6; ...`. The Tauri
 command `usb_file_ping` performs the same initial check. The commands
 `usb_file_list`, `usb_file_read`, `usb_file_write`, `usb_file_delete`, and
 `usb_file_mkdir` expose the private RPC directly. Existing UI model, script,

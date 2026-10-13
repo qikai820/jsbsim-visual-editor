@@ -951,7 +951,7 @@ fn parse_component_section(
                     "input", "output", "gain", "test", "default", "trigger",
                     "lag", "noise", "drift_rate", "bias", "delay", "width", "rate_limit",
                     "traverse", "quantization", "hysteresis", "sensitivity",
-                    "constant", "clipto", "min", "max", "c1", "c2", "c3", "c4", "c5", "c6",
+                    "constant", "clipto", "domain", "range", "zero_centered", "min", "max", "c1", "c2", "c3", "c4", "c5", "c6",
                     "kp", "ki", "kd", "axis", "location", "orientation",
                 ];
 

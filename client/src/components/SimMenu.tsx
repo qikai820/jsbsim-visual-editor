@@ -589,6 +589,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
           else appendLog(`未上传本地修改，直接运行 NuttX 现有模型: ${modelToSync}`);
         } catch (syncErr: any) {
+          if (syncErr?.name === 'ModelSyncCancelledError' || syncErr?.name === 'XmlPatchUnsafeError') throw syncErr;
           // A failed optional upload must not prevent starting the model that
           // is already present on NuttX. This is especially important after
           // Stop: an FTP timeout used to leave the UI in "启动失败" forever.

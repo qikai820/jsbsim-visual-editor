@@ -450,10 +450,13 @@ pub fn load_aircraft(
         "path": format!("aircraft/{}/{}", aircraft_id, main_file_name),
         "category": "main", "originalXml": main_xml.clone(), "currentXml": main_xml, "dirty": false
     })];
-    for (name, content) in ref_files {
-        let category = if name.to_ascii_lowercase().contains("system") { "system" } else { "engine" };
+    for (name, content) in &ref_files {
+        let category = if content.contains("<system") || content.contains("<flight_control") {
+            "system"
+        } else { "engine" };
+        let path = format!("aircraft/{aircraft_id}/{name}");
         project_files.push(serde_json::json!({
-            "id": format!("{}:{}", category, name), "path": name, "category": category,
+            "id": format!("{category}:{path}"), "path": path, "category": category,
             "originalXml": content, "currentXml": content, "dirty": false
         }));
     }
@@ -465,6 +468,24 @@ pub fn load_aircraft(
         object.insert("xmlFiles".into(), serde_json::Value::Array(project_files));
         object.insert("format".into(), serde_json::json!("jsbsim-model-project"));
         object.insert("version".into(), serde_json::json!(3));
+    }
+    if let Some(nodes) = result["nodes"].as_array_mut() {
+        for node in nodes {
+            let Some(params) = node["data"]["params"].as_object_mut() else { continue };
+            let Some(source) = params.get("_source_file").and_then(Value::as_str) else { continue };
+            let source = source.trim_end_matches(".xml");
+            if let Some((name, content)) = ref_files.iter().find(|(name, _)|
+                name.trim_end_matches(".xml") == source) {
+                let path = format!("aircraft/{aircraft_id}/{name}");
+                let category = if content.contains("<system") || content.contains("<flight_control") {
+                    "system"
+                } else { "engine" };
+                params.insert("referencePath".into(), serde_json::json!(path));
+                params.insert("source".into(), serde_json::json!({
+                    "fileId": format!("{category}:{path}"), "path": path, "category": category,
+                }));
+            }
+        }
     }
     Ok(result)
 }

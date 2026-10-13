@@ -1,5 +1,6 @@
 import { useFlowStore } from '../store/flowStore';
 import type { EngineDef, ThrusterDef, SystemDef } from '../types';
+import SignalPathInput from './SignalPathInput';
 
 export default function SubFileEditor() {
   const { subFiles, editingSubFileId, updateSubFile, setEditingSubFile } = useFlowStore();
@@ -143,11 +144,10 @@ export default function SubFileEditor() {
           <div className="sfe-props-list">
             {props.map((prop, idx) => (
               <div key={idx} className="sfe-prop-row">
-                <input
-                  type="text"
+                <SignalPathInput
                   placeholder="属性名 (如 /sim/model/pushback/kp)"
                   value={prop.name}
-                  onChange={e => updateProp(idx, 'name', e.target.value)}
+                  onChange={name => updateProp(idx, 'name', name)}
                 />
                 <input
                   type="number"

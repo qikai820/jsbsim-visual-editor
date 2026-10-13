@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import SignalPathInput from '../SignalPathInput';
 
 interface ComponentPropertyPanelProps {
   data: any;
@@ -29,6 +30,7 @@ const PARAM_LABELS: Record<string, string> = {
   noise: '噪声 noise',
   drift_rate: '漂移率 drift_rate',
   constant: '常数 constant',
+  zero_centered: '零点居中 zero_centered',
 };
 
 function shortName(s: string): string {
@@ -50,6 +52,27 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
     });
   };
 
+  const nestedValue = (field: string, child: string): string =>
+    String(data.compProps?.[field]?.children?.find((entry: any) => entry.name === child)?.value ?? '');
+
+  const setNestedParam = (field: 'domain' | 'range', child: 'min' | 'max', value: string) => {
+    const current = data.compProps?.[field] || {};
+    const children: any[] = current.children
+      ? current.children.map((entry: any) => ({ ...entry }))
+      : field === 'domain'
+        ? [{ name: 'min', value: '-1', attrs: {} }, { name: 'max', value: '1', attrs: {} }]
+        : [];
+    const entry = children.find(item => item.name === child);
+    if (entry) entry.value = value;
+    else children.push({ name: child, value, attrs: {} });
+    onChange({
+      compProps: {
+        ...(data.compProps || {}),
+        [field]: { ...current, value: current.value ?? '', attrs: current.attrs || {}, children },
+      },
+    });
+  };
+
   const setInput = (idx: number, value: string) => {
     const inputs = [...(data.inputs || [])];
     inputs[idx] = value;
@@ -67,7 +90,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
   const selectedType = data.compProps?.type?.value;
   const paramFields = Object.entries(data.compProps || {}).filter(
     ([k, v]) => {
-      if (EXCLUDED.has(k) || !v || typeof v !== 'object' || !('value' in v)) return false;
+      if (EXCLUDED.has(k) || (data.itemType === 'constant' && k === 'constant') || (data.itemType === 'aerosurface_scale' && (k === 'domain' || k === 'range')) || !v || typeof v !== 'object' || !('value' in v)) return false;
       // HIL output configuration is protocol-specific: never show the IMU
       // mapping while GPS is selected, or vice versa.
       if (selectedType === 'HIL_SENSOR' && k.startsWith('hil_gps_')) return false;
@@ -90,30 +113,38 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
 
       <div className="field-row">
         <label>输出信号 name</label>
-        <input
-          type="text"
+        <SignalPathInput
           value={data.name || ''}
-          onChange={e => setOutput(e.target.value)}
+          onChange={setOutput}
           placeholder="组件名 = 输出属性"
         />
       </div>
 
-      <div className="prop-divider" />
-      <div className="comp-prop-subtitle">
-        输入信号（端口）
-        <span className="expr-props-hint">改名即改变该端口接收的信号（重连）</span>
-      </div>
-      {(data.inputs && data.inputs.length > 0 ? data.inputs : ['']).map((s: string, i: number) => (
-        <div className="field-row" key={i}>
-          <label>输入 {i + 1}</label>
-          <input
-            type="text"
-            value={s || ''}
-            onChange={e => setInput(i, e.target.value)}
-            placeholder="信号名，如 fcs/cmd"
-          />
+      {data.itemType === 'constant' && (
+        <div className="field-row">
+          <label>常数值</label>
+          <input type="text" value={String(data.compProps?.constant?.value ?? '0')}
+            onChange={event => setParam('constant', event.target.value)} />
         </div>
-      ))}
+      )}
+
+      {data.itemType !== 'constant' && <>
+        <div className="prop-divider" />
+        <div className="comp-prop-subtitle">
+          输入信号（端口）
+          <span className="expr-props-hint">改名即改变该端口接收的信号（重连）</span>
+        </div>
+        {(data.inputs && data.inputs.length > 0 ? data.inputs : ['']).map((s: string, i: number) => (
+          <div className="field-row" key={i}>
+            <label>输入 {i + 1}</label>
+            <SignalPathInput
+              value={s || ''}
+              onChange={value => setInput(i, value)}
+              placeholder="信号名，如 fcs/cmd"
+            />
+          </div>
+        ))}
+      </>}
 
       {(data.itemType === 'function' || data.itemType === 'fcs_function') && (
         <>
@@ -140,6 +171,30 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
         </>
       )}
 
+      {data.itemType === 'aerosurface_scale' && (
+        <>
+          <div className="prop-divider" />
+          <div className="comp-prop-subtitle">输入范围 domain（省略时 −1 到 1）</div>
+          {(['min', 'max'] as const).map(bound => (
+            <div className="field-row" key={`domain-${bound}`}>
+              <label>{bound === 'min' ? '下限 min' : '上限 max'}</label>
+              <input type="text" value={nestedValue('domain', bound)}
+                placeholder={bound === 'min' ? '-1' : '1'}
+                onChange={e => setNestedParam('domain', bound, e.target.value)} />
+            </div>
+          ))}
+          <div className="prop-divider" />
+          <div className="comp-prop-subtitle">输出范围 range</div>
+          {(['min', 'max'] as const).map(bound => (
+            <div className="field-row" key={`range-${bound}`}>
+              <label>{bound === 'min' ? '下限 min' : '上限 max'}</label>
+              <input type="text" value={nestedValue('range', bound)}
+                onChange={e => setNestedParam('range', bound, e.target.value)} />
+            </div>
+          ))}
+        </>
+      )}
+
       {onEditExpression && (
         <>
           <div className="prop-divider" />
@@ -158,11 +213,9 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           {!collapsed && paramFields.map(([field, v]: [string, any]) => (
             <div className="field-row" key={field}>
               <label>{PARAM_LABELS[field] || field}</label>
-              <input
-                type="text"
-                value={String(v.value ?? '')}
-                onChange={e => setParam(field, e.target.value)}
-              />
+              {field === 'property' || field === 'properties' || field === 'input' || field === 'output' || field.startsWith('hil_')
+                ? <SignalPathInput value={String(v.value ?? '')} onChange={value => setParam(field, value)} multiple={field === 'properties'} />
+                : <input type="text" value={String(v.value ?? '')} onChange={e => setParam(field, e.target.value)} />}
             </div>
           ))}
         </>

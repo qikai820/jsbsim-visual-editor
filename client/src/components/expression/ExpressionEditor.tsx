@@ -14,6 +14,10 @@ import {
 import FunctionBlockNode from './FunctionBlockNode';
 import ExpressionPalette from './ExpressionPalette';
 import { BlockPropertyPanel } from './BlockPropertyPanel';
+import { layoutExpressionNodes } from '../../utils/expressionLayout';
+import ExpressionTextPanel from './ExpressionTextPanel';
+import { useExpressionModes } from './useExpressionModes';
+import './expressionModes.css';
 
 const nodeTypes = { functionBlock: FunctionBlockNode };
 
@@ -50,9 +54,11 @@ interface ExpressionEditorProps {
   expression: ExprNode;
   onChange: (expr: ExprNode) => void;
   onBack: () => void;
+  propertySource?: { signal: string; label: string } | null;
+  onOpenPropertySource?: (signal: string) => void;
 }
 
-export default function ExpressionEditor({ expression, onChange, onBack }: ExpressionEditorProps) {
+export default function ExpressionEditor({ expression, onChange, onBack, propertySource, onOpenPropertySource }: ExpressionEditorProps) {
   // Convert expression tree to graph (only once on mount)
   const initial = useMemo(() => {
     resetBlockIdCounter();
@@ -61,7 +67,7 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
 
   const [nodes, setNodes] = useState<Node[]>(initial.nodes);
   const [edges, setEdges] = useState<Edge[]>(initial.edges);
-  const [rootId] = useState(initial.rootId);
+  const [rootId, setRootId] = useState(initial.rootId);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const rfWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
@@ -72,28 +78,27 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
 
-  // Sync graph back to tree (with error handling)
-  const syncToTree = useCallback(() => {
-    try {
-      const currentNodes = nodesRef.current;
-      const currentEdges = edgesRef.current;
-      if (!currentNodes || currentNodes.length === 0) return;
-      const tree = graphToTree(currentNodes, currentEdges, rootId);
-      if (tree && tree.kind) {
-        onChange(tree);
-      }
-    } catch (e) {
-      console.warn('[ExpressionEditor] syncToTree error:', e);
-    }
-  }, [rootId, onChange]);
+  const currentGraphExpression = useCallback((): ExprNode => {
+    const tree = graphToTree(nodesRef.current, edgesRef.current, rootId);
+    if (!tree?.kind) throw new Error('画布没有连接到输出模块的有效表达式');
+    return tree;
+  }, [rootId]);
+
+  const replaceCanvas = useCallback((tree: ExprNode) => {
+    const graph = treeToGraph(tree);
+    nodesRef.current = graph.nodes;
+    edgesRef.current = graph.edges;
+    setNodes(graph.nodes);
+    setEdges(graph.edges);
+    setRootId(graph.rootId);
+    setSelectedNodeId(null);
+  }, []);
+  const { mode, text, error, switchMode, editText, currentExpression, reportError } =
+    useExpressionModes(expression, currentGraphExpression, replaceCanvas);
 
   const onNodesChange = useCallback((changes: any) => {
     setNodes(ns => applyNodeChanges(changes, ns));
   }, []);
-
-  const onNodeDragStop = useCallback(() => {
-    setTimeout(syncToTree, 0);
-  }, [syncToTree]);
 
   const onEdgesChange = useCallback((changes: any) => {
     setEdges(es => applyEdgeChanges(changes, es));
@@ -105,8 +110,7 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
       type: 'smoothstep',
       animated: false,
     }, es));
-    setTimeout(syncToTree, 0);
-  }, [syncToTree]);
+  }, []);
 
   const onNodeClick = useCallback((_: any, node: Node) => {
     setSelectedNodeId(node.id);
@@ -151,9 +155,7 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
 
     setNodes(ns => [...ns, newNode]);
     setSelectedNodeId(id);
-    // Sync after adding
-    setTimeout(syncToTree, 0);
-  }, [syncToTree]);
+  }, []);
 
   // Delete selected node
   const handleDelete = useCallback(() => {
@@ -161,8 +163,7 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
     setNodes(ns => ns.filter(n => n.id !== selectedNodeId));
     setEdges(es => es.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId));
     setSelectedNodeId(null);
-    setTimeout(syncToTree, 0);
-  }, [selectedNodeId, rootId, syncToTree]);
+  }, [selectedNodeId, rootId]);
 
   // Update selected node's expression data (with error handling)
   const handleUpdateNode = useCallback((updatedExpr: ExprNode) => {
@@ -184,17 +185,20 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
           },
         };
       }));
-      setTimeout(syncToTree, 0);
     } catch (e) {
       console.warn('[ExpressionEditor] handleUpdateNode error:', e);
     }
-  }, [selectedNodeId, syncToTree]);
+  }, [selectedNodeId]);
 
   // Apply and go back
   const handleApply = useCallback(() => {
-    syncToTree();
-    onBack();
-  }, [syncToTree, onBack]);
+    try {
+      onChange(currentExpression());
+      onBack();
+    } catch (cause) {
+      reportError(cause);
+    }
+  }, [currentExpression, onChange, onBack, reportError]);
 
   // Go back without applying changes
   const handleBack = useCallback(() => {
@@ -208,6 +212,26 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
     }
   }, []);
 
+  const handleAutoLayout = useCallback(() => {
+    const currentNodes = nodesRef.current;
+    if (!currentNodes.length) return;
+    const nextNodes = layoutExpressionNodes(currentNodes, edgesRef.current, {
+      nodeSize: node => {
+        const manual = node.data?.manualSize as { width?: number; height?: number } | undefined;
+        return {
+          width: node.measured?.width || node.width || manual?.width || 80,
+          height: node.measured?.height || node.height || manual?.height || 60,
+        };
+      },
+      nodesep: 36, ranksep: 80, marginx: 40, marginy: 40,
+    });
+    nodesRef.current = nextNodes;
+    setNodes(nextNodes);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      rfInstance.current?.fitView({ padding: 0.12, maxZoom: 1.4, duration: 300 });
+    }));
+  }, []);
+
   // Selected node data
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
   const selectedExpr = selectedNode?.data?.exprNode as ExprNode | undefined;
@@ -215,19 +239,36 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
   return (
     <ExprErrorBoundary>
     <ReactFlowProvider>
-    <div className="expr-modal-overlay" onClick={handleBack}>
+    <div className="expr-modal-overlay" onPointerDown={event => { if (event.target === event.currentTarget) handleBack(); }}>
     <div className="expr-editor" onClick={e => e.stopPropagation()}>
       {/* Top bar */}
       <div className="expr-editor-topbar">
         <button className="expr-back-btn" onClick={handleBack}>← 返回</button>
-        <span className="expr-editor-title">📐 表达式编辑器 (Simulink 风格)</span>
+        <span className="expr-editor-title">📐 表达式编辑器</span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="expr-fit-btn" onClick={handleFitView} title="适应视图">⊞ 居中</button>
+          {mode === 'canvas' && <button className="expr-layout-btn" onClick={handleAutoLayout} title="按现有连线重新排列模块">⤢ 自动布局</button>}
+          {mode === 'canvas' && <button className="expr-fit-btn" onClick={handleFitView} title="适应视图">⊞ 居中</button>}
           <button className="expr-apply-btn" onClick={handleApply}>✓ 应用</button>
         </div>
       </div>
 
-      <div className="expr-editor-main">
+      <div className="expr-mode-tabs" role="tablist" aria-label="表达式编辑方式">
+        {([['formula', '✎ 手写公式'], ['source', '⌘ XML 源码'], ['canvas', '▦ 画布']] as const).map(([value, label]) =>
+          <button key={value} type="button" role="tab" aria-selected={mode === value}
+            className={mode === value ? 'active' : ''} onClick={() => switchMode(value)}>{label}</button>)}
+      </div>
+      {error && <div className="expr-edit-error" role="alert">{error}</div>}
+
+      {propertySource && onOpenPropertySource && (
+        <div role="note" style={{ padding: '10px 16px', borderBottom: '1px solid #dbe3ef', fontSize: 12, color: '#475569' }}>
+          当前函数直接引用 <code>{propertySource.signal}</code>，计算公式位于「{propertySource.label}」。
+          <button type="button" style={{ marginLeft: 12 }} onClick={() => onOpenPropertySource(propertySource.signal)}>
+            打开计算来源 →
+          </button>
+        </div>
+      )}
+
+      {mode === 'canvas' ? <div className="expr-editor-main">
         {/* Left: Palette */}
         <ExpressionPalette onAddBlock={handleAddBlock} />
 
@@ -261,7 +302,6 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
                 };
                 setNodes(ns => [...ns, newNode]);
                 setSelectedNodeId(id);
-                setTimeout(syncToTree, 0);
               } else {
                 handleAddBlock(kind);
               }
@@ -274,7 +314,6 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            onNodeDragStop={onNodeDragStop}
             nodeTypes={nodeTypes}
             onInit={(instance) => { rfInstance.current = instance; }}
             onNodeClick={onNodeClick}
@@ -312,7 +351,8 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
             </div>
           )}
         </div>
-      </div>
+      </div> : <ExpressionTextPanel mode={mode} text={text} onChange={editText}
+        fallbackExpression={expression} onSyncToCanvas={() => switchMode('canvas')} />}
     </div>
     </div>
     </ReactFlowProvider>
@@ -321,5 +361,5 @@ export default function ExpressionEditor({ expression, onChange, onBack }: Expre
 }
 
 // ── Block Property Panel ────────────────────────────────────────────────────
-// (BlockPropertyPanel / TableEditor / COMMON_PROPERTIES are now defined in
+// (BlockPropertyPanel / TableEditor are now defined in
 //  ./BlockPropertyPanel and shared with ModuleExpressionCanvas.)

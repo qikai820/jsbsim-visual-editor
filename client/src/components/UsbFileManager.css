@@ -111,6 +111,9 @@
 .usb-fm-builtin-header small { color: #718398; }
 .usb-fm-builtin-header button { border: 0; background: none; color: #6f8195; font-size: 24px; }
 .usb-fm-code-editor { flex: 1; min-height: 0; overflow: auto; font-size: 13px; }
+.usb-fm-signal-insert { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border, #cbd5e1); font-size: 12px; }
+.usb-fm-signal-insert .signal-path-input { max-width: 440px; }
+.usb-fm-signal-insert button { cursor: pointer; }
 .usb-fm-code-editor .cm-editor { height: 100%; }
 .usb-fm-code-editor .cm-scroller { font-family: "JetBrains Mono", "Noto Sans Mono", monospace; }
 .usb-fm-builtin-footer { flex-wrap: wrap; border-top: 1px solid #d5dee7; border-bottom: 0; }

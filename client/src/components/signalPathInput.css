@@ -1,0 +1,12 @@
+.signal-path-input { display: flex; position: relative; min-width: 0; flex: 1; align-items: stretch; }
+.signal-path-input > input { min-width: 0; width: 100%; flex: 1; }
+.signal-path-trigger { flex: 0 0 24px; border: 1px solid var(--border, #cbd5e1); border-left: 0; border-radius: 0 4px 4px 0; background: var(--bg-secondary, #f8fafc); color: var(--text-primary, #334155); cursor: pointer; }
+.signal-path-menu { position: fixed; z-index: 10000; box-sizing: border-box; padding: 8px; border: 1px solid var(--border, #cbd5e1); border-radius: 8px; box-shadow: 0 12px 30px #0003; background: var(--bg-primary, #fff); color: var(--text-primary, #1e293b); }
+.signal-path-menu > input { width: 100%; box-sizing: border-box; padding: 6px 8px; }
+.signal-path-count { padding: 5px 2px; font-size: 11px; opacity: .7; }
+.signal-path-results { max-height: 270px; overflow: auto; }
+.signal-path-results > button { width: 100%; display: flex; gap: 10px; justify-content: space-between; text-align: left; padding: 6px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.signal-path-results > button:hover, .signal-path-results > button:focus-visible { background: var(--bg-secondary, #eef2ff); }
+.signal-path-results code { overflow-wrap: anywhere; }
+.signal-path-results small { flex: none; opacity: .65; }
+.signal-path-results p { font-size: 12px; opacity: .7; }

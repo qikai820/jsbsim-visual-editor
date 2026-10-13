@@ -1,0 +1,27 @@
+.diagram-block {
+  position: relative; box-sizing: border-box; padding: 0;
+  border: 1px solid #334155; border-radius: 4px; background: #fff;
+  color: #172b4d; box-shadow: 0 1px 3px rgb(15 23 42 / 10%);
+}
+.diagram-block.selected { border-color: #2563eb; box-shadow: 0 0 0 2px rgb(37 99 235 / 12%); }
+.diagram-symbol-center { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.operator-symbol { width: calc(100% - 12px); height: calc(100% - 8px); max-height: 62px; overflow: visible; }
+.operator-symbol-table { width: calc(100% - 4px); height: calc(100% - 4px); max-height: none; }
+.operator-symbol text { fill: currentColor; stroke: none; text-anchor: middle; dominant-baseline: middle; font-family: 'DejaVu Sans', sans-serif; font-weight: 500; }
+.operator-symbol circle { fill: currentColor; }
+.diagram-auto-size { border: 1px solid #bfdbfe; border-radius: 4px; padding: 4px 9px; font-size: 11px; background: #fff; color: #1d4ed8; cursor: pointer; box-shadow: 0 2px 5px #dbeafe; }
+.diagram-block .fn-block-add-port { position: absolute; bottom: 2px; right: 3px; top: auto; left: auto; opacity: 0; width: 15px; height: 15px; line-height: 15px; font-size: 12px; background: #eff6ff; color: #2563eb; border: 0; border-radius: 3px; }
+.diagram-block:hover .fn-block-add-port, .diagram-block.selected .fn-block-add-port { opacity: 1; }
+/* The full hit area stays transparent. A visible stem reaches the exact outer
+   attachment point used by React Flow, so wires cannot stop short of the body. */
+.react-flow__handle.diagram-port {
+  width: 12px; height: 12px; min-width: 12px; min-height: 12px;
+  background: transparent; border: 0; border-radius: 0;
+  transform: translateY(-50%); z-index: 3;
+}
+.react-flow__handle.diagram-port-in { left: -7px; }
+.react-flow__handle.diagram-port-out { right: -7px; }
+.diagram-port::before { content: ''; position: absolute; left: 0; right: 0; top: 5.3px; height: 1.4px; background: #475569; }
+.diagram-port-in::after { content: ''; position: absolute; left: 7px; top: 2px; width: 6px; height: 8px; background: #475569; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.diagram-port:hover::before, .diagram-port:hover::after { background: #2563eb; }
+.diagram-clip { position: absolute; bottom: 3px; left: 8px; right: 8px; text-align: center; font-size: 8px; color: #64748b; pointer-events: none; }

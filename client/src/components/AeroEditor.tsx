@@ -6,6 +6,7 @@ import { exprToSegments } from '../utils/exprToFormula';
 import ExpressionEditor from './expression/ExpressionEditor';
 import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
 import TableChart from './expression/TableChart';
+import SignalPathInput from './SignalPathInput';
 
 // Error boundary
 class AeroErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
@@ -286,7 +287,7 @@ export default function AeroEditor() {
 
           <div className="ae-field">
             <label>名称</label>
-            <input value={current.name} onChange={e => updateCoeff(editIdx, { name: e.target.value })} placeholder="aero/coefficient/CLalpha" />
+            <SignalPathInput value={current.name} onChange={name => updateCoeff(editIdx, { name })} placeholder="aero/coefficient/CLalpha" />
           </div>
           <div className="ae-field">
             <label>描述</label>

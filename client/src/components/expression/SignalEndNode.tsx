@@ -1,5 +1,6 @@
-import { memo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { memo, useLayoutEffect } from 'react';
+import { useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { DiagramPort } from './OperatorBlock';
 
 interface SignalEndData {
   signalRole: 'source' | 'sink';
@@ -12,10 +13,12 @@ function shortName(s: string): string {
   return s.split('/').pop() || s;
 }
 
-function SignalEndNode({ data, selected }: NodeProps) {
+function SignalEndNode({ id, data, selected }: NodeProps) {
   const d = data as SignalEndData;
   const isSource = d.signalRole === 'source';
   const color = isSource ? '#10b981' : '#f59e0b';
+  const updateInternals = useUpdateNodeInternals();
+  useLayoutEffect(() => { updateInternals(id); }, [id, d.signalName, isSource, updateInternals]);
 
   return (
     <div
@@ -24,13 +27,11 @@ function SignalEndNode({ data, selected }: NodeProps) {
       title={d.signalName}
     >
       {!isSource && (
-        <Handle type="target" position={Position.Left} id="in"
-          className="sig-input-handle sig-port-arrow sig-port-input" />
+        <DiagramPort id="in" />
       )}
       <span className="sig-end-label">{shortName(d.signalName)}</span>
       {isSource && (
-        <Handle type="source" position={Position.Right} id="out"
-          className="sig-output-handle sig-port-arrow sig-port-output" />
+        <DiagramPort id="out" output />
       )}
     </div>
   );

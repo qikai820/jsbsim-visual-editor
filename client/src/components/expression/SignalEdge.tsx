@@ -1,4 +1,4 @@
-import { useContext, useCallback, useRef, useState } from 'react';
+import { useContext, useCallback, useMemo, useRef, useState } from 'react';
 import {
   BaseEdge, getSmoothStepPath, useReactFlow, useStore, type EdgeProps,
 } from '@xyflow/react';
@@ -7,6 +7,8 @@ import {
   edgePoints, polylinePath, polylinePointAt, nearestSegment, type Bendpoint,
 } from '../edges/bendpoints';
 import { SignalEdgeActionsContext } from './signalEdgeActions';
+import type { SignalRoute } from '../../utils/signalLayout';
+import { signalObstacles, signalRouteIsClear } from '../../utils/signalClearance';
 
 const DRAG_THRESHOLD = 4;
 
@@ -65,7 +67,15 @@ export default function SignalEdge(props: EdgeProps) {
   const tgtOff = (data?.tgtOffset as number) ?? 0;
   const routeOffset = (data?.routeOffset as number) ?? 0;
   const configuredRouteX = data?.routeX as number | undefined;
-  const bps: Bendpoint[] = ((data?.bendpoints as Bendpoint[]) ?? []);
+  const manualBps = (data?.bendpoints as Bendpoint[]) ?? [];
+  const route = data?.elkRoute as SignalRoute | undefined;
+  const first = route?.points?.[0];
+  const last = route?.points?.[route.points.length - 1];
+  const useRoute = !!first && !!last &&
+    Math.hypot(first.x - sourceX, first.y - sourceY) < 2 &&
+    Math.hypot(last.x - targetX, last.y - targetY) < 2;
+  const bps: Bendpoint[] = useRoute ? route!.points.slice(1, -1)
+    : manualBps.length ? orthogonalize({ x: sourceX, y: sourceY }, { x: targetX, y: targetY }, manualBps) : [];
   const setBps = (next: Bendpoint[]) => actions?.updateBendpoints(id, next);
   const [hovered, setHovered] = useState(false);
 
@@ -73,34 +83,23 @@ export default function SignalEdge(props: EdgeProps) {
     state.nodes.filter(n => n.selected).map(n => n.id)
   );
   const flowNodes = useStore((state) => state.nodes);
+  const obstacles = useMemo(() => signalObstacles(flowNodes), [flowNodes]);
   const isHighlighted = selectedNodeIds.includes(source) || selectedNodeIds.includes(target);
   const showLabel = selected || hovered || isHighlighted;
   const edgeStyle = isHighlighted || selected
     ? { stroke: '#f59e0b', strokeWidth: 2.6 }
-    : { stroke: '#64748b', strokeWidth: 1.35, strokeOpacity: 0.78 };
+    : { stroke: '#475569', strokeWidth: 1.4 };
 
   const fanOutCount = useStore((state) => sourceHandleId == null ? 0 :
     state.edges.filter(e => e.source === source && e.sourceHandle === sourceHandleId).length
   );
   const isFanOut = fanOutCount > 1;
-  const showJunction = fanOutCount > 2;
 
   const src = { x: sourceX, y: sourceY + srcOff };
   const tgt = { x: targetX, y: targetY + tgtOff };
   const autoRouteX = configuredRouteX ?? ((sourceX + targetX) / 2 + routeOffset);
-  // A straight wire is always the shortest and clearest route. Only use it
-  // when the horizontal segment does not pass through another module body.
-  const straightClear = Math.abs(src.y - tgt.y) < 2 && !flowNodes.some((node: any) => {
-    if (node.id === source || node.id === target || node.hidden) return false;
-    const width = node.measured?.width ?? node.data?.layoutWidth ?? 94;
-    const height = node.measured?.height ?? node.data?.layoutHeight ?? 58;
-    const left = node.position.x - 8;
-    const right = node.position.x + width + 8;
-    const top = node.position.y - 8;
-    const bottom = node.position.y + height + 8;
-    return src.y >= top && src.y <= bottom &&
-      Math.max(Math.min(src.x, tgt.x), left) <= Math.min(Math.max(src.x, tgt.x), right);
-  });
+  const straightClear = Math.abs(src.y - tgt.y) < .05 &&
+    signalRouteIsClear([src, tgt], { source, target }, obstacles);
 
   // Track whether a drag actually happened (to avoid conflict with dblclick)
   const dragMovedRef = useRef(false);
@@ -110,7 +109,10 @@ export default function SignalEdge(props: EdgeProps) {
     if (e.button !== 0) return;
     const startClient = { x: e.clientX, y: e.clientY };
     const startFlow = screenToFlowPosition(startClient);
-    const origBps = bps;
+    // A straight automatic route still needs editable segment anchors.
+    const origBps = useRoute && !bps.length
+      ? [{ x: (src.x + tgt.x) / 2, y: src.y }, { x: (src.x + tgt.x) / 2, y: tgt.y }]
+      : bps;
     const pts = edgePoints(src, tgt, origBps);
     const { segIndex } = nearestSegment(pts, startFlow);
 
@@ -169,14 +171,19 @@ export default function SignalEdge(props: EdgeProps) {
         // Move from bp[segIndex-1] — this is the START endpoint of the dragged segment.
         // Moving both endpoints keeps the segment parallel to its original direction.
         const firstIdx = segIndex - 1;
-        if (firstIdx >= 0 && firstIdx < newBps.length) {
-          if (isHoriz) {
-            for (let i = firstIdx; i < newBps.length; i++)
-              newBps[i] = { ...newBps[i], y: newBps[i].y + dy };
-          } else {
-            for (let i = firstIdx; i < newBps.length; i++)
-              newBps[i] = { ...newBps[i], x: newBps[i].x + dx };
+        if (firstIdx >= 0 && segIndex < newBps.length) {
+          for (const i of [firstIdx, segIndex]) {
+            newBps[i] = isHoriz ? { ...newBps[i], y: newBps[i].y + dy }
+              : { ...newBps[i], x: newBps[i].x + dx };
           }
+        } else if (segIndex === 0) {
+          const stub = src.x + 16;
+          newBps[0] = { ...newBps[0], y: src.y + dy };
+          newBps.unshift({ x: stub, y: src.y }, { x: stub, y: src.y + dy });
+        } else {
+          const stub = tgt.x - 16;
+          newBps[newBps.length - 1] = { ...newBps[newBps.length - 1], y: tgt.y + dy };
+          newBps.push({ x: stub, y: tgt.y + dy }, { x: stub, y: tgt.y });
         }
       }
 
@@ -191,7 +198,7 @@ export default function SignalEdge(props: EdgeProps) {
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [bps, src, tgt, source, sourceHandleId, sourceX, targetX, autoRouteX, isFanOut, screenToFlowPosition, setBps, actions]);
+  }, [bps, useRoute, src, tgt, source, sourceHandleId, sourceX, targetX, autoRouteX, isFanOut, screenToFlowPosition, setBps, actions]);
 
   const addBp = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -216,42 +223,54 @@ export default function SignalEdge(props: EdgeProps) {
     style: { cursor: 'crosshair' } as React.CSSProperties,
   };
 
-  if (bps.length === 0) {
+  if (bps.length === 0 && !useRoute) {
     const branchX = autoRouteX;
     const [path, lx, ly] = straightClear
       ? [`M ${src.x},${src.y} L ${tgt.x},${tgt.y}`, (src.x + tgt.x) / 2, src.y] as [string, number, number]
       : getSmoothStepPath({
           sourceX, sourceY: src.y, targetX, targetY: tgt.y, sourcePosition, targetPosition,
           centerX: branchX,
-          borderRadius: 5,
+          borderRadius: 0,
         });
+    // The fallback is an M/L-only orthogonal path. Apply the same keepout
+    // during dragging and while the asynchronous router is still working.
+    const coordinates = path.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi)?.map(Number) || [];
+    const points = Array.from({ length: coordinates.length / 2 }, (_, i) => ({ x: coordinates[i * 2], y: coordinates[i * 2 + 1] }));
+    if (!signalRouteIsClear(points, { source, target }, obstacles)) return null;
     return (
       <>
+        <path d={path} fill="none" stroke="var(--bg-primary, #f5f7fa)" strokeWidth={4.4} style={{ pointerEvents: 'none' }} />
         <BaseEdge id={id} path={path} labelX={lx} labelY={ly} label={showLabel ? label : undefined}
           labelStyle={{ fill: '#0f172a', fontSize: 11, fontWeight: 600 }}
           labelBgStyle={{ fill: '#ffffff', fillOpacity: 0.94 }}
           labelBgPadding={[4, 3]} labelBgBorderRadius={3}
           markerEnd={markerEnd} style={edgeStyle} />
         <path d={path} {...hitPathProps} />
-        {showJunction && (
-          <circle cx={branchX} cy={tgt.y} r={2.8} fill="#111" className="signal-junction"
-            style={{ pointerEvents: 'none' }} />
-        )}
       </>
     );
   }
 
   const pts = edgePoints(src, tgt, bps);
-  const path = polylinePath(pts, 10);
+  if (!signalRouteIsClear(pts, { source, target }, obstacles)) return selected ? (
+    <BendpointHandles bendpoints={bps}
+      onChange={(next) => setBps(orthogonalize(src, tgt, next))}
+      onDragEnd={() => actions?.persistBendpoints()} />
+  ) : null;
+  // Sharp orthogonal corners cannot cut into the keepout at a convex corner.
+  const path = polylinePath(pts, 0);
   const mid = polylinePointAt(pts, 0.5);
   return (
     <>
+      <path d={path} fill="none" stroke="var(--bg-primary, #f5f7fa)" strokeWidth={4.4} style={{ pointerEvents: 'none' }} />
       <BaseEdge id={id} path={path} labelX={mid.x} labelY={mid.y} label={showLabel ? label : undefined}
         labelStyle={{ fill: '#0f172a', fontSize: 11, fontWeight: 600 }}
         labelBgStyle={{ fill: '#ffffff', fillOpacity: 0.94 }}
         labelBgPadding={[4, 3]} labelBgBorderRadius={3}
         markerEnd={markerEnd} style={edgeStyle} />
       <path d={path} {...hitPathProps} />
+      {useRoute && route!.junctions.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r={2.5} fill="#334155" style={{ pointerEvents: 'none' }} />
+      ))}
       {selected && (
         <BendpointHandles bendpoints={bps}
           onChange={(next) => setBps(orthogonalize(src, tgt, next))}

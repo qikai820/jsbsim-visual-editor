@@ -9,7 +9,7 @@
 //   * Wiring is implicit: a consumer's input signal name == a producer's output
 //     (component name). We reconstruct those edges by signal name.
 
-import type { ExprNode } from '../types';
+import type { ExprNode, ExprTable } from '../types';
 import dagre from 'dagre';
 import { BLOCK_DEFS } from './expressionConverter';
 import { exprToFormula } from './exprToFormula';
@@ -18,6 +18,7 @@ import { orderRanksByBarycenter } from './layoutUtils';
 export interface ChannelItem {
   type: string;
   name: string;
+  output?: string;
   componentProps?: Record<string, any>;
   expression?: ExprNode;
   items?: ChannelItem[];
@@ -255,7 +256,7 @@ export function functionPreview(expr: ExprNode | undefined | null): string {
 export const SINGLE_INPUT_TYPES = new Set([
   'pure_gain', 'lag_filter', 'lead_lag_filter', 'second_order_filter', 'washout_filter',
   'bias', 'actuator', 'pid', 'sensor', 'gyro', 'accelerometer', 'magnetometer',
-  'deadband', 'kinematic', 'aerosurface_scale', 'constant', 'integrator',
+  'deadband', 'kinematic', 'aerosurface_scale', 'integrator',
   'scheduled_gain', 'angle', 'switch', 'waypoint_distance', 'waypoint_heading',
   // legacy aliases from older saved files
   'lag', 'filter', 'aerosurface',
@@ -264,6 +265,7 @@ export const SINGLE_INPUT_TYPES = new Set([
 // ── Signal extraction ───────────────────────────────────────────────────────
 
 export function extractOutputSignal(item: ChannelItem): string {
+  if (typeof item.output === 'string' && item.output.trim()) return item.output.trim();
   const out = item.componentProps?.output?.value;
   if (out && typeof out === 'string' && out.trim()) return out.trim();
   return item.name || '';
@@ -300,6 +302,7 @@ export function collectPropertyNodes(expr: any, acc: any[] = []): any[] {
 }
 
 export function extractInputSignals(item: ChannelItem): string[] {
+  if (item.type === 'constant') return [];
   if ((item.type === 'function' || item.type === 'fcs_function' || item.type === 'aero_table') && item.expression) {
     return collectPropertyNodes(item.expression).map(n => n.name).filter(Boolean);
   }
@@ -342,6 +345,55 @@ function setFunctionInputs(expr: any, inputs: string[]): any {
     k++;
   }
   return expr;
+}
+
+// A direct table factor is a separate operation: the independent variable is
+// looked up before its result reaches the product. Keep these nodes derived
+// from the expression so saving still writes the original JSBSim function.
+export function insertProductTables(nodes: any[], edges: any[], previousNodes: any[] = []): void {
+  const previous = new Map(previousNodes.filter(n => n.data?.kind === 'tablePreview').map(n => [n.id, n]));
+  for (const owner of nodes.filter(n => n.data?.kind === 'component')) {
+    const expr = owner.data.expression as ExprNode | undefined;
+    if (owner.data.expanded || expr?.kind !== 'product') continue;
+    const references = collectPropertyNodes(expr);
+    const hiddenInputIndices = new Set<number>();
+    for (const [factorIndex, factor] of expr.children.entries()) {
+      if (factor.kind !== 'table') continue;
+      const table = factor as ExprTable;
+      const inputIndices = references.flatMap((ref, index) => ref.__tableRef === factor ? [index] : []);
+      if (!inputIndices.length) continue;
+      const id = `${owner.id}/table-${factorIndex}`;
+      const old = previous.get(id);
+      nodes.push({
+        id, type: 'signalBlock',
+        position: old?.position || { x: owner.position.x - 150, y: owner.position.y },
+        ...(old?.data?.manualSize ? { style: old.style, width: old.width, height: old.height } : {}),
+        data: {
+          kind: 'tablePreview', itemType: 'aero_table', ownerId: owner.id,
+          factorIndex, inputIndices, inputs: inputIndices.map(index => owner.data.inputs[index]),
+          expression: table, name: `${table.tableType} 插值表`,
+          ...(old?.data?.manualSize ? { manualSize: old.data.manualSize } : {}),
+        },
+      });
+      for (const [port, inputIndex] of inputIndices.entries()) {
+        const edge = edges.find(e => e.target === owner.id && e.targetHandle === `in-${inputIndex}`);
+        if (edge) {
+          edge.id = `e-${edge.source}-${id}-${port}`;
+          edge.target = id;
+          edge.targetHandle = `in-${port}`;
+        }
+      }
+      const first = inputIndices[0];
+      inputIndices.slice(1).forEach(index => hiddenInputIndices.add(index));
+      edges.push({
+        id: `e-${id}-${owner.id}-${first}`, source: id, sourceHandle: 'out',
+        target: owner.id, targetHandle: `in-${first}`, type: 'signal',
+        data: { signal: owner.data.inputs[first], tableResult: true },
+      });
+    }
+    owner.data = { ...owner.data, diagramInputIndices: owner.data.inputs.map((_: string, index: number) => index)
+      .filter((index: number) => !hiddenInputIndices.has(index)) };
+  }
 }
 
 // ── Build graph ─────────────────────────────────────────────────────────────
@@ -457,7 +509,7 @@ export function buildSignalGraph(
         itemType: e.item.type,
         name: e.item.name || '',
         outputSignal: sig,
-        hasExplicitOutput: !!(e.item.componentProps?.output?.value),
+        hasExplicitOutput: !!(e.item.output || e.item.componentProps?.output?.value),
         inputs,
         gains,
         expression: expr,
@@ -571,14 +623,10 @@ export function buildSignalGraph(
   // Edges (wired by signal name)
   for (const e of items) {
     const inputs = consumerInputs.get(e.id)!;
-    // Merge duplicate wires: a signal entering the same component at several
-    // ports is drawn once (into the first such port). The full inputs list is
-    // preserved for serialization (unconnected duplicate ports fall back to
-    // their original signal).
-    const seen = new Set<string>();
+    // Each occurrence is a distinct input port, even when the same property
+    // is referenced twice. Routing may share the trunk, never omit a terminal.
     inputs.forEach((s, i) => {
-      if (!s || seen.has(s)) return;
-      seen.add(s);
+      if (!s) return;
       const prod = producerOf.get(s);
       const source = (prod && prod !== e.id) ? prod : sourceIds.get(s)!;
       edges.push({
@@ -601,6 +649,8 @@ export function buildSignalGraph(
       label: sig, data: { signal: sig }, type: 'signal',
     });
   }
+
+  insertProductTables(nodes, edges);
 
   // Dagre jointly optimises rank assignment, in-rank order and whitespace.
   // Run it after all endpoint nodes and edges exist, replacing the provisional
@@ -747,6 +797,7 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
   const channels: any[] = [];
   const ensureChannel = (ch: number, name: string) => {
     if (!channels[ch]) channels[ch] = { name: name || '', items: [] };
+    else if (!channels[ch].name && name) channels[ch].name = name;
     return channels[ch];
   };
 
@@ -766,6 +817,7 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
       const expr = cloneExpr(d.expression);
       setFunctionInputs(expr, inputs);
       item = { type: d.itemType, name: d.name || '', expression: expr };
+      if (d.hasExplicitOutput && d.outputSignal) item.output = d.outputSignal;
       if (d.cliptoMin !== undefined) item.cliptoMin = d.cliptoMin;
       if (d.cliptoMax !== undefined) item.cliptoMax = d.cliptoMax;
     } else {
@@ -774,7 +826,10 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
       delete compProps.output;
       delete compProps.properties;
       delete compProps.gains;
-      if (SINGLE_INPUT_TYPES.has(d.itemType)) {
+      if (d.itemType === 'constant') {
+        // A constant is a source: keep its value and output, but no input.
+        delete compProps.inputs;
+      } else if (SINGLE_INPUT_TYPES.has(d.itemType)) {
         compProps.input = { value: inputs[0] || '', attrs: {} };
         if (d.gains && d.gains[0] != null && String(d.gains[0]).trim() !== '') {
           compProps.gain = { value: String(d.gains[0]), attrs: {} };
@@ -800,4 +855,3 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
 
   return channels.filter(Boolean).map(c => ({ name: c.name || '', items: c.items }));
 }
-

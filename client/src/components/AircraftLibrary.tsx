@@ -27,7 +27,7 @@ const TYPE_INFO: Record<string, { icon: string; label: string; color: string }> 
 
 interface Props {
   onClose: () => void;
-  onLoad: (data: any) => void;
+  onLoad: (data: any) => void | Promise<void>;
   onSelectForSimulation?: (aircraftId: string) => void;
   onSelectScriptForSimulation?: (scriptPath: string) => void;
 }
@@ -184,7 +184,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
     setLoadingAircraft(true);
     try {
       const data = await loadAircraft(aircraft.sourceId || aircraft.id);
-      onLoad(data);
+      await onLoad(data);
       // Loading a model into the editor also makes it the launch target.
       // Keeping these as separate actions left simStart() without a model
       // parameter even though the canvas already showed that aircraft.
@@ -206,7 +206,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   };
 
   return (
-    <div className="wizard-overlay" onClick={onClose}>
+    <div className="wizard-overlay" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="library-modal" onClick={e => e.stopPropagation()}>
         <div className="library-header">
           <h2>📚 模型与脚本库</h2>

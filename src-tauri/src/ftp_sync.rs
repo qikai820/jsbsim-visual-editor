@@ -244,8 +244,9 @@ fn verify_uploaded_file(auth: &str, path: &str, expected: &[u8]) -> Result<(), S
 }
 
 fn list_directory(path: &str) -> Result<Vec<String>, String> {
+    let path = path.trim_matches('/');
     if use_usb() {
-        let built_in = usb_file::list(&format!("romfs/jsbsim/{path}"));
+        let built_in = usb_file::list(&format!("romfs/jsbsim{}{path}", if path.is_empty() { "" } else { "/" }));
         if let Err(error) = &built_in {
             if transport::mode() == TransportMode::Auto && usb_file_transport_error(error) {
                 mark_auto_usb_file_unhealthy();
@@ -253,7 +254,7 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
                     .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"));
             }
         }
-        let user = usb_file::list(&format!("jsbsim/{path}"));
+        let user = usb_file::list(&format!("jsbsim{}{path}", if path.is_empty() { "" } else { "/" }));
         let mut entries = match (built_in, user) {
             (Ok(mut built_in), Ok(user)) => { built_in.extend(user); built_in },
             (Ok(built_in), Err(_)) => built_in,
@@ -281,7 +282,8 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn list_ftp_directory(path: &str) -> Result<Vec<String>, String> {
-    let url = format!("{}/jsbsim/{}/", endpoint(), path);
+    let path = path.trim_matches('/');
+    let url = format!("{}/jsbsim{}{path}/", endpoint(), if path.is_empty() { "" } else { "/" });
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
     let mut entries: Vec<String> = String::from_utf8_lossy(&bytes)
@@ -741,13 +743,23 @@ pub fn list_models() -> Result<Vec<String>, String> {
 pub fn list_xml_parent(parent: &str) -> Result<Option<Vec<String>>, String> {
     let parts: Vec<&str> = parent.split('/').collect();
     if parts.is_empty() || parts.len() > 6 || parts.iter().any(|part| safe_component(part).is_err()) ||
-        (parts.len() > 1 && parts[0] != "aircraft") ||
+        (parts.len() > 1 && parts[0] != "aircraft" && parts != ["config", "models"]) ||
         (parts.len() == 1 && !matches!(parts[0], "aircraft" | "systems" | "engine" | "scripts")) {
         return Err("unsupported XML parent directory".into());
     }
     for depth in 1..parts.len() {
         let ancestor = parts[..depth].join("/");
-        let entries = list_directory(&ancestor)?;
+        let entries = match list_directory(&ancestor) {
+            Ok(entries) => entries,
+            Err(error) if parts == ["config", "models"] => {
+                let root = list_directory("")?;
+                if !root.iter().any(|entry| entry.eq_ignore_ascii_case("config")) {
+                    return Ok(None);
+                }
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         if !entries.iter().any(|entry| entry.eq_ignore_ascii_case(parts[depth])) {
             return Ok(None);
         }

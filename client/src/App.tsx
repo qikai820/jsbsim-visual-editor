@@ -14,7 +14,9 @@ import { useSimSocket } from './sim/useSimSocket';
 import { resolveNodeOwnedPath, useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
-import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simSyncTime } from './utils/tauriApi';
+import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simSyncTime, usbConsoleRead } from './utils/tauriApi';
+import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
+import { extractOutputSignal, type ChannelItem } from './utils/signalGraph';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -74,6 +76,28 @@ function channelsToAeroCoefficients(channels: any[], previous: any[]): any[] {
     }
   }
   return coefficients;
+}
+
+function findPropertyProducer(signal: string): { moduleId: string; componentId: string; label: string } | null {
+  const matches: { moduleId: string; componentId: string; label: string }[] = [];
+  for (const node of useFlowStore.getState().nodes) {
+    if (node.data.componentType !== 'system' && node.data.componentType !== 'flight_control') continue;
+    let channels: any[];
+    try { channels = JSON.parse(node.data.params.channels || '[]'); }
+    catch { continue; }
+    if (!Array.isArray(channels)) continue;
+    channels.forEach((channel, ci) => (channel.items || []).forEach((item: ChannelItem, ii: number) => {
+      if ((item.type === 'function' || item.type === 'fcs_function') &&
+          extractOutputSignal(item) === signal) {
+        matches.push({
+          moduleId: node.id,
+          componentId: `c-${ci}-${ii}`,
+          label: String(node.data.label || node.data.params.name || channel.name || '系统'),
+        });
+      }
+    }));
+  }
+  return matches.length === 1 ? matches[0] : null;
 }
 
 // Global error boundary
@@ -155,6 +179,8 @@ function AppContent() {
   const editingSubFileId = useFlowStore(state => state.editingSubFileId);
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
+  const [showNshPrints, setShowNshPrints] = useState(() => localStorage.getItem('jsbsim-log-show-nsh') === 'true');
+  const nshCursor = useRef(0);
   const [xmlChangeNotice, setXmlChangeNotice] = useState<string[]>([]);
   const [modifiedXmlFiles, setModifiedXmlFiles] = useState<string[]>([]);
   const xmlNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,6 +191,7 @@ function AppContent() {
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLogCenter, setShowLogCenter] = useState(false);
+  const [sourceJump, setSourceJump] = useState<{ moduleId: string; componentId: string } | null>(null);
   const [webglFail, setWebglFail] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logWindowRef = useRef<HTMLDivElement | null>(null);
@@ -263,7 +290,11 @@ function AppContent() {
         if ((previous.nodes || []).length !== next.nodes.length) files.add(mainFile);
         for (const node of next.nodes) {
           const oldNode: any = previousNodes.get(node.id);
-          if (!oldNode || JSON.stringify(oldNode.data) === JSON.stringify(node.data)) continue;
+          const xmlData = (data: any) => ({
+            ...data,
+            params: Object.fromEntries(Object.entries(data?.params || {}).filter(([key]) => key !== 'layout')),
+          });
+          if (!oldNode || JSON.stringify(xmlData(oldNode.data)) === JSON.stringify(xmlData(node.data))) continue;
           const type = node.data?.componentType;
           const rawSource = resolveNodeOwnedPath(node as any) || node.data?.params?.source?.path;
           if (rawSource) {
@@ -397,6 +428,53 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    if (!showNshPrints || !isTauri) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    let pending = '';
+    let lastWasCr = false;
+    let failures = 0;
+    const decoder = new TextDecoder();
+    const poll = async () => {
+      try {
+        const chunk = await usbConsoleRead(nshCursor.current);
+        if (!active) return;
+        failures = 0;
+        nshCursor.current = chunk.next;
+        if (chunk.lost) {
+          setJsbsimLogs(lines => [...lines, '[NSH/USB] 缓冲区已覆盖部分旧输出'].slice(-500));
+        }
+        let output = decoder.decode(new Uint8Array(chunk.data), { stream: true });
+        if (lastWasCr && output.startsWith('\n')) output = output.slice(1);
+        if (output) lastWasCr = output.endsWith('\r');
+        pending += output.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const lines = pending.split('\n');
+        pending = lines.pop() || '';
+        if (chunk.data.length === 0 && pending) { lines.push(pending); pending = ''; }
+        if (pending.length > 8192) { lines.push(pending); pending = ''; }
+        if (lines.length) {
+          setJsbsimLogs(previous => [...previous, ...lines.map(line => `[NSH/USB] ${line}`)].slice(-500));
+        }
+        timer = setTimeout(poll, chunk.data.length === 1024 ? 30 : 150);
+      } catch (error) {
+        if (!active) return;
+        const message = String(error);
+        if (message.includes('通道忙') || message.includes('transport busy')) {
+          timer = setTimeout(poll, 300);
+        } else if (++failures >= 3) {
+          setJsbsimLogs(lines => [...lines, `[NSH/USB] 读取失败：${String(error)}；请确认板端固件支持 USB 控制台镜像`].slice(-500));
+          setShowNshPrints(false);
+          localStorage.setItem('jsbsim-log-show-nsh', 'false');
+        } else {
+          timer = setTimeout(poll, 600);
+        }
+      }
+    };
+    void poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, [showNshPrints]);
+
+  useEffect(() => {
     if (showJsbsimLog && followLogTailRef.current && logWindowRef.current) {
       logWindowRef.current.scrollTop = logWindowRef.current.scrollHeight;
     }
@@ -472,6 +550,7 @@ function AppContent() {
     return resolveNodeOwnedPath(focusedModule as any) || String(focusedModule.data.params?.source?.path || '');
   })();
   let focusedChannels: any[] = [];
+  let focusedTopLevelItems: any[] = [];
   let focusedCoefficients: any[] = [];
   let focusedLayout: Record<string, { x: number; y: number }> | undefined;
   if (focusedModule) {
@@ -487,6 +566,12 @@ function AppContent() {
         if (Array.isArray(parsed)) focusedChannels = parsed;
       }
     } catch { /* ignore malformed */ }
+    if (focusedModule.data.componentType === 'system') {
+      try {
+        const parsed = JSON.parse(focusedModule.data.params.topLevelItems || '[]');
+        if (Array.isArray(parsed)) focusedTopLevelItems = parsed;
+      } catch { /* ignore malformed */ }
+    }
     try {
       if (focusedModule.data.params.layout) {
         const lp = JSON.parse(focusedModule.data.params.layout);
@@ -515,21 +600,44 @@ function AppContent() {
       <div className="main-content">
         {focusedModule ? (
           <ModuleExpressionCanvas
+            key={focusedModule.id}
             embedded
             mode="signal"
+            initialOpenComponentId={sourceJump?.moduleId === focusedModule.id ? sourceJump.componentId : undefined}
+            findPropertySource={(signal) => findPropertyProducer(signal)}
+            onOpenPropertySource={(signal) => {
+              const source = findPropertyProducer(signal);
+              if (!source) return;
+              setSourceJump({ moduleId: source.moduleId, componentId: source.componentId });
+              setFocusedNodeId(source.moduleId);
+            }}
             title={`${focusedAero ? '气动系数数据流' : `${focusedModule.data.componentType === 'flight_control' ? '飞控' : '系统'} 信号流`}${focusedXmlPath ? `  ·  XML: ${focusedXmlPath}` : '  ·  XML: 未绑定'}`}
-            channels={focusedChannels}
+            channels={focusedModule.data.componentType === 'system'
+              ? systemCanvasChannels(focusedChannels, focusedTopLevelItems)
+              : focusedChannels}
             topLevelProps={focusedAero ? [] : (focusedModule.data.params.properties || '')
               .split(',')
               .map((s: string) => s.trim())
               .filter(Boolean)}
             modelId={focusedModule.id}
             initialLayout={focusedLayout}
-            onChannelsChange={(chs) => updateNodeParams(focusedModule.id, focusedAero
-              ? { coefficients: JSON.stringify(channelsToAeroCoefficients(chs, focusedCoefficients)) }
-              : { channels: JSON.stringify(chs) })}
+            onChannelsChange={(chs) => {
+              if (focusedAero) {
+                updateNodeParams(focusedModule.id, {
+                  coefficients: JSON.stringify(channelsToAeroCoefficients(chs, focusedCoefficients)),
+                });
+              } else if (focusedModule.data.componentType === 'system') {
+                const separated = splitSystemCanvasChannels(chs);
+                updateNodeParams(focusedModule.id, {
+                  channels: JSON.stringify(separated.channels),
+                  topLevelItems: JSON.stringify(separated.topLevelItems),
+                });
+              } else {
+                updateNodeParams(focusedModule.id, { channels: JSON.stringify(chs) });
+              }
+            }}
             onLayoutChange={(layout) => updateNodeParams(focusedModule.id, { layout: JSON.stringify(layout) })}
-            onBack={() => setFocusedNodeId(null)}
+            onBack={() => { setSourceJump(null); setFocusedNodeId(null); }}
           />
         ) : (
           <>
@@ -547,7 +655,7 @@ function AppContent() {
        * the HUD by default but remains draggable like the HUD itself. */}
       {showJsbsimLog && (
         <div className="jsbsim-log-sidebar jsbsim-log-detached" style={logPos.x || logPos.y ? { transform: `translate(${logPos.x}px, ${logPos.y}px)` } : undefined}>
-          <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)}>×</button></div></div>
+          <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button, input, label')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><label className="jsbsim-log-nsh-toggle" title="通过 USB 显示板端调试控制台的打印"><input type="checkbox" checked={showNshPrints} onChange={event => { const enabled = event.target.checked; setShowNshPrints(enabled); localStorage.setItem('jsbsim-log-show-nsh', String(enabled)); }} />NSH 打印</label><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)}>×</button></div></div>
           <div ref={logWindowRef} className="sim-log-window jsbsim-log-sidebar-window" onScroll={event => {
             const element = event.currentTarget;
             followLogTailRef.current =

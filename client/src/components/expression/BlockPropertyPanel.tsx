@@ -1,21 +1,7 @@
 import type { ExprNode } from '../../types';
 import { BLOCK_DEFS } from '../../utils/expressionConverter';
 import TableChart from './TableChart';
-
-export const COMMON_PROPERTIES = [
-  'aero/alpha-rad', 'aero/beta-rad', 'aero/qbar-psf',
-  'fcs/elevator-pos-rad', 'fcs/elevator-pos-deg',
-  'fcs/aileron-pos-rad', 'fcs/aileron-pos-deg',
-  'fcs/rudder-pos-rad', 'fcs/rudder-pos-deg',
-  'fcs/flap-pos-deg', 'fcs/speedbrake-pos-rad',
-  'velocities/mach', 'velocities/vc-kts',
-  'metrics/Sw-sqft', 'metrics/bw-ft', 'metrics/cbar-b-ft',
-  'aero/h_b-mac-ft', 'aero/stall-hyst-norm',
-  'aero/bi2vel', 'aero/ci2vel', 'aero/cl-squared',
-  'atmosphere/rho-slugs_ft3',
-  'velocities/p-aero-rad_sec', 'velocities/q-aero-rad_sec', 'velocities/r-aero-rad_sec',
-  'velocities/u-aero-fps', 'velocities/v-aero-fps', 'velocities/w-aero-fps',
-];
+import SignalPathInput from '../SignalPathInput';
 
 export interface BlockPropertyPanelProps {
   expr: ExprNode;
@@ -55,16 +41,11 @@ export function BlockPropertyPanel({ expr, onChange, onDelete, isRoot }: BlockPr
       {expr.kind === 'property' && (
         <div className="expr-bp-field">
           <label>属性名</label>
-          <input
-            type="text"
-            list="prop-suggestions"
+          <SignalPathInput
             value={expr.name}
-            onChange={e => onChange({ ...expr, name: e.target.value })}
+            onChange={name => onChange({ ...expr, name })}
             placeholder="aero/alpha-rad"
           />
-          <datalist id="prop-suggestions">
-            {COMMON_PROPERTIES.map(p => <option key={p} value={p} />)}
-          </datalist>
         </div>
       )}
 
@@ -72,10 +53,9 @@ export function BlockPropertyPanel({ expr, onChange, onDelete, isRoot }: BlockPr
       {expr.kind === 'function_ref' && (
         <div className="expr-bp-field">
           <label>函数名</label>
-          <input
-            type="text"
+          <SignalPathInput
             value={expr.name}
-            onChange={e => onChange({ ...expr, name: e.target.value })}
+            onChange={name => onChange({ ...expr, name })}
             placeholder="aero/function/kCDge"
           />
         </div>
@@ -143,21 +123,18 @@ export function TableEditor({ expr, onChange }: TableEditorProps) {
       </div>
       <div className="expr-bp-field">
         <label>自变量 1 (行)</label>
-        <input type="text" list="prop-suggestions" value={expr.var1}
-          onChange={e => update({ var1: e.target.value })} />
+        <SignalPathInput value={expr.var1} onChange={var1 => update({ var1 })} />
       </div>
       {(expr.tableType === '2D' || expr.tableType === '3D') && (
         <div className="expr-bp-field">
           <label>自变量 2 (列)</label>
-          <input type="text" list="prop-suggestions" value={expr.var2}
-            onChange={e => update({ var2: e.target.value })} />
+          <SignalPathInput value={expr.var2} onChange={var2 => update({ var2 })} />
         </div>
       )}
       {expr.tableType === '3D' && (
         <div className="expr-bp-field">
           <label>自变量 3 (表)</label>
-          <input type="text" list="prop-suggestions" value={expr.var3}
-            onChange={e => update({ var3: e.target.value })} />
+          <SignalPathInput value={expr.var3} onChange={var3 => update({ var3 })} />
         </div>
       )}
 

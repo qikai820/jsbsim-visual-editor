@@ -312,12 +312,12 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     try {
       const { rootName, rootPath, entries, folders } = browserFolderFiles(files, directory);
       const identity = (await usbFilePing()).identity;
-      if (identity !== 'lmx93-usb-file/4' && identity !== 'lmx93-usb-file/5') {
+      if (identity !== 'lmx93-usb-file/4' && identity !== 'lmx93-usb-file/5' && identity !== 'lmx93-usb-file/6') {
         throw new Error(isZh ? '文件夹上传需要 lmx93-usb-file/4 或更新板端固件' : 'Folder upload requires lmx93-usb-file/4 or newer board firmware');
       }
       const longName = [rootName, ...entries.flatMap(({ relative }) => relative.split('/'))]
         .some(name => new TextEncoder().encode(name).length > 32);
-      if (longName && identity !== 'lmx93-usb-file/5') {
+      if (longName && identity !== 'lmx93-usb-file/5' && identity !== 'lmx93-usb-file/6') {
         throw new Error(isZh ? '文件夹包含超过 32 字节的名称，需要升级至 lmx93-usb-file/5 板端固件' : 'Folder has names over 32 bytes; install lmx93-usb-file/5 board firmware');
       }
       const siblings = await usbFileList(directory);

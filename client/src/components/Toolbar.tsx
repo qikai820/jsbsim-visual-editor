@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, loadAircraft, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
+import { parseSerialSensors, serializeSerialSensors } from '../utils/serialSensorXml';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
 import SimMenu from './SimMenu';
@@ -11,6 +12,7 @@ import NshConsoleDialog from './NshConsoleDialog';
 import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
+import { xmlContentEqual } from '../utils/xmlContentEqual';
 import { isTauri, selectModelImport, getSimulatorTransportMode, getPlotJugglerRate, setPlotJugglerRate, startPlotJuggler } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
@@ -60,6 +62,46 @@ function projectFingerprint(project: { aircraft: any; nodes: any[]; edges: any[]
 
 function remoteBaselineKey(model: string): string {
   return `jsbsim-remote-baseline:${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+}
+
+function serialSensorPath(model: string): string {
+  return `config/models/${model}.serial.xml`;
+}
+
+async function withSerialSensors(data: any, model: string): Promise<any> {
+  let source = '';
+  try {
+    const remote = await ftpDownloadXml(serialSensorPath(model));
+    source = remote.content;
+  } catch (error) {
+    const parent = await listRemoteXmlParent('config/models');
+    if (parent.files.some(file => file.toLowerCase() === `${model}.serial.xml`.toLowerCase())) {
+      throw error;
+    }
+    // A firmware without the sidecar still has H7's original Viztra default.
+    // Other models have no configured serial sensors until one is added.
+    if (model !== 'H7') return data;
+    source = '<?xml version="1.0"?><serial_outputs version="1"><output name="Viztra HYM1" protocol="VIZTRA_HYM1" device="/dev/ttyS1" baud="115200" logic_name="H7_Viztra"/></serial_outputs>';
+  }
+  const sensors = parseSerialSensors(source);
+  const existing = Array.isArray(data.nodes) ? data.nodes : [];
+  const right = existing.reduce((x: number, node: any) => Math.max(x, Number(node.position?.x) || 0), 0) + 320;
+  const serialNodes = sensors.map((sensor, index) => ({
+    id: `serial-sensor-${index}`, type: 'aircraftComponent', data: sensor,
+    position: { x: right, y: index * 170 },
+  }));
+  const serialEdges = serialNodes.flatMap(node => {
+    const logicName = String(node.data.params.logic_name || '');
+    const source = existing.find((candidate: any) => {
+      const params = candidate.data?.params || {};
+      const file = String(params.file || params._source_file || '').replace(/\.xml$/i, '').split('/').pop();
+      return candidate.data?.componentType === 'system' && logicName &&
+        (file === logicName || params.name === logicName);
+    });
+    return source ? [{ id: `serial-link-${node.id}`, source: source.id, sourceHandle: 'system',
+      target: node.id, targetHandle: 'sensor', type: 'smoothstep' }] : [];
+  });
+  return { ...data, nodes: [...existing, ...serialNodes], edges: [...(data.edges || []), ...serialEdges] };
 }
 
 function subFileRemotePath(file: any): string {
@@ -204,6 +246,36 @@ function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
   });
 }
 
+async function patchInlineSerialLogic(sourceXml: string, nodes: any[], edges: any[]): Promise<string> {
+  const priorNames = new Set(Array.from(sourceXml.matchAll(/<!-- SERIAL_SENSOR_LOGIC_BEGIN ([A-Za-z0-9_.-]+) -->/g),
+    match => match[1]));
+  const marker = /\s*<!-- SERIAL_SENSOR_LOGIC_BEGIN [A-Za-z0-9_.-]+ -->[\s\S]*?<!-- SERIAL_SENSOR_LOGIC_END [A-Za-z0-9_.-]+ -->/g;
+  let xml = sourceXml.replace(marker, '');
+  const sourceIds = new Set(edges.filter(edge =>
+    nodes.some(node => node.id === edge.target && node.data?.componentType === 'serial_sensor'))
+    .map(edge => edge.source));
+  const blocks: string[] = [];
+  for (const source of nodes.filter(node => node.data?.componentType === 'system' &&
+      (sourceIds.has(node.id) || priorNames.has(String(node.data.params?.name || ''))))) {
+    const params = source.data.params || {};
+    if (String(params.file || '').trim()) continue;
+    const name = String(params.name || '').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) throw new Error('新传感器系统需要有效的系统名称');
+    if (new RegExp(`<system\\b[^>]*\\bname=["']${name}["']`, 'i').test(xml)) {
+      throw new Error(`系统 ${name} 已在主模型中存在，请先从仿真机重新加载该模型`);
+    }
+    const systemXml = (await generateSubfile('system', name, params))
+      .replace(/^\s*<\?xml[^?]*\?>\s*/i, '').trim();
+    blocks.push(`  <!-- SERIAL_SENSOR_LOGIC_BEGIN ${name} -->\n  ${systemXml}\n  <!-- SERIAL_SENSOR_LOGIC_END ${name} -->`);
+  }
+  if (!blocks.length) return xml;
+  const anchor = /\n(?=\s*<(?:system|flight_control|aerodynamics|input|output)\b)/i.exec(xml);
+  const index = anchor ? anchor.index : xml.lastIndexOf('</fdm_config>');
+  if (index < 0) throw new Error('主模型缺少 fdm_config 结束标签');
+  xml = `${xml.slice(0, index)}\n${blocks.join('\n')}\n${xml.slice(index)}`;
+  return xml;
+}
+
 function originalMainXml(mainFile: any): string {
   // originalXml is the immutable import/download snapshot. currentXml may
   // contain output produced by an older, lossy regeneration path.
@@ -243,12 +315,16 @@ async function buildChildUploadXml(current: any, path: string): Promise<string> 
     }
     let content = source;
     for (const params of patches) {
+      // The System's XML name can differ from its filename (for example the
+      // H7 barometer file). Generating with the filename changes that name.
       const systemPatch = fileType === 'system'
-        ? await generateSubfile('system', fileName, params)
+        ? await generateSubfile('system', String(params.name || '').trim() || fileName, params)
         : undefined;
       content = patchExistingSubfileXml(content, fileType, params, systemPatch);
     }
-    return content;
+    // A graph round-trip can rewrite only indentation/blank lines. Keep the
+    // downloaded source verbatim when its XML content has not changed.
+    return xmlContentEqual(source, content) ? source : content;
   }
 
   // Full generation is permitted only for an explicitly-created subfile. An
@@ -571,6 +647,20 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     }
     const target = `/mnt/sdcard/jsbsim/aircraft/${model}/${model}.xml`;
     const stateBeforeSave = useFlowStore.getState();
+    const serialPath = serialSensorPath(model);
+    const serialTarget = `/mnt/sdcard/jsbsim/${serialPath}`;
+    let serialXml: string | null = null;
+    try {
+      serialXml = serializeSerialSensors(stateBeforeSave.nodes, stateBeforeSave.edges);
+      const previous = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}');
+      if (serialXml === null && Array.isArray(previous.nodes) &&
+          previous.nodes.some((node: any) => node?.data?.componentType === 'serial_sensor')) {
+        serialXml = '<?xml version="1.0"?>\n<serial_outputs version="1"/>\n';
+      }
+    } catch (error) {
+      alert(`串口传感器配置无效：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     // Without a baseline, upload the main file and the files explicitly
     // selected at import. Indexed global references are not owned by this
     // model and must not be regenerated or overwritten automatically.
@@ -607,13 +697,23 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       }
     }
     const trackedFiles = dirtyRecords.map(file => file.path);
-    const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path)]));
+    const connectedSystemIds = new Set(stateBeforeSave.edges.filter(edge =>
+      stateBeforeSave.nodes.some(node => node.id === edge.target && node.data.componentType === 'serial_sensor'))
+      .map(edge => edge.source));
+    const hasInlineSerialLogic = stateBeforeSave.nodes.some(node => connectedSystemIds.has(node.id) &&
+      node.data.componentType === 'system' && !String(node.data.params?.file || '').trim());
+    const hadInlineSerialLogic = originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main'))
+      .includes('SERIAL_SENSOR_LOGIC_BEGIN');
+    const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path),
+      ...(serialXml !== null ? [serialPath] : []),
+      ...(hasInlineSerialLogic || hadInlineSerialLogic ? [`aircraft/${model}/${model}.xml`] : [])]));
     const changes = changesList.length
       ? changesList.map(file => `  • ${file}`).join('\n')
       : hasBaseline ? '  • 当前未记录到 XML 修改' : `  • 全量上传：${model} 尚无同步基线`;
     const mainDirty = hasBaseline
       ? dirtyRecords.some(file => file.category === 'main') ||
-        modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`))
+        modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`)) ||
+        hasInlineSerialLogic || hadInlineSerialLogic
       : true;
     const externalPaths = new Set(dirtyRecords.filter(file => ['engine', 'thruster', 'system'].includes(file.category)).map(file => {
       const path = file.path.toLowerCase().endsWith('.xml') ? file.path : `${file.path}.xml`;
@@ -623,7 +723,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     for (const file of modifiedXmlFiles) {
       if (file.startsWith('systems/') || file.startsWith('engine/')) externalPaths.add(file);
     }
-    const writes = [...(mainDirty ? [target] : []), ...Array.from(externalPaths).map(path => `/mnt/sdcard/jsbsim/${path}`),
+    const writes = [...(mainDirty ? [target] : []), ...(serialXml !== null ? [serialTarget] : []),
+      ...Array.from(externalPaths).map(path => `/mnt/sdcard/jsbsim/${path}`),
       ...packageFiles.map(file => `/mnt/sdcard/jsbsim/${file.path}`),
       ...assetFiles.map(file => `/mnt/sdcard/jsbsim/aircraft/${model}/${file.name}`)];
     if (!writes.length) {
@@ -669,7 +770,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (!mainSource.trim()) {
           throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
         }
-        xml = patchMainIoAttributes(mainSource, current.nodes);
+        xml = await patchInlineSerialLogic(
+          patchMainIoAttributes(mainSource, current.nodes), current.nodes, current.edges);
       }
       const uploadedChildren = new Map<string, string>();
       for (const path of externalPaths) {
@@ -686,6 +788,15 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (comparableXml(remote.xml) !== comparableXml(xml)) throw new Error(`主模型回读不一致：${target}`);
         verified.push(target);
         if (result.uploaded) written.push(target);
+      }
+      if (serialXml !== null) {
+        const result = await ftpUploadFile(serialPath, serialXml);
+        const remote = await ftpDownloadXml(serialPath);
+        if (comparableXml(remote.content) !== comparableXml(serialXml)) {
+          throw new Error(`串口传感器 XML 回读不一致：${serialTarget}`);
+        }
+        verified.push(serialTarget);
+        if (result.uploaded) written.push(serialTarget);
       }
       for (const [path, content] of uploadedChildren) {
         const result = await ftpUploadFile(path, content);
@@ -831,7 +942,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const handleOpenRemoteModel = async (model: string) => {
     // The aircraft XML consists mostly of file references. Fetch the whole
     // reference tree before replacing the current canvas.
-    const data = await loadAircraft(model);
+    const data = await withSerialSensors(await loadAircraft(model), model);
     clearAll();
     // Commit the selected directory before loadProject updates the parsed
     // display name, preventing a render from briefly reusing the prior model.
@@ -858,6 +969,19 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
 
   const syncRemoteModel = async (model: string, force: boolean): Promise<boolean> => {
     if (!isRemoteUploadEnabled()) {
+      const current = useFlowStore.getState();
+      const dirtyFiles = (current.xmlFiles || []).filter(file => file.dirty).map(file => file.path);
+      if (dirtyFiles.length && !force) {
+        const list = dirtyFiles.length ? `\n\n${dirtyFiles.map(path => `  • ${path}`).join('\n')}` : '';
+        const message = isZh
+          ? `检测到本地模型修改${list}\n\n“本地配置 → 允许写入仿真机模型”当前已关闭。本次运行会使用仿真机上的旧模型。是否仍要启动？`
+          : `Local model changes detected${list}\n\nWriting simulator models is disabled in Local Settings. This run will use the existing simulator model. Start anyway?`;
+        if (!window.confirm(message)) {
+          const error = new Error(isZh ? '已取消启动：本地修改尚未同步到仿真机' : 'Start cancelled: local changes are not synced');
+          error.name = 'ModelSyncCancelledError';
+          throw error;
+        }
+      }
       onLog?.(`[${new Date().toLocaleTimeString()}] 已保护模型文件，跳过上传到 NuttX: ${model}`);
       return false;
     }
@@ -1155,7 +1279,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       }} />}
 
       {showXml && (
-        <div className="xml-modal-overlay" onClick={() => setShowXml(false)}>
+        <div className="xml-modal-overlay" onPointerDown={event => { if (event.target === event.currentTarget) setShowXml(false); }}>
           <div className="xml-modal" onClick={e => e.stopPropagation()}>
             <div className="xml-modal-header">
               <h3>生成的 JSBSim XML</h3>
@@ -1273,7 +1397,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       {showLibrary && (
         <AircraftLibrary
           onClose={() => setShowLibrary(false)}
-          onLoad={(data) => {
+          onLoad={async (loaded) => {
+            const modelName = String(loaded?.model || loaded?.aircraft?.name || '').trim();
+            const data = modelName ? await withSerialSensors(loaded, modelName) : loaded;
             loadProject(data);
             if (data.sourceXml) localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
             if (data.referenceFiles) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles));

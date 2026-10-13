@@ -2174,6 +2174,8 @@ html, body, #root {
 .jsbsim-log-sidebar-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; color: #315c6b; background: #e8f1f5; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .4px; border-bottom: 1px solid #c9dce4; cursor: grab; user-select: none; }
 .jsbsim-log-sidebar-head:active { cursor: grabbing; }
 .jsbsim-log-sidebar-head > div { display: flex; align-items: center; gap: 8px; }
+.jsbsim-log-sidebar-head .jsbsim-log-nsh-toggle { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; letter-spacing: 0; }
+.jsbsim-log-sidebar-head .jsbsim-log-nsh-toggle input { margin: 0; cursor: pointer; }
 .jsbsim-log-sidebar-head .jsbsim-log-clear { border: 1px solid #9fc3d0; border-radius: 4px; padding: 3px 7px; color: #397082; font-size: 11px; }
 .jsbsim-log-sidebar-head button { border: 0; background: transparent; color: #397082; font-size: 18px; cursor: pointer; }
 .jsbsim-log-sidebar-window {
@@ -2498,3 +2500,133 @@ html, body, #root {
 .sim-config-network-actions button:disabled, .sim-config-network-head button:disabled { opacity: .5; cursor: not-allowed; }
 .sim-config-network-actions span { color: #475569; font-size: 11px; }
 .sim-config-network > p:last-child { line-height: 1.6; color: #64748b; }
+
+/* XML source review: one shared vertical scroll keeps both Git-style panes aligned. */
+.xml-git-view-switch{display:flex;flex:none;overflow:hidden;border:1px solid #cbd8e4;border-radius:6px}
+.xml-git-view-switch button{height:27px;padding:0 9px;border:0;border-right:1px solid #cbd8e4;background:#fff;color:#52667a;font-size:10px;cursor:pointer}
+.xml-git-view-switch button:last-child{border-right:0}.xml-git-view-switch button.active{background:#e8f3ff;color:#176fbd;font-weight:700}.xml-git-view-switch button:disabled{opacity:.45;cursor:not-allowed}
+.xml-git-toolbar{display:flex;align-items:center;gap:12px;min-height:35px;padding:5px 12px;border-bottom:1px solid #dbe5ee;background:#f8fafc;color:#64748b;font-size:11px;flex-wrap:wrap}
+.xml-git-counts{display:flex;align-items:center;gap:8px;white-space:nowrap}.xml-git-counts b{font:700 11px ui-monospace,monospace}.xml-git-counts .removed{color:#be123c}.xml-git-counts .added{color:#15803d}
+.xml-git-toolbar label{display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer}.xml-git-toolbar label input{margin:0;accent-color:#2688db}
+.xml-git-toolbar button{height:25px;padding:0 8px;border:1px solid #cbd8e4;border-radius:5px;background:#fff;color:#52667a;font-size:10px;cursor:pointer}.xml-git-toolbar button:hover:not(:disabled){border-color:#2688db;color:#176fbd}.xml-git-toolbar button:disabled{opacity:.45;cursor:not-allowed}
+.xml-git-note{color:#a15c16}.xml-git-nav{display:flex;align-items:center;gap:5px;margin-left:auto;white-space:nowrap}.xml-git-nav span{min-width:42px;text-align:center;font:10px ui-monospace,monospace}
+.xml-git-scroll{min-height:0;flex:1;overflow:auto;background:#fff;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
+.xml-git-pane-head{position:sticky;top:0;z-index:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);border-bottom:1px solid #dbe5ee;background:#f8fafc}
+.xml-git-pane-head span{padding:6px 10px;font:700 11px sans-serif;color:#52667a}.xml-git-pane-head span+span{border-left:1px solid #dbe5ee}
+.xml-git-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.xml-git-row .xml-git-side+ .xml-git-side{border-left:1px solid #dbe5ee}
+.xml-git-side{display:grid;grid-template-columns:42px 18px minmax(0,1fr);min-width:0;min-height:20px;align-items:stretch;color:#334155}
+.xml-git-side .xml-git-number{padding:1px 6px;border-right:1px solid #e2e8f0;color:#94a3b8;text-align:right;user-select:none}
+.xml-git-side .xml-git-marker{padding:1px 0;text-align:center;user-select:none}
+.xml-git-side code{display:block;min-width:0;padding:1px 8px;color:inherit;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
+.xml-git-side.same{background:#fff}.xml-git-side.empty{background:#f8fafc}.xml-git-side.removed,.xml-git-side.changed:first-child{background:#fff1f2;color:#9f1239}.xml-git-side.added,.xml-git-side.changed:last-child{background:#ecfdf5;color:#166534}
+.xml-git-side mark{border-radius:2px;background:#fda4af;color:inherit}.xml-git-side.added mark,.xml-git-side.changed:last-child mark{background:#86efac}
+.xml-git-skipped{display:block;width:100%;padding:7px 12px;border:0;border-top:1px solid #dbeafe;border-bottom:1px solid #dbeafe;background:#eff6ff;color:#47769d;text-align:left;font:11px ui-monospace,monospace;cursor:pointer}.xml-git-skipped:hover{background:#dbeafe}
+.xml-git-unified-row .xml-git-side{grid-template-columns:42px 42px 20px minmax(0,1fr)}.xml-git-empty{padding:12px;color:#64748b;font:11px sans-serif}
+@media (max-width:760px){.xml-source-content-head{flex-wrap:wrap;padding:7px 10px}.xml-source-content-head .xml-git-view-switch{margin-left:auto}.xml-git-toolbar{gap:8px}.xml-git-scroll.split .xml-git-row,.xml-git-scroll.split .xml-git-pane-head{min-width:680px}}
+
+/* Dialog windows keep their initial size, then let the user resize within the viewport. */
+:is(.local-settings-dialog, .xml-modal, .expr-editor, .wizard-modal, .library-modal,
+  .sim-config-dialog, .sim-config-version-manager, .script-editor-modal,
+  .lut-preview-dialog, .xml-import-files-dialog, .model-import-dialog,
+  .xml-source-browser, .xml-diagnostic-dialog, .usb-fm-conflict-dialog) {
+  min-width: min(280px, calc(100vw - 16px));
+  min-height: min(180px, calc(100vh - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  resize: both;
+  overflow: hidden;
+  flex-shrink: 1;
+  container: dialog-window / inline-size;
+}
+
+:is(.local-settings-dialog, .xml-modal, .expr-editor, .wizard-modal, .library-modal,
+  .sim-config-dialog, .sim-config-version-manager, .script-editor-modal,
+  .lut-preview-dialog, .xml-import-files-dialog, .model-import-dialog,
+  .xml-source-browser, .xml-diagnostic-dialog, .usb-fm-conflict-dialog)::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid #94a3b8;
+  border-bottom: 2px solid #94a3b8;
+  content: '';
+  pointer-events: none;
+}
+
+:is(.local-settings-dialog, .xml-modal, .expr-editor, .wizard-modal, .library-modal,
+  .sim-config-version-manager, .script-editor-modal, .lut-preview-dialog,
+  .xml-import-files-dialog, .model-import-dialog, .xml-source-browser,
+  .xml-diagnostic-dialog, .usb-fm-conflict-dialog) { position: relative; }
+
+.wizard-body, .library-body, .expr-editor-main { min-height: 0; min-width: 0; }
+.wizard-body { resize: none; }
+.xml-content { min-height: 0; }
+.xml-modal { width: min(900px, calc(100vw - 32px)); height: min(620px, calc(100vh - 32px)); }
+.wizard-modal { width: min(900px, calc(100vw - 40px)); }
+.library-modal { width: min(960px, calc(100vw - 40px)); }
+.wizard-modal, .library-modal { height: min(700px, calc(100vh - 40px)); }
+.lut-preview-dialog { height: min(680px, calc(100vh - 32px)); }
+.lut-preview-body { flex: 1; min-height: 0; }
+.xml-import-files-dialog ul { min-height: 0; }
+.xml-diagnostic-dialog pre { min-height: 0; }
+.usb-fm-conflict-dialog { overflow: auto; }
+:is(.wizard-overlay, .expr-modal-overlay, .xml-modal-overlay, .lut-preview-overlay) { z-index: 3500; }
+.library-resource-tabs { overflow-x: auto; overflow-y: hidden; }
+.library-resource-tabs button { flex: none; }
+:is(.expr-editor, .wizard-modal, .library-modal, .sim-config-dialog,
+  .script-editor-modal, .lut-preview-dialog, .xml-source-browser) {
+  min-width: min(420px, calc(100vw - 16px));
+  min-height: min(300px, calc(100vh - 16px));
+}
+:is(.sim-config-version-manager, .usb-fm-conflict-dialog) {
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+}
+
+/* Narrow layouts depend on the dragged dialog width, not the screen width. */
+@container dialog-window (max-width: 760px) {
+  .lut-preview-body { grid-template-columns: minmax(0, 1fr); }
+  .lut-chart-panel { border-right: 0; border-bottom: 1px solid #e2e8f0; }
+  .lut-preview-summary { align-items: flex-start; flex-direction: column; }
+  .lut-vars { justify-content: flex-start; }
+  .xml-source-body { grid-template-columns: 180px minmax(0, 1fr); }
+  .xml-source-header { flex-wrap: wrap; }
+  .xml-source-diff-grid { grid-template-columns: minmax(0, 1fr); }
+  .xml-source-diff-grid > div + div { display: none; }
+  .script-editor-summary { grid-template-columns: 1fr 1fr; }
+  .sim-config-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container dialog-window (max-width: 600px) {
+  .library-body { flex-direction: column; }
+  .library-list { min-width: 0; min-height: 110px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .library-detail { width: 100%; min-height: 110px; flex: 1; }
+  .wizard-sidebar { width: 92px; }
+  .wizard-nav-item { gap: 4px; padding-inline: 4px; }
+  .wizard-nav-label { white-space: normal; }
+  .wizard-grid2 { grid-template-columns: minmax(0, 1fr); }
+  .sim-config-layout { grid-template-columns: 110px minmax(0, 1fr); }
+  .sim-config-layout main { padding: 12px; }
+  .xml-source-body { grid-template-columns: 120px minmax(0, 1fr); }
+  .script-editor-head, .xml-modal-header { flex-wrap: wrap; gap: 8px; }
+  .script-editor-summary { grid-template-columns: minmax(0, 1fr); }
+  .wizard-footer { flex-wrap: wrap; gap: 8px; }
+}
+
+@media (max-width: 640px), (max-height: 520px) {
+  :is(.local-settings-overlay, .xml-modal-overlay, .expr-modal-overlay,
+    .wizard-overlay, .sim-config-overlay, .script-editor-overlay,
+    .lut-preview-overlay, .xml-import-files-overlay, .model-import-overlay,
+    .xml-source-overlay, .xml-diagnostic-overlay) { padding: 8px; }
+}
+
+/* Toolbar panels are popups too; their content scrolls as their size changes. */
+:is(.sim-performance-popup, .telemetry-record-panel, .xml-import-files-toast) {
+  min-width: min(240px, calc(100vw - 16px));
+  min-height: 100px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 70px);
+  resize: both;
+  overflow: auto;
+}

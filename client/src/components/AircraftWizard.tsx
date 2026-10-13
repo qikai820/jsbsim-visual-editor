@@ -649,7 +649,7 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
   const stepRenderers = [renderTypeStep, renderBasicStep, renderMetricsStep, renderMassStep, renderGroundStep, renderPropulsionStep, renderFCSStep, renderAeroStep, renderSystemsStep, renderOutputStep, renderPreviewStep];
 
   return (
-    <div className="wizard-overlay" onClick={onClose}>
+    <div className="wizard-overlay" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="wizard-modal" onClick={e => e.stopPropagation()}>
         <div className="wizard-header">
           <h2>✈️ 飞机模型创建向导</h2>

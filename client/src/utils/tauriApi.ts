@@ -219,6 +219,16 @@ export async function nshExecute(command: string): Promise<string> {
   return call('nsh_execute', { command });
 }
 
+export interface UsbConsoleChunk {
+  data: number[];
+  next: number;
+  lost: boolean;
+}
+
+export async function usbConsoleRead(cursor: number): Promise<UsbConsoleChunk> {
+  return call('usb_console_read', { cursor });
+}
+
 export interface SimulatorNetworkInterface {
   name: string;
   address: string;

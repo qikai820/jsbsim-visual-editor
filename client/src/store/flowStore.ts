@@ -190,6 +190,22 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const target = state.nodes.find(n => n.id === connection.target);
     const nextEdges = addEdge({ ...connection, type: 'smoothstep', animated: true }, state.edges);
 
+    if (source?.data.componentType === 'system' && target?.data.componentType === 'serial_sensor') {
+      const file = String(source.data.params?.file || '').replace(/\.xml$/i, '');
+      const logicName = file || String(source.data.params?.name || '').trim() ||
+        `SerialSensorLogic_${source.id.replace(/[^A-Za-z0-9_]/g, '_')}`;
+      const edges = addEdge({ ...connection, type: 'smoothstep', animated: true },
+        state.edges.filter(edge => edge.target !== target.id));
+      set({ edges, nodes: state.nodes.map(node => {
+        if (node.id === source.id && !file) return { ...node, data: { ...node.data,
+          params: { ...node.data.params, name: logicName, channels: node.data.params.channels || '[]' } } };
+        if (node.id === target.id) return { ...node, data: { ...node.data,
+          params: { ...node.data.params, logic_name: logicName, fields_xml: '' } } };
+        return node;
+      }) });
+      return;
+    }
+
     // A sensor-to-UAVCAN connection selects a standard DSDL type and copies
     // the corresponding JSBSim property mapping into the protocol node.
     if (source && target?.data.componentType === 'uavcan') {
@@ -288,6 +304,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   updateNodeParams: (id, params) => {
     const state = get();
     const node = state.nodes.find(n => n.id === id);
+    if (!node) return;
+    const changedKeys = Object.keys(params).filter(key =>
+      JSON.stringify(node.data.params?.[key]) !== JSON.stringify(params[key]));
+    if (!changedKeys.length) return;
     const nextNodes = state.nodes.map(n =>
       n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...params } } } : n
     );
@@ -295,7 +315,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     // Canvas-only layout metadata is stored with the node but is not part of
     // the referenced JSBSim XML. Marking it dirty caused a harmless drag to
     // regenerate and upload a System child file.
-    const changesXml = Object.keys(params).some(key => key !== 'layout');
+    const changesXml = changedKeys.some(key => key !== 'layout');
     const xmlFiles = sourcePath && changesXml
       ? state.xmlFiles.map(file => file.path === sourcePath ? { ...file, dirty: true } : file)
       : state.xmlFiles;

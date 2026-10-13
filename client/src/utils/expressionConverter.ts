@@ -6,7 +6,7 @@ import type {
   ExprUnary, ExprAtan2, ExprIfThen, ExprSwitch, ExprComparison,
   UnaryOp, ComparisonOp,
 } from '../types';
-import dagre from 'dagre';
+import { layoutExpressionNodes } from './expressionLayout';
 
 // ── Block definitions ──────────────────────────────────────────────────────
 
@@ -204,44 +204,11 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
     });
   }
 
-  // Use dagre for layout (mature Sugiyama algorithm)
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  dagreGraph.setGraph({
-    rankdir: 'LR',
-    nodesep: 20,
-    ranksep: 60,
-    marginx: 50,
-    marginy: 50,
-  });
-
-  const NODE_W = 56;
-  const NODE_H = 40;
-
-  for (const n of nodes) {
-    dagreGraph.setNode(n.id, { width: NODE_W, height: NODE_H });
-  }
-  for (const e of edges) {
-    if (e.source && e.target) {
-      dagreGraph.setEdge(e.source, e.target);
-    }
-  }
-
-  dagre.layout(dagreGraph);
-
-  // Apply dagre positions
-  for (const n of nodes) {
-    const nodeWithPosition = dagreGraph.node(n.id);
-    if (nodeWithPosition) {
-      n.position = {
-        x: nodeWithPosition.x - NODE_W / 2,
-        y: nodeWithPosition.y - NODE_H / 2,
-      };
-    }
-  }
-
   const rootInfo = infoMap.get(expr)!;
-  return { nodes, edges, rootId: rootInfo.id };
+  return { nodes: layoutExpressionNodes(nodes, edges, {
+    nodeSize: () => ({ width: 56, height: 40 }),
+    nodesep: 20, ranksep: 60, marginx: 50, marginy: 50,
+  }), edges, rootId: rootInfo.id };
 }
 
 // ── Graph → Tree ────────────────────────────────────────────────────────────

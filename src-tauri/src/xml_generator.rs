@@ -517,6 +517,20 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
         vec![]
     };
 
+    // The canvas presents a constant as a source block, but JSBSim has no
+    // <constant> FCS component. Encode it as a valid constant fcs_function.
+    if it_type == "constant" {
+        let value = it.get("componentProps")
+            .and_then(|props| props.get("constant"))
+            .and_then(|constant| constant.get("value"))
+            .map(val_to_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "0".to_string());
+        let body = xml_element("value", &[], Some(&value), level + 2);
+        let function = xml_element_raw("function", &[], Some(&body), level + 1);
+        return Some(xml_element_raw("fcs_function", &attrs, Some(&function), level));
+    }
+
     // function / fcs_function with expression tree
     if (it_type == "function" || it_type == "fcs_function") && it.get("expression").is_some() {
         let body = expr_to_xml(&it["expression"], level + 1);
@@ -687,9 +701,6 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
                         .collect()
                 })
                 .unwrap_or_default();
-            if val.is_empty() && attr_entries.is_empty() {
-                continue;
-            }
             if let Some(children) = field_data.get("children").and_then(|value| value.as_array()) {
                 let nested = children.iter().filter_map(|child| {
                     let name = child.get("name")?.as_str()?;
@@ -701,6 +712,9 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
                 }).collect::<Vec<_>>();
                 lines.push(xml_element_raw(field, &attr_entries, Some(&nested.join("\n")), level + 1));
             } else {
+                if val.is_empty() && attr_entries.is_empty() {
+                    continue;
+                }
                 lines.push(xml_element(field, &attr_entries, Some(&val), level + 1));
             }
         }
@@ -732,14 +746,25 @@ fn serialize_channels_xml(params: &Value) -> String {
     }
 
     let mut blocks = vec![];
-    for ch in &channels {
+    for (channel_index, ch) in channels.iter().enumerate() {
         let ch_name = ch.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let items = ch
             .get("items")
             .and_then(|v| v.as_array())
             .map(|arr| {
-                arr.iter()
-                    .filter_map(|it| serialize_channel_item(it, 3))
+                arr.iter().enumerate()
+                    .filter_map(|(item_index, it)| {
+                        // Existing drafts could contain an unnamed constant
+                        // created before the canvas supplied defaults.
+                        if it.get("type").and_then(|value| value.as_str()) == Some("constant")
+                            && it.get("name").and_then(|value| value.as_str()).unwrap_or("").is_empty() {
+                            let mut named = it.clone();
+                            named["name"] = Value::String(format!("fcs/canvas-constant-{}-{}", channel_index + 1, item_index + 1));
+                            serialize_channel_item(&named, 3)
+                        } else {
+                            serialize_channel_item(it, 3)
+                        }
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();

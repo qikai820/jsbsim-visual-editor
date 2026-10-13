@@ -1,0 +1,6 @@
+libavoid-js 0.5.0-beta.5 — JavaScript/WebAssembly port of libavoid
+License: LGPL-2.1-or-later (see libavoid-LICENSE.txt)
+Project, source code and build instructions: https://github.com/Aksem/libavoid-js
+Routing engine source: https://github.com/mjwybrow/adaptagrams/tree/master/cola/libavoid
+The distributed WebAssembly binary is the unmodified file supplied by libavoid-js.
+It is loaded as a separate asset; see the package lock for the exact package version.

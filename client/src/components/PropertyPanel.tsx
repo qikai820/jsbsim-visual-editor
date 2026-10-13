@@ -8,6 +8,12 @@ import AeroEditor from './AeroEditor';
 import TableChart from './expression/TableChart';
 import ExpressionEditor from './expression/ExpressionEditor';
 import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
+import SignalPathInput from './SignalPathInput';
+
+const isSignalField = (key: string) =>
+  key === 'property' || key === 'properties' || key === 'input' || key === 'output' ||
+  key.endsWith('_properties') ||
+  (key.startsWith('hil_') && !['hil_fields_updated', 'hil_sensor_id', 'hil_gps_id'].includes(key));
 import { ftpListSystems, ftpListEngineCatalog, ftpListDsdl, ftpDownloadDsdl } from '../utils/tauriApi';
 
 const UAVCAN_SENSOR_MAPPINGS: Record<string, { labels: string[]; properties: string[] }> = {
@@ -300,6 +306,13 @@ export default function PropertyPanel() {
   }
 
   const handleChange = (key: string, value: any) => {
+    if (node.data.componentType === 'serial_sensor' && key === 'protocol') {
+      updateNodeParams(node.id, {
+        protocol: value,
+        ...(value === 'VIZTRA_HYM1' ? { device: '/dev/ttyS1', baud: '115200' } : {}),
+      });
+      return;
+    }
     if (node.data.componentType === 'input' && key === 'type') {
       const params: Record<string, any> = { type: value };
       if (value === 'HIL_ACTUATOR_CONTROLS' && !String(node.data.params.properties || '').trim()) {
@@ -397,11 +410,10 @@ export default function PropertyPanel() {
         return (
           <div key={key} className="field-row">
             <label>{paramDef.label}</label>
-            <input
-              type="text"
-              value={raw}
-              onChange={e => handleChange(key, e.target.value)}
-            />
+            {isSignalField(key)
+              ? <SignalPathInput value={String(raw ?? '')} onChange={value => handleChange(key, value)}
+                  multiple={key === 'properties' || key.endsWith('_properties')} />
+              : <input type="text" value={raw} onChange={e => handleChange(key, e.target.value)} />}
           </div>
         );
       case 'select': {
@@ -518,6 +530,9 @@ export default function PropertyPanel() {
             if (selectedType === 'HIL_GPS' && key.startsWith('hil_imu_')) return false;
             if (selectedType !== 'HIL_SENSOR' && selectedType !== 'HIL_GPS' && key.startsWith('hil_')) return false;
           }
+          if (node.data.componentType === 'serial_sensor' &&
+              node.data.params?.protocol === 'VIZTRA_HYM1' &&
+              !['name', 'protocol', 'device', 'baud', 'logic_name'].includes(key)) return false;
           // For engine/propeller: skip location/orient if no actual value
           if (node.data.componentType === 'engine' || node.data.componentType === 'propeller') {
             if ((key === 'location' || key === 'orient') && !node.data.params[key]) return false;
@@ -526,6 +541,15 @@ export default function PropertyPanel() {
           return true;
         })
         .map(([key, paramDef]) => {
+          if (node.data.componentType === 'serial_sensor' && key === 'fields_xml') {
+            return <div className="field-row" key={key}>
+              <label>{paramDef.label}</label>
+              <textarea rows={8} spellCheck={false}
+                value={String(node.data.params[key] ?? paramDef.default)}
+                onChange={event => updateNodeParams(node.id, { [key]: event.target.value })} />
+              <small>先将“系统”节点连接到此串口，进入系统逻辑画布生成输出属性。留空时，每条通道的最终输出会自动生成 F32 字段；也可用 field XML 指定类型和顺序。</small>
+            </div>;
+          }
           if ((node.data.componentType === 'input' && key === 'properties' &&
                node.data.params.type === 'HIL_ACTUATOR_CONTROLS') ||
               (node.data.componentType === 'serial_hil' && key === 'actuator_properties')) {
@@ -547,11 +571,10 @@ export default function PropertyPanel() {
                 {values.map((value, index) => (
                   <div className="field-row" key={`${key}-${index}`}>
                     <label>controls[{index}]</label>
-                    <input
-                      type="text"
+                    <SignalPathInput
                       value={value}
                       placeholder={`JSBSim 输出属性 ${index + 1}`}
-                      onChange={event => updateOutput(index, event.target.value)}
+                      onChange={value => updateOutput(index, value)}
                     />
                   </div>
                 ))}
@@ -580,10 +603,10 @@ export default function PropertyPanel() {
                 {Array.from({ length: count }, (_, index) => (
                   <div className="field-row" key={`${key}-${index}`}>
                     <label>{mappingLabels[index] || `DSDL 字段 ${index + 1}`}</label>
-                    <input type="text"
+                    <SignalPathInput
                       value={values[index] || preset?.properties[index] || ''}
                       placeholder="JSBSim 传感器输出变量"
-                      onChange={event => updateMapping(index, event.target.value)} />
+                      onChange={value => updateMapping(index, value)} />
                   </div>
                 ))}
                 <small className="dsdl-loaded-state">{dsdlFields.length > 0 ? `已根据 DSDL 解析 ${dsdlFields.length} 个字段` : '按预设字段顺序映射 JSBSim 传感器输出变量'}</small>
@@ -1053,10 +1076,9 @@ function SystemChannelEditor({
                     {TYPE_ICONS[item.type] || '•'}
                   </span>
                   <span style={{ color: 'var(--text-muted)', fontSize: 10, minWidth: 50 }}>{item.type}</span>
-                  <input
-                    type="text"
+                  <SignalPathInput
                     value={item.name || ''}
-                    onChange={e => onUpdateItem(channelIndex, j, { name: e.target.value })}
+                    onChange={name => onUpdateItem(channelIndex, j, { name })}
                     style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 11,
                       outline: 'none', padding: '1px 2px', color: 'var(--text-primary)', minWidth: 0 }}
                     placeholder="名称"
@@ -1086,11 +1108,10 @@ function SystemChannelEditor({
                     {props.map((prop, pi) => (
                       <div key={pi} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '1px 0' }}>
                         <span style={{ color: '#059669', minWidth: 55 }}>📌 {prop.role}</span>
-                        <input
-                          type="text"
+                        <SignalPathInput
                           value={prop.value}
-                          onChange={e => {
-                            const newExpr = updatePropertyInExpr(item.expression, prop.role, e.target.value);
+                          onChange={value => {
+                            const newExpr = updatePropertyInExpr(item.expression, prop.role, value);
                             if (newExpr) onUpdateItem(channelIndex, j, { expression: newExpr });
                           }}
                           style={{ flex: 1, border: '1px solid var(--border-light, #e5e7eb)', borderRadius: 2,
@@ -1124,19 +1145,23 @@ function SystemChannelEditor({
                       return (
                         <div key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '1px 0' }}>
                           <span style={{ color: '#d97706', minWidth: 55, fontWeight: 500 }}>{field}</span>
-                          <input
-                            type="text"
-                            value={val}
-                            onChange={e => {
+                          {isSignalField(field) ? <SignalPathInput
+                            value={String(val)}
+                            multiple={field === 'properties'}
+                            onChange={value => {
                               const newProps = { ...item.componentProps };
-                              newProps[field] = { ...newProps[field], value: e.target.value };
+                              newProps[field] = { ...newProps[field], value };
                               onUpdateItem(channelIndex, j, { componentProps: newProps });
                             }}
                             title={attrStr || undefined}
                             style={{ flex: 1, border: '1px solid var(--border-light, #e5e7eb)', borderRadius: 2,
                               background: 'var(--bg-primary, #fff)', fontSize: 10, padding: '1px 4px',
                               outline: 'none', color: 'var(--text-primary)', fontFamily: 'monospace' }}
-                          />
+                          /> : <input type="text" value={val} onChange={e => {
+                            const newProps = { ...item.componentProps };
+                            newProps[field] = { ...newProps[field], value: e.target.value };
+                            onUpdateItem(channelIndex, j, { componentProps: newProps });
+                          }} title={attrStr || undefined} />}
                           {attrStr && (
                             <span style={{ color: 'var(--text-muted)', fontSize: 9, flexShrink: 0 }}>{attrStr}</span>
                           )}

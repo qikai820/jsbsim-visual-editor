@@ -1450,6 +1450,45 @@ fn extract_element_params_generic(el: &XmlElement, merged: &mut serde_json::Valu
 mod sensor_roundtrip_tests {
     use super::*;
 
+    #[test]
+    fn aerosurface_scale_range_survives_edit_and_save() {
+        let xml = r#"<system name="FCS-pitch"><channel name="Pitch">
+          <aerosurface_scale name="Elevator Control">
+            <input>fcs/pitch-trim-sum</input>
+            <range><min>-0.35</min><max>0.35</max></range>
+            <output>fcs/elevator-pos-rad</output>
+          </aerosurface_scale>
+          <aerosurface_scale name="elevator normalized">
+            <input>fcs/elevator-pos-rad</input>
+            <domain><min>-0.35</min><max>0.35</max></domain>
+            <range><min>-1</min><max>1</max></range>
+            <output>fcs/elevator-pos-norm</output>
+          </aerosurface_scale>
+        </channel></system>"#;
+        let mut parsed = parse_subfile_xml(xml, "system").expect("parse FCS-pitch");
+        let mut channels: serde_json::Value = serde_json::from_str(
+            parsed["params"]["channels"].as_str().unwrap()
+        ).unwrap();
+        let items = channels[0]["items"].as_array_mut().unwrap();
+        let range = &mut items[0]["componentProps"]["range"]["children"];
+        assert_eq!(range[0]["value"], "-0.35");
+        assert_eq!(range[1]["value"], "0.35");
+        range[1]["value"] = serde_json::json!("0.25");
+        assert_eq!(items[1]["componentProps"]["domain"]["children"][0]["value"], "-0.35");
+        parsed["params"]["channels"] = serde_json::json!(channels.to_string());
+
+        let generated = crate::xml_generator::generate_subfile_xml(
+            "system", "FCS-pitch", &parsed["params"]
+        ).expect("save FCS-pitch");
+        let restored = parse_subfile_xml(&generated, "system").expect("reload FCS-pitch");
+        let channels: serde_json::Value = serde_json::from_str(
+            restored["params"]["channels"].as_str().unwrap()
+        ).unwrap();
+        let items = &channels[0]["items"];
+        assert_eq!(items[0]["componentProps"]["range"]["children"][1]["value"], "0.25");
+        assert_eq!(items[1]["componentProps"]["domain"]["children"][0]["value"], "-0.35");
+    }
+
     fn normalized_text(text: &str) -> String {
         let trimmed = text.trim();
         if trimmed.is_empty() { return String::new(); }
