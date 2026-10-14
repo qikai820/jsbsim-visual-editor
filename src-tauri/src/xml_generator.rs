@@ -1901,6 +1901,21 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                 attrs.push(("rate".to_string(), s));
             }
         }
+        if matches!(output_type, "HIL_SENSOR" | "HIL_GPS") {
+            let serial = p.get("transport").and_then(Value::as_str) == Some("SERIAL");
+            if serial {
+                attrs.push(("transport".to_string(), "SERIAL".to_string()));
+                attrs.push(("editor_module".to_string(), "output".to_string()));
+                for key in ["device", "baud"] {
+                    if let Some(value) = p.get(key) {
+                        let text = val_to_str(value);
+                        if !text.is_empty() { attrs.push((key.to_string(), text)); }
+                    }
+                }
+            } else if let Some(host) = p.get("host").and_then(Value::as_str) {
+                if !host.trim().is_empty() { attrs.push(("host".to_string(), host.trim().to_string())); }
+            }
+        }
 
         let attr_refs: Vec<(&str, &str)> = attrs
             .iter()
@@ -1946,6 +1961,17 @@ fn build_input(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Strin
                 let text = val_to_str(value);
                 if !text.is_empty() {
                     attrs.push((key.to_string(), text));
+                }
+            }
+        }
+        if params.get("type").and_then(Value::as_str) == Some("HIL_ACTUATOR_CONTROLS") &&
+            params.get("transport").and_then(Value::as_str) == Some("SERIAL") {
+            attrs.push(("transport".to_string(), "SERIAL".to_string()));
+            attrs.push(("editor_module".to_string(), "input".to_string()));
+            for key in ["device", "baud"] {
+                if let Some(value) = params.get(key) {
+                    let text = val_to_str(value);
+                    if !text.is_empty() { attrs.push((key.to_string(), text)); }
                 }
             }
         }

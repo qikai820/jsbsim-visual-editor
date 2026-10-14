@@ -9,6 +9,8 @@ export interface FormulaSheet {
   name: string;
   output: string;
   channel: string;
+  kind: 'function' | 'integrator';
+  coefficient?: string;
   lines: FormulaLine[];
   inputs: FormulaInput[];
 }
@@ -122,6 +124,7 @@ export function signalFormulaSheets(nodes: Node[]): FormulaSheet[] {
       const coefficient = String(data.compProps?.c1?.value ?? data.compProps?.c1 ?? 'C₁');
       return { id: node.id, sequence: index + 1, name, output,
         channel: channelLabel(String(data.chName || ''), '飞控通道'),
+        kind: 'integrator' as const, coefficient,
         inputs: path ? [{ symbol: 'u₁', path }] : [],
         lines: [
           { left: 'H(s)', right: `${coefficient} / s`, result: false },
@@ -130,6 +133,19 @@ export function signalFormulaSheets(nodes: Node[]): FormulaSheet[] {
     }
     return { id: node.id, sequence: index + 1, name, output,
       channel: channelLabel(String(data.chName || ''), '系统函数'),
+      kind: 'function' as const,
       ...expressionToNotebook(data.expression as ExprNode, output) };
   });
+}
+
+export interface FormulaRelation { source: FormulaSheet; target: FormulaSheet }
+
+/** Every XML property/input that names another formula becomes a directed edge.
+ * Formula numbers and canvas layout never determine the dependency graph. */
+export function formulaRelations(sheets: FormulaSheet[]): FormulaRelation[] {
+  const byName = new Map(sheets.map(sheet => [sheet.name, sheet]));
+  return sheets.flatMap(target => target.inputs.flatMap(input => {
+    const source = byName.get(input.path);
+    return source ? [{ source, target }] : [];
+  }));
 }

@@ -5,6 +5,7 @@ import {
 } from '@xyflow/react';
 import { AircraftNodeData, ComponentType, ProjectXmlFile, SubFile, SubFileType } from '../types';
 import { getComponentDef } from '../utils/componentDefs';
+import { defaultPwmCaptureChannel, getPwmCaptureChannels, PWM_CAPTURE_DEVICES } from '../utils/pwmCaptureConfig';
 
 interface FlowState {
   nodes: Node<AircraftNodeData>[];
@@ -279,6 +280,13 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     for (const [key, paramDef] of Object.entries(def.params)) {
       params[key] = paramDef.default;
     }
+    if (type === 'pwm_capture') {
+      const used = new Set(get().nodes.filter(node => node.data.componentType === 'pwm_capture')
+        .flatMap(node => getPwmCaptureChannels(node.data.params).map(channel => channel.device)));
+      const device = PWM_CAPTURE_DEVICES.find(candidate => !used.has(candidate));
+      if (!device) return;
+      params.channels = [defaultPwmCaptureChannel(device, Number(device.slice(-1)))];
+    }
     const newNode: Node<AircraftNodeData> = {
       id,
       type: 'aircraftComponent',
@@ -316,8 +324,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     // the referenced JSBSim XML. Marking it dirty caused a harmless drag to
     // regenerate and upload a System child file.
     const changesXml = changedKeys.some(key => key !== 'layout');
-    const xmlFiles = sourcePath && changesXml
-      ? state.xmlFiles.map(file => file.path === sourcePath ? { ...file, dirty: true } : file)
+    const topLevelIo = ['input', 'output', 'uavcan'].includes(node.data.componentType);
+    const xmlFiles = changesXml && (sourcePath || topLevelIo)
+      ? state.xmlFiles.map(file => sourcePath
+        ? (file.path === sourcePath ? { ...file, dirty: true } : file)
+        : (file.category === 'main' ? { ...file, dirty: true } : file))
       : state.xmlFiles;
     set({ nodes: nextNodes, xmlFiles });
   },

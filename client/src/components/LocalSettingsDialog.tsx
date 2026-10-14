@@ -57,7 +57,7 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
     setUsbDownloadDirectory(value); localStorage.setItem('jsbsim-usb-download-directory', value.trim() || '~/Downloads/JSBSim-Files');
   };
   return <div className="local-settings-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="local-settings-dialog" role="dialog" aria-modal="true" aria-label={isZh ? '本地配置' : 'Local Settings'}>
+    <div className="local-settings-dialog" role="dialog" aria-label={isZh ? '本地配置' : 'Local Settings'}>
       <header><div><b>⚙ {isZh ? '本地配置' : 'Local Settings'}</b><span>{isZh ? '仅保存在当前上位机' : 'Stored on this computer only'}</span></div><button onClick={onClose}>×</button></header>
       <section>
         <div className="local-settings-row">

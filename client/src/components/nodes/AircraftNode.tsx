@@ -3,6 +3,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AircraftNodeData } from '../../types';
 import { getComponentDef } from '../../utils/componentDefs';
 import AviationIcon from '../AviationIcon';
+import { getPwmCaptureChannels } from '../../utils/pwmCaptureConfig';
 
 // Extract display value from param (handles both plain number and {value, unit} format)
 function displayVal(p: any): string {
@@ -32,7 +33,16 @@ function AircraftNode({ data, selected }: NodeProps) {
         : [])
     : def.inputs;
 
-  const paramEntries = Object.entries(def.params).slice(0, 4);
+  const hilInput = nodeData.componentType === 'input' && nodeData.params?.type === 'HIL_ACTUATOR_CONTROLS';
+  const hilOutput = nodeData.componentType === 'output' && ['HIL_SENSOR', 'HIL_GPS'].includes(String(nodeData.params?.type));
+  const paramEntries = hilInput || hilOutput
+    ? ['name', 'type', 'transport', nodeData.params?.transport === 'SERIAL' ? 'device' : 'port']
+        .map(key => [key, def.params[key]] as const)
+    : Object.entries(def.params).slice(0, 4);
+  let pwmChannels = [] as ReturnType<typeof getPwmCaptureChannels>;
+  if (nodeData.componentType === 'pwm_capture') {
+    try { pwmChannels = getPwmCaptureChannels(nodeData.params); } catch { /* invalid data is shown in the editor */ }
+  }
 
   return (
     <div
@@ -65,9 +75,14 @@ function AircraftNode({ data, selected }: NodeProps) {
 
       {/* Body - parameter summary */}
       <div className="node-body">
-        {paramEntries.map(([key, paramDef]) => {
+        {nodeData.componentType === 'pwm_capture' ? <>
+          <div className="node-param"><span className="param-label">捕获通道:</span><span className="param-value">{pwmChannels.length}/10</span></div>
+          <div className="node-param"><span className="param-label">设备:</span><span className="param-value">{pwmChannels.map(channel => channel.device.replace('/dev/', '')).join(', ')}</span></div>
+        </> : paramEntries.map(([key, paramDef]) => {
           const raw = nodeData.params[key];
-          const val = displayVal(raw ?? paramDef.default);
+          const val = key === 'transport'
+            ? (raw === 'SERIAL' ? '串口' : '网口 UDP')
+            : displayVal(raw ?? paramDef.default);
           const unit = displayUnit(raw, paramDef.unit);
           // Skip non-displayable params (long strings, JSON arrays)
           if (val.length > 20 || val.startsWith('[')) return null;
@@ -98,4 +113,3 @@ function AircraftNode({ data, selected }: NodeProps) {
 }
 
 export default memo(AircraftNode);
-

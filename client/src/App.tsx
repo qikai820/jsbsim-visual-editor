@@ -17,6 +17,7 @@ import './App.css';
 import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simSyncTime, usbConsoleRead } from './utils/tauriApi';
 import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
 import { extractOutputSignal, type ChannelItem } from './utils/signalGraph';
+import { installDialogDragging } from './utils/dialogDragging';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -175,6 +176,7 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
 }
 
 function AppContent() {
+  useEffect(installDialogDragging, []);
   const selectedNodeId = useFlowStore(state => state.selectedNodeId);
   const editingSubFileId = useFlowStore(state => state.editingSubFileId);
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
@@ -296,6 +298,8 @@ function AppContent() {
           });
           if (!oldNode || JSON.stringify(xmlData(oldNode.data)) === JSON.stringify(xmlData(node.data))) continue;
           const type = node.data?.componentType;
+          if (['input', 'output', 'uavcan'].includes(type)) files.add(mainFile);
+          if (type === 'serial_sensor') files.add(`config/models/${state.aircraft.name}.serial.xml`);
           const rawSource = resolveNodeOwnedPath(node as any) || node.data?.params?.source?.path;
           if (rawSource) {
             const source = String(rawSource).includes('/') ? String(rawSource) :

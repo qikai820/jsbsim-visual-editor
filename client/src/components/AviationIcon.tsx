@@ -20,6 +20,7 @@ const paths: Record<ComponentType, string> = {
   uavcan: 'M5 5h14v14H5z M8 9h8M8 12h8M8 15h5 M3 8h2m14 0h2M3 16h2m14 0h2',
   serial_hil: 'M4 5h16v14H4z M7 9h4m-4 3h7m-7 3h3 M17 8v8m-2-2 2 2 2-2',
   serial_sensor: 'M4 4h16v12H4z M8 8h8M8 11h5M8 16v4m8-4v4m-8 0h8',
+  pwm_capture: 'M3 12h3l2-6 4 12 3-9 2 3h4',
 };
 
 export default function AviationIcon({ type, size = 18 }: { type: ComponentType; size?: number }) {

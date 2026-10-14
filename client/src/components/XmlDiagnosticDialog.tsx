@@ -21,14 +21,8 @@ export default function XmlDiagnosticDialog() {
   if (!diagnostic) return null;
   return <div className="xml-diagnostic-overlay" onKeyDown={event => {
     if (event.key === 'Escape') setDiagnostic(null);
-    if (event.key === 'Tab') {
-      const buttons = Array.from(event.currentTarget.querySelectorAll('button'));
-      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      event.preventDefault();
-      buttons[(index + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
-    }
   }}>
-    <section className="xml-diagnostic-dialog" role="dialog" aria-modal="true" aria-labelledby="xml-diagnostic-title">
+    <section className="xml-diagnostic-dialog" role="dialog" aria-labelledby="xml-diagnostic-title">
       <header><strong id="xml-diagnostic-title">{diagnostic.title}</strong>
         <button ref={close} aria-label="关闭诊断" onClick={() => setDiagnostic(null)}>×</button></header>
       <p>请根据文件路径和行列位置修正 XML，然后重新加载。</p>

@@ -1254,7 +1254,17 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
         params["type"] = json!(get_attr(out, "type").unwrap_or("SOCKET"));
         let is_uavcan = get_attr(out, "type") == Some("UAVCAN");
         let is_serial_hil = get_attr(out, "transport") == Some("SERIAL") &&
-            matches!(get_attr(out, "type"), Some("HIL_SENSOR") | Some("HIL_GPS"));
+            matches!(get_attr(out, "type"), Some("HIL_SENSOR") | Some("HIL_GPS")) &&
+            get_attr(out, "editor_module") != Some("output");
+        if get_attr(out, "transport") == Some("SERIAL") {
+            params["transport"] = json!("SERIAL");
+        }
+        if let Some(host) = get_attr(out, "host") { params["host"] = json!(host); }
+        if get_attr(out, "editor_module") == Some("output") || is_serial_hil {
+            for key in ["device", "baud"] {
+                if let Some(value) = get_attr(out, key) { params[key] = json!(value); }
+            }
+        }
         if is_serial_hil {
             for key in ["device", "baud", "data_bits", "parity", "stop_bits", "flow_control",
                         "mavlink_version", "system_id", "component_id"] {
@@ -1379,7 +1389,14 @@ fn parse_input(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut Lay
             .filter(|property| !property.is_empty())
             .collect();
         let is_serial_hil = get_attr(input, "transport") == Some("SERIAL") &&
-            get_attr(input, "type") == Some("HIL_ACTUATOR_CONTROLS");
+            get_attr(input, "type") == Some("HIL_ACTUATOR_CONTROLS") &&
+            get_attr(input, "editor_module") != Some("input");
+        if get_attr(input, "transport") == Some("SERIAL") {
+            params["transport"] = json!("SERIAL");
+            for key in ["device", "baud"] {
+                if let Some(value) = get_attr(input, key) { params[key] = json!(value); }
+            }
+        }
         if is_serial_hil {
             for key in ["device", "baud", "data_bits", "parity", "stop_bits", "flow_control", "mavlink_version"] {
                 if let Some(value) = get_attr(input, key) { params[key] = json!(value); }
@@ -2141,5 +2158,30 @@ mod ownership_tests {
         let reloaded = parse_xml(&saved, &HashMap::new()).expect("reload serial HIL");
         assert_eq!(reloaded["nodes"].as_array().unwrap().iter()
             .filter(|item| item["data"]["componentType"] == "serial_hil").count(), 1);
+    }
+
+    #[test]
+    fn individual_hil_io_transport_survives_round_trip() {
+        let xml = r#"<fdm_config name="HIL" version="2.0">
+  <input name="0.0.0.0" type="HIL_ACTUATOR_CONTROLS" port="14560" rate="250" transport="SERIAL" editor_module="input" device="/dev/ttyS5" baud="921600"><property>fcs/a</property><property>fcs/b</property><property>fcs/c</property><property>fcs/d</property></input>
+  <output name="PX4" type="HIL_SENSOR" port="14560" rate="250" transport="SERIAL" editor_module="output" device="/dev/ttyS5" baud="921600"><property>imu/ax</property></output>
+  <output name="PX4" type="HIL_GPS" port="14561" rate="10" host="192.168.1.2"><property>gps/lat</property></output>
+</fdm_config>"#;
+        let graph = parse_xml(xml, &HashMap::new()).expect("parse individual HIL I/O");
+        assert_eq!(node(&graph, "input")["data"]["params"]["transport"], "SERIAL");
+        let outputs: Vec<&Value> = graph["nodes"].as_array().unwrap().iter()
+            .filter(|item| item["data"]["componentType"] == "output").collect();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0]["data"]["params"]["device"], "/dev/ttyS5");
+        assert_eq!(outputs[1]["data"]["params"]["host"], "192.168.1.2");
+
+        let saved = crate::xml_generator::generate_xml(&graph).expect("save individual HIL I/O");
+        assert!(saved.contains("editor_module=\"input\""));
+        assert!(saved.contains("editor_module=\"output\""));
+        assert!(saved.contains("host=\"192.168.1.2\""));
+        let reloaded = parse_xml(&saved, &HashMap::new()).expect("reload individual HIL I/O");
+        assert_eq!(reloaded["nodes"].as_array().unwrap().iter()
+            .filter(|item| item["data"]["componentType"] == "serial_hil").count(), 0);
+        assert_eq!(node(&reloaded, "input")["data"]["params"]["device"], "/dev/ttyS5");
     }
 }

@@ -1,4 +1,5 @@
 import { ComponentDef } from '../types';
+import { SERIAL_SENSOR_DEVICES } from './serialDevices';
 
 export const componentDefs: ComponentDef[] = [
   {
@@ -258,7 +259,10 @@ export const componentDefs: ComponentDef[] = [
     params: {
       name: { label: '名称', type: 'string', default: 'localhost' },
       type: { label: '类型', type: 'select', default: 'SOCKET', options: ['SOCKET', 'QTJSBSIM', 'HIL_ACTUATOR_CONTROLS', 'NONE'] },
+      transport: { label: '连接方式', type: 'select', default: 'UDP', options: ['UDP', 'SERIAL'] },
       port: { label: '端口', type: 'integer', default: 1139 },
+      device: { label: '串口设备', type: 'select', default: '/dev/ttyS1', options: [...SERIAL_SENSOR_DEVICES] },
+      baud: { label: '波特率', type: 'select', default: '921600', options: ['57600', '115200', '230400', '460800', '921600'] },
       rate: { label: '频率 (Hz)', type: 'number', default: 20 },
       properties: { label: '输出属性', type: 'string', default: '' },
     },
@@ -296,6 +300,20 @@ export const componentDefs: ComponentDef[] = [
     outputs: [{ id: 'actuators', label: 'PX4 执行器 0..15' }],
   },
   {
+    type: 'pwm_capture',
+    label: 'PWM 捕获 Hardware Input',
+    category: '协议',
+    color: '#7C3AED',
+    icon: '〰️',
+    description: '一个模块管理多路 J23 PWM 捕获；每路独立映射到 JSBSim 模型输入属性，并配置丢信号安全值',
+    params: {
+      name: { label: '输入名称', type: 'string', default: 'PWM Capture' },
+      channels: { label: '捕获通道', type: 'string', default: [] },
+    },
+    inputs: [],
+    outputs: [],
+  },
+  {
     type: 'serial_sensor',
     label: '串口传感器 Serial Sensor',
     category: '协议',
@@ -305,7 +323,7 @@ export const componentDefs: ComponentDef[] = [
     params: {
       name: { label: '传感器名称', type: 'string', default: 'Serial Sensor' },
       protocol: { label: '协议', type: 'select', default: 'CUSTOM', options: ['CUSTOM', 'VIZTRA_HYM1'] },
-      device: { label: '物理串口', type: 'select', default: '/dev/ttyS5', options: ['/dev/ttyS1', '/dev/ttyS5'] },
+      device: { label: '物理串口', type: 'select', default: '/dev/ttyS5', options: [...SERIAL_SENSOR_DEVICES] },
       baud: { label: '波特率', type: 'select', default: '115200', options: ['9600', '19200', '38400', '57600', '115200', '230400', '460800', '921600'] },
       data_bits: { label: '数据位', type: 'select', default: '8', options: ['7', '8'] },
       parity: { label: '校验位', type: 'select', default: 'NONE', options: ['NONE', 'EVEN', 'ODD'] },
@@ -353,7 +371,11 @@ export const componentDefs: ComponentDef[] = [
     params: {
       name: { label: '名称', type: 'string', default: 'localhost' },
       type: { label: '类型', type: 'select', default: 'SOCKET', options: ['SOCKET', 'FILE', 'HIL_SENSOR', 'HIL_GPS', 'QTJSBSIM', 'NONE'] },
+      transport: { label: '连接方式', type: 'select', default: 'UDP', options: ['UDP', 'SERIAL'] },
       port: { label: '端口', type: 'integer', default: 1138 },
+      host: { label: '目标 IP（留空使用板端默认值）', type: 'string', default: '' },
+      device: { label: '串口设备', type: 'select', default: '/dev/ttyS1', options: [...SERIAL_SENSOR_DEVICES] },
+      baud: { label: '波特率', type: 'select', default: '921600', options: ['57600', '115200', '230400', '460800', '921600'] },
       rate: { label: '频率 (Hz)', type: 'number', default: 20 },
       simulation: { label: '仿真数据', type: 'select', default: 'OFF', options: ['ON', 'OFF'] },
       atmosphere: { label: '大气数据', type: 'select', default: 'OFF', options: ['ON', 'OFF'] },

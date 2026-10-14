@@ -1,0 +1,88 @@
+.serial-assistant-overlay{position:fixed;inset:0;z-index:10500;display:grid;place-items:center;padding:20px;background:rgba(20,35,49,.45);backdrop-filter:blur(2px)}
+.serial-assistant{position:relative;display:flex;flex-direction:column;width:min(1180px,calc(100vw - 40px));height:min(790px,calc(100vh - 40px));min-width:600px;min-height:470px;resize:both;overflow:hidden;border:1px solid #cbd8e3;border-radius:12px;background:#fff;color:#263748;box-shadow:0 24px 65px rgba(14,30,45,.32);font-size:12px}
+.serial-assistant button,.serial-assistant input,.serial-assistant select{font:inherit}
+.serial-assistant button{cursor:pointer}
+.serial-assistant button:disabled,.serial-assistant input:disabled,.serial-assistant select:disabled{opacity:.55;cursor:not-allowed}
+.serial-assistant-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#f4f7fa;border-bottom:1px solid #dbe4eb}
+.serial-assistant-head div{display:flex;align-items:center;gap:10px}
+.serial-assistant-head strong{font-size:14px;color:#1d4560}
+.serial-assistant-head small{font-size:11px;color:#788c9b}
+.serial-assistant-head button{border:0;background:transparent;font-size:20px;color:#6e8291}
+.serial-assistant-connect{display:flex;align-items:end;gap:7px;flex-wrap:wrap;padding:11px 13px;border-bottom:1px solid #dce6ec;background:#fff}
+.serial-assistant label{display:flex;flex-direction:column;gap:4px;color:#617486;white-space:nowrap}
+.serial-assistant-connect label.serial-assistant-port{flex:1 1 175px}
+.serial-assistant-connect label.serial-assistant-port select{width:100%}
+.serial-assistant-connect label.serial-assistant-port-path{flex:1 1 155px}
+.serial-assistant-connect label.serial-assistant-port-path input{width:100%}
+.serial-assistant-connect label:has(input[type=number]) input{width:90px}
+.serial-assistant input,.serial-assistant select{height:31px;min-width:0;padding:4px 8px;border:1px solid #cedae3;border-radius:6px;background:#fbfdfe;color:#263748}
+.serial-assistant input:focus-visible,.serial-assistant select:focus-visible,.serial-assistant button:focus-visible{outline:2px solid #55a4d4;outline-offset:1px}
+.serial-assistant button{padding:5px 9px;border:1px solid #cddae4;border-radius:6px;background:#f7fafc;color:#365b72}
+.serial-assistant button:hover:not(:disabled){background:#edf5fa;border-color:#9ec5dc}
+.serial-assistant .serial-assistant-primary{background:#2385bd;color:#fff;border-color:#2385bd;font-weight:600}
+.serial-assistant .serial-assistant-primary:hover:not(:disabled){background:#176f9e;border-color:#176f9e}
+.serial-assistant-connect>.serial-assistant-primary{margin-left:auto;min-width:70px;height:31px}
+.serial-assistant-workspace{display:grid;grid-template-columns:minmax(0,1fr) 285px;flex:1;min-height:0}
+.serial-assistant-data{display:flex;flex-direction:column;min-width:0;min-height:0}
+.serial-assistant-data-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;border-bottom:1px solid #dce6ec}
+.serial-assistant-tabs{display:flex;gap:13px}
+.serial-assistant .serial-assistant-tabs button{padding:10px 2px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:#738797;white-space:nowrap}
+.serial-assistant .serial-assistant-tabs button[aria-selected=true]{border-bottom-color:#2487bd;color:#1e6e9a;font-weight:600}
+.serial-assistant-tabs span{color:#91a1ad}
+.serial-assistant-data-actions{display:flex;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.serial-assistant .serial-assistant-data-actions button,.serial-assistant .serial-assistant-filter button,.serial-assistant .serial-assistant-side-title button{padding:4px 1px;border:0;background:transparent;color:#287aa6;white-space:nowrap}
+.serial-assistant .serial-assistant-data-actions button:hover:not(:disabled),.serial-assistant .serial-assistant-filter button:hover,.serial-assistant .serial-assistant-side-title button:hover{background:transparent;text-decoration:underline}
+.serial-assistant-filter{display:flex;align-items:center;gap:10px;padding:8px 11px;background:#f8fafc;border-bottom:1px solid #e2e9ee}
+.serial-assistant-filter>input{width:min(240px,42%)}
+.serial-assistant-filter label{display:flex;flex-direction:row;align-items:center;gap:4px;color:#566c7b}
+.serial-assistant-filter label input{width:14px;height:14px;accent-color:#2487bd}
+.serial-assistant-filter>span{flex:1}
+.serial-assistant-limited{padding:7px 11px;background:#fff7e7;color:#925900;border-bottom:1px solid #f0dfb9}
+.serial-assistant-scroll{flex:1;min-height:0;overflow:auto;background:#fff}
+.serial-assistant-grid-head{position:sticky;top:0;z-index:1;background:#f7fafc;color:#6c7f8e;border-bottom:1px solid #dce6ec;font-weight:600}
+.serial-assistant-raw-grid{display:grid;grid-template-columns:105px 47px 39px minmax(130px,1fr) 90px;align-items:center;gap:7px;padding:7px 10px;min-width:540px}
+.serial-assistant-row{border-bottom:1px solid #eef2f5;font-variant-numeric:tabular-nums}
+.serial-assistant-row:nth-child(even){background:#fcfdfe}
+.serial-assistant-row code,.serial-assistant-frame-row code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:#263748}
+.serial-assistant-rx{color:#1c78aa;font-weight:600}
+.serial-assistant-tx{color:#258363;font-weight:600}
+.serial-assistant-frame-grid{display:grid;grid-template-columns:40px 103px 42px 56px 43px 50px minmax(110px,1fr);align-items:center;gap:6px;min-width:590px;padding:7px 10px;text-align:left}
+.serial-assistant .serial-assistant-frame-row{width:100%;border:0;border-bottom:1px solid #edf2f5;border-radius:0;background:#fff;color:#263748}
+.serial-assistant .serial-assistant-frame-row:hover{background:#f1f7fb}
+.serial-assistant .serial-assistant-frame-row.selected{background:#e8f3fa}
+.serial-assistant-ok{color:#248461}
+.serial-assistant-bad{color:#bf5050}
+.serial-assistant-empty{padding:34px 16px;text-align:center;color:#8a9cab}
+.serial-assistant-analysis{display:flex;flex-direction:column;gap:9px;min-height:0;overflow:auto;padding:11px;background:#f8fafc;border-left:1px solid #dce6ec}
+.serial-assistant-analysis label{width:100%}
+.serial-assistant-analysis label input,.serial-assistant-analysis label select{width:100%}
+.serial-assistant-side-title{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.serial-assistant-side-title strong{font-size:12px}
+.serial-assistant-side-title span{font-size:11px;text-align:right}
+.serial-assistant-rule-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.serial-assistant-divider{border-top:1px solid #dce6ec;margin:2px 0}
+.serial-assistant-byte-strip{display:flex;flex-wrap:wrap;gap:3px}
+.serial-assistant-byte-strip span{padding:3px 4px;border-radius:4px;background:#e6f1f8;color:#287aa6;font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+.serial-assistant-field-editor{display:flex;flex-direction:column;gap:5px;padding:8px;border:1px solid #dce6ec;border-radius:6px;background:#fff}
+.serial-assistant-field-editor>div{display:flex;gap:5px}
+.serial-assistant-field-editor>div>*{flex:1;min-width:0}
+.serial-assistant-field-editor>div>button{flex:none}
+.serial-assistant-field-editor label{font-size:10px}
+.serial-assistant-field-editor output{padding:3px 5px;border-radius:4px;background:#eaf5fb;color:#1e638d;overflow-wrap:anywhere}
+.serial-assistant-send{padding:10px 13px;border-top:1px solid #dce6ec;background:#f8fafc}
+.serial-assistant-send>div{display:flex;align-items:center;gap:8px}
+.serial-assistant-send>div+div{margin-top:7px}
+.serial-assistant-send strong{color:#294e66}
+.serial-assistant-send span{color:#8a9ca8}
+.serial-assistant-send-options>select{margin-left:auto;max-width:150px}
+.serial-assistant-send label{display:flex;flex-direction:row;align-items:center;gap:3px}
+.serial-assistant-send label input{width:14px;height:14px;accent-color:#2487bd}
+.serial-assistant-send-options label select{max-width:80px}
+.serial-assistant-send-input label input{width:75px;height:31px;accent-color:auto}
+.serial-assistant-send>div:nth-child(2)>input{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.serial-assistant-status{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:8px 13px;border-top:1px solid #dce6ec;background:#f3f7f9;color:#6d8090;font-variant-numeric:tabular-nums}
+.serial-assistant-message{position:absolute;left:50%;bottom:48px;transform:translateX(-50%);display:flex;align-items:center;gap:12px;max-width:min(700px,calc(100vw - 50px));padding:8px 10px;border:1px solid #a9d2e4;border-radius:7px;background:#e9f6fc;color:#285a75;box-shadow:0 8px 22px rgba(22,48,65,.16);overflow-wrap:anywhere}
+.serial-assistant-message.error{border-color:#e6b6b5;background:#fff1f1;color:#a83e3e}
+.serial-assistant .serial-assistant-message button{border:0;background:transparent;color:inherit}
+@media(max-width:950px){.serial-assistant-workspace{grid-template-columns:minmax(0,1fr) 245px}.serial-assistant-data-head{align-items:start;flex-wrap:wrap}.serial-assistant-data-actions{padding-bottom:5px}}
+@media(max-width:700px){.serial-assistant-overlay{padding:6px}.serial-assistant{width:calc(100vw - 12px);height:calc(100vh - 12px);min-width:0;min-height:0;resize:none}.serial-assistant-workspace{display:flex;flex-direction:column}.serial-assistant-data{min-height:230px;flex:1}.serial-assistant-analysis{min-height:150px;max-height:230px;border-left:0;border-top:1px solid #dce6ec}.serial-assistant-connect>.serial-assistant-primary{margin-left:0}.serial-assistant-send>div{flex-wrap:wrap}.serial-assistant-send>div:nth-child(2)>input{flex:1 1 100%}}

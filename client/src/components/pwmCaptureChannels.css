@@ -1,0 +1,10 @@
+.pwm-capture-editor { display: grid; gap: 12px; }
+.pwm-capture-heading, .pwm-capture-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pwm-capture-heading button, .pwm-capture-card-header button { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); padding: 5px 8px; cursor: pointer; }
+.pwm-capture-heading button:disabled, .pwm-capture-card-header button:disabled { opacity: .45; cursor: default; }
+.pwm-capture-hint { margin: 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.pwm-capture-card { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); }
+.pwm-capture-card-header { margin-bottom: 12px; }
+.pwm-capture-numbers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+.pwm-capture-numbers input { min-width: 0; }
+.pwm-capture-error { color: #dc2626; }

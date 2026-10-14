@@ -23,6 +23,7 @@ mod remote_model;
 mod firmware_picker;
 mod usb_file_picker;
 mod usb_file_editor;
+mod serial_assistant;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -1401,6 +1402,68 @@ fn plotjuggler_set_rate(rate_hz: u16) -> Result<plotjuggler::Status, String> {
     plotjuggler::global().set_rate(rate_hz)
 }
 
+#[tauri::command]
+async fn serial_assistant_list_ports() -> Result<Vec<serial_assistant::PortInfo>, String> {
+    run_blocking(serial_assistant::list_ports).await
+}
+
+#[tauri::command]
+async fn serial_assistant_open(config: serial_assistant::PortConfig, on_event: tauri::ipc::Channel<serial_assistant::SerialEvent>)
+    -> Result<serial_assistant::SessionInfo, String> {
+    run_blocking(move || serial_assistant::global().open(config, on_event)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_close(session_id: u64) -> Result<(), String> {
+    run_blocking(move || serial_assistant::global().close(session_id)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_write(session_id: u64, bytes: Vec<u8>) -> Result<usize, String> {
+    run_blocking(move || serial_assistant::global().write(session_id, bytes)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_record_start(session_id: u64, path: String) -> Result<(), String> {
+    run_blocking(move || serial_assistant::global().start_record(session_id, path)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_record_stop(session_id: u64) -> Result<(), String> {
+    run_blocking(move || serial_assistant::global().stop_record(session_id)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_set_dtr(session_id: u64, value: bool) -> Result<(), String> {
+    run_blocking(move || serial_assistant::global().set_dtr(session_id, value)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_set_rts(session_id: u64, value: bool) -> Result<(), String> {
+    run_blocking(move || serial_assistant::global().set_rts(session_id, value)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_pick_capture(window: tauri::WebviewWindow, save: bool) -> Result<Option<String>, String> {
+    #[cfg(target_os = "linux")]
+    { serial_assistant::pick_path(window, save).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (window, save); Err("此平台暂不支持记录文件选择".into()) }
+}
+
+#[tauri::command]
+async fn serial_assistant_replay(path: String, on_event: tauri::ipc::Channel<serial_assistant::SerialEvent>) -> Result<usize, String> {
+    run_blocking(move || serial_assistant::replay(path, on_event)).await
+}
+
+#[tauri::command]
+async fn serial_assistant_export(window: tauri::WebviewWindow, kind: String, bytes: Vec<u8>) -> Result<Option<String>, String> {
+    #[cfg(target_os = "linux")]
+    { serial_assistant::export(window, kind, bytes).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (window, kind, bytes); Err("此平台暂不支持原生导出文件选择".into()) }
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -1552,12 +1615,24 @@ fn main() {
             firmware_apply,
             simulator_transport_get,
             simulator_transport_set,
+            serial_assistant_list_ports,
+            serial_assistant_open,
+            serial_assistant_close,
+            serial_assistant_write,
+            serial_assistant_record_start,
+            serial_assistant_record_stop,
+            serial_assistant_set_dtr,
+            serial_assistant_set_rts,
+            serial_assistant_pick_capture,
+            serial_assistant_replay,
+            serial_assistant_export,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 telemetry_recorder::global().stop();
+                serial_assistant::global().shutdown();
             }
         });
 }

@@ -1,5 +1,6 @@
 import type { AircraftNodeData } from '../types';
 import { getComponentDef } from './componentDefs';
+import { SERIAL_SENSOR_DEVICES } from './serialDevices';
 
 const TYPES = new Set(['U8', 'S8', 'U16', 'S16', 'U32', 'S32', 'F32', 'F64']);
 const BAUDS = new Set(['9600', '19200', '38400', '57600', '115200', '230400', '460800', '921600']);
@@ -30,7 +31,7 @@ function validateOutput(output: Element): void {
   const device = output.getAttribute('device') || '';
   const baud = output.getAttribute('baud') || '';
   if (!['CUSTOM', 'VIZTRA_HYM1'].includes(protocol)) throw new Error(`不支持的串口协议：${protocol}`);
-  if (!/^\/dev\/ttyS(?:1|5)$/.test(device)) throw new Error(`串口设备无效：${device}`);
+  if (!SERIAL_SENSOR_DEVICES.includes(device as typeof SERIAL_SENSOR_DEVICES[number])) throw new Error(`串口设备无效：${device}`);
   if (!BAUDS.has(baud)) throw new Error(`波特率无效：${baud}`);
   if (!output.getAttribute('logic_name')) throw new Error('串口传感器需要连接系统逻辑画布');
   if (protocol === 'VIZTRA_HYM1') return;

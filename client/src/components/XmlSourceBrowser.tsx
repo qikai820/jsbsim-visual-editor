@@ -141,7 +141,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
   );
 
   return (
-    <div className="xml-source-overlay" role="dialog" aria-modal="true" aria-label="XML 源码浏览器" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="xml-source-overlay" role="dialog" aria-label="XML 源码浏览器" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="xml-source-browser" onClick={event => event.stopPropagation()}>
         <header className="xml-source-header">
           <div>

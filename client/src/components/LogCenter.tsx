@@ -254,7 +254,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
 
   return createPortal(<div className="log-center-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeCenter(); }}>
     <div className="log-center" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined}
-      role="dialog" aria-modal="true" aria-label="日志中心">
+      role="dialog" aria-label="日志中心">
     <header className="log-center-head" onPointerDown={event => beginWindowGesture(event, 'drag')}
       onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
       <div><span className="log-center-mark">▥</span><strong>日志中心</strong><small>MCAP 日志管理与 PlotJuggler 查看 · 拖动标题栏移动，右下角缩放</small></div>

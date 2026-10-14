@@ -597,7 +597,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   };
 
   return createPortal(<div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
-    <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-modal="true" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
+    <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
     <header className="usb-fm-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
       <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 data · 拖动标题栏移动，右下角缩放' : 'Manage SD and data over USB · Drag title to move, corner to resize'}</small></div>
       <button onClick={closeManager} disabled={busy || savingBuiltIn} aria-label={isZh ? '关闭' : 'Close'}>×</button>
@@ -688,7 +688,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
         </>}
       </div>
     </div>}
-    {builtInEditor && <div className="usb-fm-builtin" role="dialog" aria-modal="true" aria-label={isZh ? '内置文件编辑器' : 'Built-in file editor'}>
+    {builtInEditor && <div className="usb-fm-builtin" role="dialog" aria-label={isZh ? '内置文件编辑器' : 'Built-in file editor'}>
       <header className="usb-fm-builtin-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
         <div><strong>{builtInEditor.path}</strong><small>{isZh ? '内置文本编辑器 · CodeMirror' : 'Built-in text editor · CodeMirror'}</small></div>
         <button onClick={closeBuiltIn} disabled={savingBuiltIn} aria-label={isZh ? '关闭编辑器' : 'Close editor'}>×</button>
@@ -709,7 +709,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
         <button onClick={closeBuiltIn} disabled={savingBuiltIn}>{isZh ? '关闭' : 'Close'}</button>
       </footer>
     </div>}
-    {folderConflict && <div className="usb-fm-conflict-overlay" role="dialog" aria-modal="true" aria-label={isZh ? '处理同名文件' : 'Resolve duplicate files'}>
+    {folderConflict && <div className="usb-fm-conflict-overlay" role="dialog" aria-label={isZh ? '处理同名文件' : 'Resolve duplicate files'}>
       <div className="usb-fm-conflict-dialog">
         <strong>{isZh ? '目标已有同名文件夹' : 'A folder with this name already exists'}</strong>
         <p>{folderConflict}</p>

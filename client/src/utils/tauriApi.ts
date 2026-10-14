@@ -93,6 +93,41 @@ export async function setPlotJugglerRate(rateHz: number): Promise<PlotJugglerSta
   return status;
 }
 
+// Local computer serial assistant; deliberately separate from simulator transport.
+export interface LocalSerialPort { path: string; label: string }
+export interface LocalSerialConfig {
+  path: string; baudRate: number; dataBits: number; parity: 'none' | 'even' | 'odd';
+  stopBits: number; flowControl: 'none' | 'software' | 'hardware';
+}
+export type LocalSerialEvent =
+  | { kind: 'data'; sessionId: number; direction: 'rx' | 'tx'; timeMs: number; elapsedUs: number; bytes: number[] }
+  | { kind: 'status'; sessionId: number; connected: boolean; recording: boolean; error: string | null }
+  | { kind: 'replayDone'; sessionId: number; records: number };
+
+export async function localSerialListPorts(): Promise<LocalSerialPort[]> { return call('serial_assistant_list_ports'); }
+export async function localSerialOpen(config: LocalSerialConfig, onEvent: (event: LocalSerialEvent) => void): Promise<{ sessionId: number; path: string }> {
+  const { Channel } = await import('@tauri-apps/api/core');
+  const channel = new Channel<LocalSerialEvent>();
+  channel.onmessage = onEvent;
+  return call('serial_assistant_open', { config, onEvent: channel });
+}
+export async function localSerialClose(sessionId: number): Promise<void> { return call('serial_assistant_close', { sessionId }); }
+export async function localSerialWrite(sessionId: number, bytes: number[]): Promise<number> { return call('serial_assistant_write', { sessionId, bytes }); }
+export async function localSerialRecordStart(sessionId: number, path: string): Promise<void> { return call('serial_assistant_record_start', { sessionId, path }); }
+export async function localSerialRecordStop(sessionId: number): Promise<void> { return call('serial_assistant_record_stop', { sessionId }); }
+export async function localSerialSetDtr(sessionId: number, value: boolean): Promise<void> { return call('serial_assistant_set_dtr', { sessionId, value }); }
+export async function localSerialSetRts(sessionId: number, value: boolean): Promise<void> { return call('serial_assistant_set_rts', { sessionId, value }); }
+export async function localSerialPickCapture(save: boolean): Promise<string | null> { return call('serial_assistant_pick_capture', { save }); }
+export async function localSerialReplay(path: string, onEvent: (event: LocalSerialEvent) => void): Promise<number> {
+  const { Channel } = await import('@tauri-apps/api/core');
+  const channel = new Channel<LocalSerialEvent>();
+  channel.onmessage = onEvent;
+  return call('serial_assistant_replay', { path, onEvent: channel });
+}
+export async function localSerialExport(kind: 'binary' | 'csv' | 'json', bytes: number[]): Promise<string | null> {
+  return call('serial_assistant_export', { kind, bytes });
+}
+
 export interface ReferenceFile {
   name: string;
   xml: string;
@@ -423,7 +458,7 @@ export async function ftpUploadFile(path: string, content: string): Promise<{ pa
     const parts = normalizedPath.split('/');
     const filename = parts.pop() || '';
     const directory = parts.join('/');
-    if (!filename || !/^(?:systems|engine|scripts|aircraft\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)$/.test(directory)) return load();
+    if (!filename || !/^(?:systems|engine|scripts|config\/models|aircraft\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)$/.test(directory)) return load();
     return remoteXmlOrNew(directory, filename, load);
   });
   if (!shouldUpload) return { path: normalizedPath, uploaded: false };

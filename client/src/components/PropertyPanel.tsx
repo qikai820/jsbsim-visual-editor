@@ -9,6 +9,8 @@ import TableChart from './expression/TableChart';
 import ExpressionEditor from './expression/ExpressionEditor';
 import ModuleExpressionCanvas, { type ModuleExpression } from './expression/ModuleExpressionCanvas';
 import SignalPathInput from './SignalPathInput';
+import PwmCaptureChannels from './PwmCaptureChannels';
+import { SERIAL_DEVICE_LABELS } from '../utils/serialDevices';
 
 const isSignalField = (key: string) =>
   key === 'property' || key === 'properties' || key === 'input' || key === 'output' ||
@@ -306,6 +308,15 @@ export default function PropertyPanel() {
   }
 
   const handleChange = (key: string, value: any) => {
+    if (key === 'transport' && value === 'SERIAL' &&
+        ['input', 'output'].includes(node.data.componentType)) {
+      updateNodeParams(node.id, {
+        transport: 'SERIAL',
+        device: node.data.params.device || '/dev/ttyS1',
+        baud: node.data.params.baud || '921600',
+      });
+      return;
+    }
     if (node.data.componentType === 'serial_sensor' && key === 'protocol') {
       updateNodeParams(node.id, {
         protocol: value,
@@ -430,9 +441,11 @@ export default function PropertyPanel() {
             <label>{paramDef.label}</label>
             <select value={raw} onChange={e => handleChange(key, e.target.value)}>
               {paramDef.options?.map(opt => (
-                <option key={opt} value={opt}>{selectLabels[opt] || opt}</option>
+                <option key={opt} value={opt}>{key === 'device' ? SERIAL_DEVICE_LABELS[opt] || opt : key === 'transport' ? (opt === 'SERIAL' ? '串口' : '网口（UDP）') : selectLabels[opt] || opt}</option>
               ))}
             </select>
+            {key === 'device' &&
+              <small>S1 是 UART2，未接 J23；J23 提供 S2/S4/S5/S6/S7。S2 与板载 RS485 共线，使用板载收发器还需控制 /dev/rs485_dir。{['input', 'output'].includes(node.data.componentType) && 'HIL 输入与输出共用串口时，请选择相同设备和波特率。'}</small>}
           </div>
         );
       }
@@ -517,9 +530,17 @@ export default function PropertyPanel() {
       {Object.entries(def.params)
         .filter(([key]) => {
           const selectedType = node.data.params?.type;
+          const hilInput = node.data.componentType === 'input' && selectedType === 'HIL_ACTUATOR_CONTROLS';
+          const hilOutput = node.data.componentType === 'output' && (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS');
+          if (node.data.componentType === 'input' || node.data.componentType === 'output') {
+            if (['transport', 'device', 'baud', 'host'].includes(key) && !hilInput && !hilOutput) return false;
+            const serial = node.data.params?.transport === 'SERIAL';
+            if (serial && ['port', 'host'].includes(key)) return false;
+            if (!serial && ['device', 'baud'].includes(key)) return false;
+          }
           if (node.data.componentType === 'output') {
             if (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS') {
-              const common = new Set(['name', 'type', 'port', 'rate']);
+              const common = new Set(['name', 'type', 'transport', 'port', 'host', 'device', 'baud', 'rate']);
               const allowed = selectedType === 'HIL_SENSOR'
                 ? (key.startsWith('hil_imu_') || key.startsWith('hil_pressure_') ||
                    key === 'hil_temperature' || key === 'hil_fields_updated' || key === 'hil_sensor_id')
@@ -541,6 +562,10 @@ export default function PropertyPanel() {
           return true;
         })
         .map(([key, paramDef]) => {
+          if (node.data.componentType === 'pwm_capture' && key === 'channels') {
+            return <PwmCaptureChannels key={key} nodeId={node.id} params={node.data.params}
+              nodes={nodes} onChange={channels => updateNodeParams(node.id, { channels })} />;
+          }
           if (node.data.componentType === 'serial_sensor' && key === 'fields_xml') {
             return <div className="field-row" key={key}>
               <label>{paramDef.label}</label>

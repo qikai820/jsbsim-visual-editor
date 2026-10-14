@@ -2630,3 +2630,35 @@ html, body, #root {
   resize: both;
   overflow: auto;
 }
+:is(.local-settings-dialog > header, .xml-diagnostic-dialog > header, .j23-guide-header,
+  .serial-assistant-head, .script-editor-head, .xml-source-header,
+  .sim-config-dialog > header, .sim-config-version-manager > header,
+  .wizard-header, .library-header, .xml-modal-header,
+  .model-import-dialog > header, .xml-import-files-dialog > header,
+  .lut-preview-header, .expr-editor-topbar, .usb-fm-conflict-dialog > strong,
+  .sim-performance-head, .telemetry-record-heading,
+  .xml-import-files-toast > div:first-child, .viewer3d-info-header) {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+/* Floating windows leave the workspace usable, even when several are open. */
+body :is(.local-settings-overlay, .xml-modal-overlay, .expr-modal-overlay,
+  .wizard-overlay, .sim-config-overlay, .sim-config-version-overlay,
+  .script-editor-overlay, .lut-preview-overlay, .xml-import-files-overlay,
+  .model-import-overlay, .xml-source-overlay, .xml-diagnostic-overlay,
+  .nsh-console-overlay, .serial-assistant-overlay, .j23-guide-overlay,
+  .log-center-backdrop, .usb-fm-backdrop, .usb-fm-conflict-overlay) {
+  pointer-events: none;
+  background: transparent;
+  backdrop-filter: none;
+}
+body :is(.local-settings-dialog, .xml-modal, .expr-editor, .wizard-modal,
+  .library-modal, .sim-config-dialog, .sim-config-version-manager,
+  .script-editor-modal, .lut-preview-dialog, .xml-import-files-dialog,
+  .model-import-dialog, .xml-source-browser, .xml-diagnostic-dialog,
+  .nsh-console, .serial-assistant, .j23-guide-dialog, .log-center,
+  .usb-fm, .usb-fm-builtin, .usb-fm-conflict-dialog) {
+  pointer-events: auto;
+}

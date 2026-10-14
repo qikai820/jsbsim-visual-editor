@@ -111,6 +111,29 @@ try {
   const positions=await evaluate(`Object.fromEntries([...document.querySelectorAll('.react-flow__node')].map(n=>[n.dataset.id,n.style.transform]))`);
   await evaluate('document.querySelector(".formula-view-toggle").click()');
   await until('document.querySelectorAll(".formula-sheet").length === 42');
+  assert.equal(await evaluate(`document.querySelectorAll('#formula-relationship-select option').length`),42,
+    'Every formula and integrator can be selected in the relationship view');
+  assert.equal(await evaluate(`document.querySelectorAll('.formula-input-linked').length`),71,
+    'All distinct internal XML signal references are highlighted across the cards');
+  assert.equal(await evaluate(`document.querySelector('.formula-relationship-group:last-child .formula-relationship-step strong').textContent`),
+    'motion-latch','Formula 01 leads to its integrator');
+  await evaluate(`document.querySelector('.formula-relationship-group:last-child .formula-relationship-step').click()`);
+  assert.equal(await evaluate(`document.querySelector('.formula-relationship-current strong').textContent`),
+    'motion-latch','Following a link focuses its destination');
+  assert.equal(await evaluate(`document.querySelector('.formula-relationship-group:last-child .formula-relationship-step strong').textContent`),
+    'motion-started','The integrator leads to formula 02');
+  await evaluate(`(() => {const select=document.querySelector('#formula-relationship-select');select.value=[...select.options].find(option=>option.textContent.includes('target-n-world-m')).value;select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await until(`document.querySelector('.formula-relationship-current strong')?.textContent === 'target-n-world-m'`);
+  assert.equal(await evaluate(`document.querySelector('.formula-relationship-group:first-child .formula-relationship-step strong').textContent`),
+    'target-elapsed-s','Formula 03 shows its input integrator');
+  assert.equal(await evaluate(`document.querySelector('.formula-relationship-group:last-child .formula-relationship-step strong').textContent`),
+    'relative-n-m','Formula 03 shows its later consumer');
+  await evaluate(`document.querySelector('.formula-relationship-group:first-child .formula-relationship-step').click()`);
+  await evaluate(`document.querySelector('.formula-relationship-current > button').click()`);
+  await until(`document.querySelector('.formula-paper-scroll').scrollTop > 0`);
+  assert.equal(await evaluate(`document.querySelectorAll('.formula-sheet')[40].querySelector('.formula-path').textContent`),
+    'px4/viztra/motion-latch','The integrator in the relationship has a destination card');
+  await evaluate(`document.querySelector('.formula-paper-scroll').scrollTop=0`);
   assert.equal(await evaluate('document.querySelectorAll(".react-flow__node").length'),before,'Original canvas stays mounted');
   assert.equal(await evaluate('document.querySelector(".expr-editor-main--formula .react-flow") !== null'),true);
   const checks=await evaluate(`(() => {
