@@ -73,6 +73,18 @@ function serialSensorFingerprint(project: { nodes?: any[]; edges?: any[] }): str
   });
 }
 
+function serialHilFingerprint(project: { nodes?: any[] }): string {
+  return JSON.stringify((project.nodes || [])
+    .filter(node => node.data?.componentType === 'serial_hil')
+    .map(node => ({ id: node.id, data: node.data })));
+}
+
+function pwmCaptureFingerprint(project: { nodes?: any[] }): string {
+  return JSON.stringify((project.nodes || [])
+    .filter(node => node.data?.componentType === 'pwm_capture')
+    .map(node => ({ id: node.id, data: node.data })));
+}
+
 function remoteBaselineKey(model: string): string {
   return `jsbsim-remote-baseline:${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
 }
@@ -83,6 +95,19 @@ function serialSensorPath(model: string): string {
 
 function pwmCapturePath(model: string): string {
   return `config/models/${model}.pwm.xml`;
+}
+
+async function loadRemoteXmlForReview(path: string): Promise<string | null> {
+  try {
+    return (await ftpDownloadXml(path)).content;
+  } catch (error) {
+    const separator = path.lastIndexOf('/');
+    if (separator < 0) throw error;
+    const parent = await listRemoteXmlParent(path.slice(0, separator));
+    const name = path.slice(separator + 1).toLowerCase();
+    if (!parent.exists || !parent.files.some(file => file.toLowerCase() === name)) return null;
+    throw error;
+  }
 }
 
 async function withPwmCaptures(data: any, model: string): Promise<any> {
@@ -255,6 +280,8 @@ function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
   // attributes. Nested FCS expression tags such as <input>property</input>
   // do not; excluding them prevents an I/O edit from touching control logic.
   return sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>/gi, (tag, tagName: string) => {
+    if (getXmlAttribute(tag, 'transport') === 'SERIAL' && !getXmlAttribute(tag, 'editor_module') &&
+        ['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].includes(getXmlAttribute(tag, 'type'))) return tag;
     const expectedTypes = tagName.toLowerCase() === 'input' ? new Set(['input']) : new Set(['output', 'uavcan']);
     const originalName = getXmlAttribute(tag, 'name');
     const originalType = getXmlAttribute(tag, 'type');
@@ -307,6 +334,66 @@ function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
     }
     return patched;
   });
+}
+
+/** Patch the three legacy serial HIL declarations in place so unrelated model XML survives. */
+function patchMainSerialHil(sourceXml: string, nodes: any[]): string {
+  const unsafe = (message: string) => Object.assign(new Error(message), { name: 'XmlPatchUnsafeError' });
+  const serialNodes = nodes.filter(node => node.data?.componentType === 'serial_hil');
+  if (!serialNodes.length) throw unsafe('PX4 串口 HIL 节点已删除；主模型串口声明无法安全更新。');
+  const counts = new Map<string, Set<string>>();
+  const xml = sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>[\s\S]*?<\/\1\s*>/gi, block => {
+    const tag = block.slice(0, block.indexOf('>') + 1);
+    const type = getXmlAttribute(tag, 'type');
+    if (getXmlAttribute(tag, 'transport') !== 'SERIAL' || getXmlAttribute(tag, 'editor_module') ||
+        !['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].includes(type)) return block;
+    const oldName = getXmlAttribute(tag, 'name');
+    const candidates = serialNodes.filter(node => String(node.data.params?.name || '') === oldName);
+    const serial = candidates.length === 1 ? candidates[0] : serialNodes.length === 1 ? serialNodes[0] : null;
+    if (!serial) throw unsafe(`无法确定串口 HIL 声明 ${oldName} 对应的图形节点，已取消上传。`);
+    const found = counts.get(serial.id) || new Set<string>();
+    if (found.has(type)) throw unsafe(`串口 HIL ${oldName} 存在重复的 ${type} 声明，已取消上传。`);
+    found.add(type);
+    counts.set(serial.id, found);
+    const params = serial.data.params || {};
+    let patched = tag;
+    const attributes = ['name', 'device', 'baud', 'data_bits', 'parity', 'stop_bits', 'flow_control', 'mavlink_version'];
+    if (type !== 'HIL_ACTUATOR_CONTROLS') attributes.push('system_id', 'component_id');
+    for (const attribute of attributes) {
+      patched = params[attribute] === undefined || params[attribute] === null || String(params[attribute]).trim() === ''
+        ? removeXmlAttribute(patched, attribute)
+        : setXmlAttribute(patched, attribute, params[attribute]);
+    }
+    if (type !== 'HIL_ACTUATOR_CONTROLS') {
+      const rate = params[type === 'HIL_SENSOR' ? 'sensor_rate' : 'gps_rate'];
+      patched = rate === undefined || rate === null || String(rate).trim() === ''
+        ? removeXmlAttribute(patched, 'rate') : setXmlAttribute(patched, 'rate', rate);
+    }
+    const propertyKey = type === 'HIL_SENSOR' ? 'sensor_properties'
+      : type === 'HIL_GPS' ? 'gps_properties' : 'actuator_properties';
+    const desired = String(params[propertyKey] || '').split(',').map(value => value.trim()).filter(Boolean);
+    const body = block.slice(tag.length, block.lastIndexOf('</'));
+    const propertyPattern = /<property(?:\s[^>]*)?>[\s\S]*?<\/property\s*>/gi;
+    const existing = Array.from(body.matchAll(propertyPattern), match => match[0].replace(/^<property(?:\s[^>]*)?>|<\/property\s*>$/gi, '').trim());
+    let patchedBody = body;
+    if (JSON.stringify(existing) !== JSON.stringify(desired)) {
+      if (/<(?!\/?property\b)[A-Za-z][^>]*>/.test(body)) {
+        throw unsafe(`串口 HIL ${type} 含有未识别的子元素，已取消属性映射修改。`);
+      }
+      const indent = body.match(/\n([ \t]*)<property\b/i)?.[1] || '    ';
+      const properties = desired.map(value => `<property>${value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</property>`);
+      patchedBody = body.replace(propertyPattern, '').replace(/\s*$/, '') +
+        (properties.length ? `\n${indent}${properties.join(`\n${indent}`)}` : '') + '\n';
+    }
+    return patched + patchedBody + block.slice(block.lastIndexOf('</'));
+  });
+  for (const serial of serialNodes) {
+    const found = counts.get(serial.id);
+    if (!found || ['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].some(type => !found.has(type))) {
+      throw unsafe('主模型缺少完整的 PX4 串口 HIL 声明，已取消上传以保护原始 XML。');
+    }
+  }
+  return xml;
 }
 
 async function patchInlineSerialLogic(sourceXml: string, nodes: any[], edges: any[]): Promise<string> {
@@ -712,6 +799,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     }
     const target = `/mnt/sdcard/jsbsim/aircraft/${model}/${model}.xml`;
     const stateBeforeSave = useFlowStore.getState();
+    let serialHilChanged = false;
+    try {
+      const baseline = localStorage.getItem(remoteBaselineKey(model));
+      if (baseline) serialHilChanged = serialHilFingerprint(stateBeforeSave) !== serialHilFingerprint(JSON.parse(baseline));
+    } catch { /* The visible dirty-file list remains available. */ }
     const serialPath = serialSensorPath(model);
     const serialTarget = `/mnt/sdcard/jsbsim/${serialPath}`;
     const pwmPath = pwmCapturePath(model);
@@ -778,6 +870,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const hadInlineSerialLogic = originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main'))
       .includes('SERIAL_SENSOR_LOGIC_BEGIN');
     const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path),
+      ...(serialHilChanged ? [`aircraft/${model}/${model}.xml`] : []),
       ...(serialXml !== null ? [serialPath] : []),
       ...(pwmXml !== null ? [pwmPath] : []),
       ...(hasInlineSerialLogic || hadInlineSerialLogic ? [`aircraft/${model}/${model}.xml`] : [])]));
@@ -787,7 +880,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const mainDirty = hasBaseline
       ? dirtyRecords.some(file => file.category === 'main') ||
         modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`)) ||
-        hasInlineSerialLogic || hadInlineSerialLogic
+        hasInlineSerialLogic || hadInlineSerialLogic || serialHilChanged
       : true;
     const externalPaths = new Set(dirtyRecords.filter(file => ['engine', 'thruster', 'system'].includes(file.category)).map(file => {
       const path = file.path.toLowerCase().endsWith('.xml') ? file.path : `${file.path}.xml`;
@@ -845,8 +938,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (!mainSource.trim()) {
           throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
         }
+        const ioXml = patchMainIoAttributes(mainSource, current.nodes);
         xml = await patchInlineSerialLogic(
-          patchMainIoAttributes(mainSource, current.nodes), current.nodes, current.edges);
+          serialHilChanged ? patchMainSerialHil(ioXml, current.nodes) : ioXml,
+          current.nodes, current.edges);
       }
       const uploadedChildren = new Map<string, string>();
       for (const path of externalPaths) {
@@ -1058,13 +1153,23 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const baseline = localStorage.getItem(remoteBaselineKey(model));
       if (baseline) {
         try {
-          if (serialSensorFingerprint(current) !== serialSensorFingerprint(JSON.parse(baseline))) {
+          const previous = JSON.parse(baseline);
+          if (serialSensorFingerprint(current) !== serialSensorFingerprint(previous)) {
             dirtyFiles.push(serialSensorPath(model));
           }
+          if (pwmCaptureFingerprint(current) !== pwmCaptureFingerprint(previous)) {
+            dirtyFiles.push(pwmCapturePath(model));
+          }
+          if (serialHilFingerprint(current) !== serialHilFingerprint(previous)) {
+            dirtyFiles.push((current.xmlFiles || []).find(file => file.category === 'main')?.path || `aircraft/${model}/${model}.xml`);
+          }
         } catch { /* Existing XML dirty flags remain available for the warning. */ }
+      } else {
+        dirtyFiles.push(...modifiedXmlFiles);
       }
-      if (dirtyFiles.length && !force) {
-        const list = dirtyFiles.length ? `\n\n${dirtyFiles.map(path => `  • ${path}`).join('\n')}` : '';
+      const changedPaths = Array.from(new Set(dirtyFiles));
+      if (changedPaths.length && !force) {
+        const list = `\n\n${changedPaths.map(path => `  • ${path}`).join('\n')}`;
         const message = isZh
           ? `检测到本地模型修改${list}\n\n“本地配置 → 允许写入仿真机模型”当前已关闭。本次运行会使用仿真机上的旧模型。是否仍要启动？`
           : `Local model changes detected${list}\n\nWriting simulator models is disabled in Local Settings. This run will use the existing simulator model. Start anyway?`;
@@ -1102,7 +1207,12 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     }
     const mainFile = (current.xmlFiles || []).find(file => file.category === 'main');
     const mainPath = mainFile?.path || `aircraft/${model}/${model}.xml`;
-    const mainCandidate = !!mainFile?.dirty || modifiedXmlFiles.some(file =>
+    let serialHilChanged = false;
+    try {
+      const baseline = localStorage.getItem(remoteBaselineKey(model));
+      if (baseline) serialHilChanged = serialHilFingerprint(current) !== serialHilFingerprint(JSON.parse(baseline));
+    } catch { /* The tracked main-file dirty flag remains available. */ }
+    const mainCandidate = serialHilChanged || !!mainFile?.dirty || modifiedXmlFiles.some(file =>
       file === `${model}.xml` || file.endsWith(`/${model}.xml`)
     );
     const mainSource = originalMainXml(mainFile);
@@ -1110,7 +1220,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次同步已取消。请重新从仿真机加载模型。');
     }
     const candidateMainXml = mainCandidate
-      ? patchMainIoAttributes(mainSource, current.nodes)
+      ? serialHilChanged
+        ? patchMainSerialHil(patchMainIoAttributes(mainSource, current.nodes), current.nodes)
+        : patchMainIoAttributes(mainSource, current.nodes)
       : mainSource;
     const childCandidates = (current.xmlFiles || []).filter(file => file.dirty && file.category !== 'main');
     const childContent = new Map<string, string>();
@@ -1118,26 +1230,33 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       childContent.set(file.path, await buildChildUploadXml(current, file.path));
     }
     const serialPath = serialSensorPath(model);
+    const pwmPath = pwmCapturePath(model);
     let serialXml = serializeSerialSensors(current.nodes, current.edges);
-    if (serialXml === null) {
-      try {
-        const baseline = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}');
-        if (Array.isArray(baseline.nodes) && baseline.nodes.some((node: any) => node.data?.componentType === 'serial_sensor')) {
+    let pwmXml = serializePwmCaptures(current.nodes);
+    try {
+      const baseline = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}');
+      if (Array.isArray(baseline.nodes)) {
+        if (serialXml === null && baseline.nodes.some((node: any) => node.data?.componentType === 'serial_sensor')) {
           serialXml = '<?xml version="1.0"?>\n<serial_outputs version="1"/>\n';
         }
-      } catch { /* No usable baseline: leave an unrelated remote sidecar untouched. */ }
-    }
+        if (pwmXml === null && baseline.nodes.some((node: any) => node.data?.componentType === 'pwm_capture')) {
+          pwmXml = '<?xml version="1.0"?>\n<pwm_inputs version="1"/>\n';
+        }
+      }
+    } catch { /* No usable baseline: leave unrelated remote sidecars untouched. */ }
     const candidatePaths = Array.from(new Set([
       ...(mainCandidate ? [mainPath] : []),
       ...childCandidates.map(file => file.path),
       ...(serialXml !== null ? [serialPath] : []),
+      ...(pwmXml !== null ? [pwmPath] : []),
     ]));
     const unchangedPaths: string[] = [];
     const pendingFiles: string[] = [];
     for (const path of candidatePaths) {
       const localContent = path === mainPath
         ? candidateMainXml
-        : path === serialPath ? serialXml || '' : childContent.get(path) || '';
+        : path === serialPath ? serialXml || ''
+          : path === pwmPath ? pwmXml || '' : childContent.get(path) || '';
       if (!localContent.trim()) {
         pendingFiles.push(path);
         continue;
@@ -1182,7 +1301,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             path,
             content: path === mainPath
               ? candidateMainXml
-              : path === serialPath ? serialXml || '' : childContent.get(path) || '',
+              : path === serialPath ? serialXml || ''
+                : path === pwmPath ? pwmXml || '' : childContent.get(path) || '',
             category: tracked?.category,
             dirty: tracked?.dirty,
           };
@@ -1231,6 +1351,14 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       }
       uploaded = true;
     }
+    if (pwmXml !== null && pendingFiles.includes(pwmPath)) {
+      await ftpUploadFile(pwmPath, pwmXml);
+      const remote = await ftpDownloadXml(pwmPath);
+      if (comparableXml(remote.content) !== comparableXml(pwmXml)) {
+        throw new Error(`PWM 捕获 XML 回读不一致：/mnt/sdcard/jsbsim/${pwmPath}`);
+      }
+      uploaded = true;
+    }
     useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
       file.category === 'main'
         ? {
@@ -1246,6 +1374,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     if (uploadedMainXml.trim()) localStorage.setItem('jsbsim-raw-xml', uploadedMainXml);
     localStorage.setItem('jsbsim-remote-model', model);
     localStorage.setItem(remoteBaselineKey(model), fingerprint);
+    onSaveComplete?.(pendingFiles);
     onLog?.(`[${new Date().toLocaleTimeString()}] ${uploaded ? '已同步模型变更到' : '主模型未修改，跳过写入'} NuttX: ${model}`);
     return uploaded;
   };
@@ -1387,8 +1516,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} toolbarAppearance={toolbarAppearance} onToolbarAppearanceChange={updateToolbarAppearance} />}
       {showJ23Guide && <J23GuideDialog onClose={() => setShowJ23Guide(false)} />}
 
-      {showXmlSourceBrowser && <XmlSourceBrowser documents={xmlSourceDocuments} loadRemoteContent={async path => (await ftpDownloadXml(path)).content} onClose={() => setShowXmlSourceBrowser(false)} />}
-      {uploadReview && <XmlSourceBrowser documents={uploadReview.documents} initialPath={uploadReview.documents[0]?.path} loadRemoteContent={async path => (await ftpDownloadXml(path)).content} onClose={() => {
+      {showXmlSourceBrowser && <XmlSourceBrowser documents={xmlSourceDocuments} loadRemoteContent={loadRemoteXmlForReview} onClose={() => setShowXmlSourceBrowser(false)} />}
+      {uploadReview && <XmlSourceBrowser documents={uploadReview.documents} initialPath={uploadReview.documents[0]?.path} loadRemoteContent={loadRemoteXmlForReview} onClose={() => {
         const resolve = uploadReview.resolve;
         setUploadReview(null);
         resolve();

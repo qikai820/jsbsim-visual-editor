@@ -674,10 +674,8 @@ fn nsh_execute_tcp(command: &str) -> Result<String, String> {
     Ok(text)
 }
 
-#[tauri::command]
-fn nsh_execute(command: String) -> Result<String, String> {
-    let command = command.trim();
-    if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
+fn nsh_execute_inner(command: &str) -> Result<String, String> {
+    if command.trim().is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
         return Err("NSH command must be one non-empty line of at most 512 bytes".to_owned());
     }
 
@@ -689,6 +687,11 @@ fn nsh_execute(command: String) -> Result<String, String> {
                 format!("USB NSH unavailable ({usb_error}); network NSH unavailable ({network_error})")
             })),
     }
+}
+
+#[tauri::command]
+async fn nsh_execute(command: String) -> Result<String, String> {
+    run_blocking(move || nsh_execute_inner(&command)).await
 }
 
 #[tauri::command]
@@ -915,7 +918,7 @@ async fn ftp_list_logs() -> Result<serde_json::Value, String> {
 async fn ftp_log_info(file: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
         let command = ftp_sync::log_info_command(&file)?;
-        let output = nsh_execute(command)?;
+        let output = nsh_execute_inner(&command)?;
         if let Some(error) = output.lines().find_map(|line| line.find("MCAP_INFO_ERROR:").map(|position| &line[position + "MCAP_INFO_ERROR:".len()..])) {
             return Err(error.trim().to_string());
         }

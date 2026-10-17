@@ -61,8 +61,8 @@ struct SimClientInner {
     last_health_packet_time: Option<Instant>,
     /// Task-list slices are assembled by generation before being exposed to
     /// the UI. Metrics packets remain independent and cannot erase the list.
-    task_list_generation: Option<u64>,
-    task_list: Vec<Value>,
+    task_list_assembler: TaskListAssembler,
+    last_complete_task_list_time: Option<Instant>,
     /// The last lifecycle command issued by this editor.  It remains
     /// authoritative until another lifecycle command is issued; telemetry is
     /// observational and may arrive delayed or out of order over UDP.
@@ -75,6 +75,49 @@ struct SimClientInner {
     connected: bool,
     last_packet_time: Instant,
     packets: u64,
+}
+
+#[derive(Default)]
+struct TaskListAssembler {
+    generation: Option<u64>,
+    slots: Vec<Option<Value>>,
+}
+
+impl TaskListAssembler {
+    /* A task table is sent in several UDP/USB packets.  Publishing the first
+     * slice alone reports a healthy jsbsim task as dead until its slice
+     * arrives.  Keep the previous complete table until every offset in the
+     * new generation has been received. */
+    fn push(&mut self, packet: &Value) -> Option<Vec<Value>> {
+        let generation = packet.get("task_generation")?.as_u64()?;
+        let offset = usize::try_from(packet.get("task_offset")?.as_u64()?).ok()?;
+        let total = usize::try_from(packet.get("task_total")?.as_u64()?).ok()?;
+        if total > 128 || offset > total { return None; }
+        let tasks = packet.get("task_top")?.get("tasks")?.as_array()?;
+        if tasks.len() > total - offset { return None; }
+        if self.generation != Some(generation) {
+            self.generation = Some(generation);
+            self.slots = vec![None; total];
+        }
+        if self.slots.len() != total { return None; }
+        for (index, task) in tasks.iter().enumerate() {
+            self.slots[offset + index] = Some(task.clone());
+        }
+        if self.slots.iter().all(Option::is_some) {
+            let complete: Vec<Value> = self.slots.iter().filter_map(Clone::clone).collect();
+            let mut identities = std::collections::HashSet::new();
+            for task in &complete {
+                let identity = (task.get("pid")?.as_i64()?, task.get("name")?.as_str()?);
+                if !identities.insert(identity) {
+                    // Older firmware can reorder tasks between slices.  A
+                    // duplicate means this generation may also omit jsbsim.
+                    return None;
+                }
+            }
+            return Some(complete);
+        }
+        None
+    }
 }
 
 fn resolve_lifecycle_state(requested: Option<&str>, latest: Option<&Value>) -> Option<String> {
@@ -138,7 +181,8 @@ fn merge_task_top_packet(existing: &mut Option<Value>, incoming: &Value) {
         /* Compact 10 Hz health frames intentionally contain no task list.
          * If an older board sends an empty list, retain the independently
          * assembled 1 Hz table instead of flashing it blank. */
-        if key == "tasks" && value.as_array().is_some_and(Vec::is_empty)
+        if key == "tasks" && incoming.get("kind").and_then(Value::as_str) != Some("task_top_tasks")
+            && value.as_array().is_some_and(Vec::is_empty)
             && target.get("tasks").and_then(Value::as_array)
                 .is_some_and(|tasks| !tasks.is_empty())
         {
@@ -267,8 +311,8 @@ impl SimClient {
                 diagnostic_protocol: false,
                 latest_task_top: None,
                 last_health_packet_time: None,
-                task_list_generation: None,
-                task_list: Vec::new(),
+                task_list_assembler: TaskListAssembler::default(),
+                last_complete_task_list_time: None,
                 commanded_lifecycle_state: None,
                 last_simulation_progress: None,
                 last_simulation_timestamp: None,
@@ -389,38 +433,14 @@ impl SimClient {
                                                 let task_slice = val.get("kind")
                                                     .and_then(Value::as_str) == Some("task_top_tasks");
                                                 if task_slice {
-                                                    let generation = val.get("task_generation")
-                                                        .and_then(Value::as_u64).unwrap_or(0);
-                                                    let offset = val.get("task_offset")
-                                                        .and_then(Value::as_u64).unwrap_or(0);
-                                                    if state.task_list_generation != Some(generation)
-                                                        || offset == 0
-                                                    {
-                                                        state.task_list_generation = Some(generation);
-                                                        state.task_list.clear();
-                                                    }
-                                                    if state.task_list_generation == Some(generation) {
-                                                        if let Some(tasks) = val.get("task_top")
-                                                            .and_then(|top| top.get("tasks"))
-                                                            .and_then(Value::as_array)
-                                                        {
-                                                            for task in tasks {
-                                                                let pid = task.get("pid").and_then(Value::as_i64);
-                                                                if let Some(position) = state.task_list.iter().position(|old| {
-                                                                    old.get("pid").and_then(Value::as_i64) == pid
-                                                                }) {
-                                                                    state.task_list[position] = task.clone();
-                                                                } else {
-                                                                    state.task_list.push(task.clone());
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(tasks) = state.task_list_assembler.push(&val) {
                                                         let assembled = json!({
                                                             "kind":"task_top_tasks",
-                                                            "task_top":{"tasks":state.task_list.clone()}
+                                                            "task_top":{"tasks":tasks}
                                                         });
                                                         merge_task_top_packet(
                                                             &mut state.latest_task_top, &assembled);
+                                                        state.last_complete_task_list_time = Some(Instant::now());
                                                     }
                                                 } else {
                                                     merge_task_top_packet(
@@ -643,6 +663,10 @@ impl SimClient {
     /// absent. `None` means no task snapshot is available yet.
     pub fn jsbsim_task_alive(&self) -> Option<bool> {
         let state = self.inner.lock().unwrap();
+        if !state.last_complete_task_list_time
+            .is_some_and(|when| when.elapsed() < Duration::from_secs(3)) {
+            return None;
+        }
         jsbsim_task_alive(state.latest_task_top.as_ref())
     }
 
@@ -935,5 +959,56 @@ mod tests {
         let top = stored.as_ref().unwrap().get("task_top").unwrap();
         assert_eq!(top.get("tasks").and_then(Value::as_array).map(Vec::len), Some(1));
         assert_eq!(top.get("cpu_cores").and_then(Value::as_array).map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn task_list_is_published_only_after_all_slices_arrive() {
+        let mut assembler = TaskListAssembler::default();
+        let first = serde_json::json!({
+            "kind":"task_top_tasks", "task_generation":7,
+            "task_offset":0, "task_total":2,
+            "task_top":{"tasks":[{"pid":1,"name":"nsh_main"}]}
+        });
+        let second = serde_json::json!({
+            "kind":"task_top_tasks", "task_generation":7,
+            "task_offset":1, "task_total":2,
+            "task_top":{"tasks":[{"pid":10,"name":"jsbsim"}]}
+        });
+        assert!(assembler.push(&first).is_none());
+        let complete = assembler.push(&second).unwrap();
+        let packet = serde_json::json!({"task_top":{"tasks":complete}});
+        assert_eq!(jsbsim_task_alive(Some(&packet)), Some(true));
+
+        let next_first = serde_json::json!({
+            "kind":"task_top_tasks", "task_generation":8,
+            "task_offset":0, "task_total":2,
+            "task_top":{"tasks":[{"pid":1,"name":"nsh_main"}]}
+        });
+        assert!(assembler.push(&next_first).is_none());
+    }
+
+    #[test]
+    fn complete_empty_task_list_replaces_old_tasks() {
+        let mut stored = Some(serde_json::json!({
+            "kind":"task_top", "task_top":{"tasks":[{"pid":10,"name":"jsbsim"}]}
+        }));
+        let empty = serde_json::json!({
+            "kind":"task_top_tasks", "task_top":{"tasks":[]}
+        });
+        merge_task_top_packet(&mut stored, &empty);
+        assert_eq!(jsbsim_task_alive(stored.as_ref()), Some(false));
+    }
+
+    #[test]
+    fn overlapping_slices_do_not_report_a_task_exit() {
+        let mut assembler = TaskListAssembler::default();
+        for offset in 0..2 {
+            let packet = serde_json::json!({
+                "kind":"task_top_tasks", "task_generation":9,
+                "task_offset":offset, "task_total":2,
+                "task_top":{"tasks":[{"pid":1,"name":"nsh_main"}]}
+            });
+            assert!(assembler.push(&packet).is_none());
+        }
     }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
+import { useSimSocket } from '../sim/useSimSocket';
 
 type Tab = '系统设置' | '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
 type VariableCategory = 'attitude' | 'position' | 'inertia' | 'controls' | 'propulsion' | 'environment' | 'simulation' | 'other';
@@ -47,8 +48,10 @@ const integratorOptions = (isZh: boolean) => <>{[['0',isZh?'冻结':'Freeze'],['
 
 export default function SimulationConfigDialog({ model, onClose }: { model: string; onClose: () => void }) {
   const { isZh } = useLanguage();
+  const { telemetry, connected } = useSimSocket();
   const tr = (zh: string, en: string) => isZh ? zh : en;
   const safeModel = (model || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_');
+  const variableCacheKey = `jsbsim-mcap-variables:${safeModel}`;
   const path = `config/models/${safeModel}.json`;
   const [tab, setTab] = useState<Tab>('系统设置');
   const [networkInterfaces, setNetworkInterfaces] = useState<SimulatorNetworkInterface[]>([]);
@@ -76,8 +79,10 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     try { const saved = JSON.parse(localStorage.getItem('jsbsim-simulator-version-snapshots') || '[]'); return Array.isArray(saved) ? saved : []; } catch { return []; }
   });
   const [variableFilter, setVariableFilter] = useState('');
+  const [manualVariable, setManualVariable] = useState('');
+  const [manualVariableError, setManualVariableError] = useState('');
   const [availableVariables, setAvailableVariables] = useState<string[]>(() => {
-    try { const saved = JSON.parse(localStorage.getItem('jsbsim-available-variables') || '[]'); return Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : []; } catch { return []; }
+    try { const saved = JSON.parse(localStorage.getItem(variableCacheKey) || '[]'); return Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : []; } catch { return []; }
   });
   const serialized = useMemo(() => JSON.stringify(config, null, 2), [config]);
   const set = (group: string, key: string, value: any) => setConfig((current: any) => ({ ...current, [group]: { ...current[group], [key]: value } }));
@@ -100,15 +105,37 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     other: tr('其他', 'Other'),
   } as Record<VariableCategory, string>)[category];
   const selectPaths = (paths: string[]) => set('mcap', 'selectedVariables', [...new Set([...selectedVariables, ...paths])]);
+  const addManualVariable = () => {
+    const path = `/${manualVariable.trim().replace(/^\/+/, '')}`;
+    if (path === '/' || /\s/.test(path)) {
+      setManualVariableError(tr('请输入有效的属性路径', 'Enter a valid property path'));
+      return;
+    }
+    selectPaths([path]);
+    setManualVariable('');
+    setManualVariableError('');
+  };
 
   useEffect(() => {
-    const update = (event: Event) => {
-      const paths = (event as CustomEvent).detail;
-      if (Array.isArray(paths)) setAvailableVariables(paths.filter(value => typeof value === 'string'));
-    };
-    window.addEventListener('jsbsim-variables-updated', update);
-    return () => window.removeEventListener('jsbsim-variables-updated', update);
-  }, []);
+    try {
+      const saved = JSON.parse(localStorage.getItem(variableCacheKey) || '[]');
+      setAvailableVariables(Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : []);
+    } catch { setAvailableVariables([]); }
+  }, [variableCacheKey]);
+
+  useEffect(() => {
+    if (telemetry?.model !== model) return;
+    const paths = Object.entries(telemetry)
+      .filter(([path, value]) => path.startsWith('/') && typeof value === 'number' && Number.isFinite(value))
+      .map(([path]) => path)
+      .sort((a, b) => a.localeCompare(b));
+    if (paths.length === 0) return;
+    setAvailableVariables(previous => {
+      if (previous.length === paths.length && previous.every((path, index) => path === paths[index])) return previous;
+      localStorage.setItem(variableCacheKey, JSON.stringify(paths));
+      return paths;
+    });
+  }, [telemetry, model, variableCacheKey]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -341,7 +368,41 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
             <NumberField label={tr('高频字段记录频率','High-rate field frequency')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',v)} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',v)} />
             <NumberField label={tr('RAM日志缓冲区','RAM log buffer')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>set('mcap','bufferMb',Math.min(1536,v))} />
             <NumberField label={tr('单文件上限','Maximum file size')} value={config.mcap.maxFileMb} min={16} unit="MiB" onChange={(v:any)=>set('mcap','maxFileMb',v)} /><NumberField label={tr('最长记录时间','Maximum duration')} value={config.mcap.maxDurationMin} min={1} unit="min" onChange={(v:any)=>set('mcap','maxDurationMin',v)} /><NumberField label={tr('最小剩余空间','Minimum free space')} value={config.mcap.minFreeMb} min={32} unit="MiB" onChange={(v:any)=>set('mcap','minFreeMb',v)} />
-          </div><div className="mcap-variable-selector"><div><b>{tr('高频记录变量选择器','High-rate Variable Selector')}</b><small>{tr(`已选 ${selectedVariables.length} 项；所选属性按上方频率记录，全部实时数值属性另按遥测频率记录。重新加载模型后生效。`,`Selected ${selectedVariables.length}; selected properties use the high-rate setting, while all live numeric properties are also recorded at telemetry rate. Applies after model reload.`)}</small></div><div className="mcap-variable-toolbar"><button type="button" onClick={() => selectPaths(allVariables)} disabled={allVariables.length === 0}>{tr('全选','Select All')}</button><button type="button" onClick={() => set('mcap', 'selectedVariables', [])} disabled={selectedVariables.length === 0}>{tr('清空选择','Clear')}</button><span>{tr(`已发现 ${allVariables.length} 项`, `${allVariables.length} discovered`)}</span></div><input value={variableFilter} onChange={event => setVariableFilter(event.target.value)} placeholder={tr('搜索属性路径…','Search property paths…')} />{selectedVariables.length > 0 && <div className="mcap-selected-variables">{selectedVariables.map(path => <button key={path} onClick={() => toggleVariable(path)} title={tr('移除','Remove')}>× {path}</button>)}</div>}<div className="mcap-variable-list">{variableGroups.map(group => <section className="mcap-variable-category" key={group.category}><header><b>{categoryLabel(group.category)}</b><span>{group.paths.length}</span><button type="button" onClick={() => selectPaths(group.paths)} disabled={group.paths.every(path => selectedVariables.includes(path))}>{tr('选择本类','Select category')}</button></header>{group.paths.map(path => <label key={path}><input type="checkbox" checked={selectedVariables.includes(path)} onChange={() => toggleVariable(path)} /><span>{path}</span></label>)}</section>)}{availableVariables.length === 0 && <span className="mcap-variable-empty">{tr('暂无可选变量。请先打开“实时”属性浏览器并等待遥测属性树加载。','No variables discovered yet. Open the Live property browser and wait for telemetry.')}</span>}{availableVariables.length > 0 && variableGroups.length === 0 && <span className="mcap-variable-empty">{tr('没有匹配的变量。','No matching variables.')}</span>}</div></div><div className="sim-config-readonly">{tr('目录','Directory')}: {config.mcap.directory}<br />{tr('变量数量不再设上限；可记录数量取决于仿真机可用内存和存储空间。压缩：LZ4 Frame；Chunk：1 MiB/最长5秒；CRC：开启；正常关闭后 .active 重命名为 .mcap。','The variable count is unlimited; the practical limit is available simulator memory and storage. Compression: LZ4 Frame; chunk: 1 MiB/maximum 5 seconds; CRC enabled; .active is renamed to .mcap after a clean close.')}</div></section>}
+          </div>
+          <div className="mcap-variable-selector">
+            <div>
+              <b>{tr('高频记录变量选择器', 'High-rate Variable Selector')}</b>
+              <small>{tr(
+                `已选 ${selectedVariables.length} 项；所选属性按上方频率记录，全部实时数值属性另按遥测频率记录。重新加载模型后生效。`,
+                `Selected ${selectedVariables.length}; selected properties use the high-rate setting, while all live numeric properties are also recorded at telemetry rate. Applies after model reload.`
+              )}</small>
+            </div>
+            <div className="mcap-variable-toolbar">
+              <button type="button" onClick={() => selectPaths(availableVariables)} disabled={availableVariables.length === 0}>{tr('全选', 'Select All')}</button>
+              <button type="button" onClick={() => set('mcap', 'selectedVariables', [])} disabled={selectedVariables.length === 0}>{tr('清空选择', 'Clear')}</button>
+              <span>{tr(`已发现 ${availableVariables.length} 项`, `${availableVariables.length} discovered`)}</span>
+            </div>
+            <input value={variableFilter} onChange={event => setVariableFilter(event.target.value)} placeholder={tr('搜索属性路径…', 'Search property paths…')} />
+            <div className="mcap-variable-manual">
+              <input value={manualVariable} onChange={event => { setManualVariable(event.target.value); setManualVariableError(''); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addManualVariable(); } }} placeholder={tr('手动输入属性路径，如 /attitude/phi-deg', 'Enter a property path, e.g. /attitude/phi-deg')} />
+              <button type="button" onClick={addManualVariable}>{tr('添加', 'Add')}</button>
+            </div>
+            {manualVariableError && <small role="alert">{manualVariableError}</small>}
+            {connected && telemetry?.model && telemetry.model !== model &&
+              <small>{tr(`当前运行模型为 ${telemetry.model}；此处仅显示 ${model} 的已保存变量。`, `Running model: ${telemetry.model}; showing saved variables for ${model}.`)}</small>}
+            {selectedVariables.length > 0 && <div className="mcap-selected-variables">
+              {selectedVariables.map(path => <button key={path} onClick={() => toggleVariable(path)} title={tr('移除', 'Remove')}>× {path}</button>)}
+            </div>}
+            <div className="mcap-variable-list">
+              {variableGroups.map(group => <section className="mcap-variable-category" key={group.category}>
+                <header><b>{categoryLabel(group.category)}</b><span>{group.paths.length}</span><button type="button" onClick={() => selectPaths(group.paths)} disabled={group.paths.every(path => selectedVariables.includes(path))}>{tr('选择本类', 'Select category')}</button></header>
+                {group.paths.map(path => <label key={path}><input type="checkbox" checked={selectedVariables.includes(path)} onChange={() => toggleVariable(path)} /><span>{path}</span></label>)}
+              </section>)}
+              {allVariables.length === 0 && <span className="mcap-variable-empty">{tr('暂无已发现的属性。加载当前模型并等待遥测属性树，或在上方手动输入路径。', 'No properties discovered. Load this model and wait for telemetry, or enter a path above.')}</span>}
+              {allVariables.length > 0 && variableGroups.length === 0 && <span className="mcap-variable-empty">{tr('没有匹配的变量。', 'No matching variables.')}</span>}
+            </div>
+          </div>
+          <div className="sim-config-readonly">{tr('目录','Directory')}: {config.mcap.directory}<br />{tr('变量数量不再设上限；可记录数量取决于仿真机可用内存和存储空间。压缩：LZ4 Frame；Chunk：1 MiB/最长5秒；CRC：开启；正常关闭后 .active 重命名为 .mcap。','The variable count is unlimited; the practical limit is available simulator memory and storage. Compression: LZ4 Frame; chunk: 1 MiB/maximum 5 seconds; CRC enabled; .active is renamed to .mcap after a clean close.')}</div></section>}
           {tab === '性能与安全' && <section><h3>{tr('性能与安全','Performance & Safety')}</h3><div className="sim-config-grid">
             <NumberField label={tr('CPU核心','CPU core')} value={config.safety.cpuCore} min={0} onChange={(v:any)=>set('safety','cpuCore',v)} /><NumberField label={tr('任务优先级','Task priority')} value={config.safety.taskPriority} min={1} onChange={(v:any)=>set('safety','taskPriority',v)} /><NumberField label={tr('任务栈','Task stack')} value={config.safety.stackKb} min={64} unit="KiB" onChange={(v:any)=>set('safety','stackKb',v)} />
             <NumberField label={tr('FDM超时阈值','FDM timeout')} value={config.safety.fdmTimeoutMs} step={0.1} unit="ms" onChange={(v:any)=>set('safety','fdmTimeoutMs',v)} /><NumberField label={tr('CPU告警','CPU warning')} value={config.safety.cpuWarningPercent} unit="%" onChange={(v:any)=>set('safety','cpuWarningPercent',v)} /><NumberField label={tr('RAM告警','RAM warning')} value={config.safety.ramWarningPercent} unit="%" onChange={(v:any)=>set('safety','ramWarningPercent',v)} />

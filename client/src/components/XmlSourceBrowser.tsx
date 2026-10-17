@@ -12,7 +12,7 @@ export interface XmlSourceDocument {
 interface XmlSourceBrowserProps {
   documents: XmlSourceDocument[];
   initialPath?: string;
-  loadRemoteContent?: (path: string) => Promise<string>;
+  loadRemoteContent?: (path: string) => Promise<string | null>;
   onClose: () => void;
 }
 
@@ -63,7 +63,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
   const [filter, setFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [copied, setCopied] = useState(false);
-  const [remoteContent, setRemoteContent] = useState<Record<string, string>>({});
+  const [remoteContent, setRemoteContent] = useState<Record<string, string | null>>({});
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState('');
   const [viewMode, setViewMode] = useState<'source' | 'split' | 'unified'>('split');
@@ -72,6 +72,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
   const [expanded, setExpanded] = useState(false);
   const [activeChange, setActiveChange] = useState(0);
   const diffScrollRef = useRef<HTMLDivElement>(null);
+  const autoReadPaths = useRef(new Set<string>());
   const selected = normalized.find(document => document.path === selectedPath) || normalized[0];
   const visible = normalized.filter(document =>
     `${document.path} ${document.category || ''}`.toLowerCase().includes(filter.trim().toLowerCase())
@@ -113,10 +114,13 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
     }
   };
   useEffect(() => {
-    if (loadRemoteContent && selected && remoteContent[selected.path] === undefined) void openRemote();
+    if (loadRemoteContent && selected && remoteContent[selected.path] === undefined && !autoReadPaths.current.has(selected.path)) {
+      autoReadPaths.current.add(selected.path);
+      void openRemote();
+    }
   }, [selected?.path, loadRemoteContent]);
-  const sameXml = remote !== undefined && xmlContentEqual(content, remote);
-  const diff = useMemo(() => remote === undefined ? null : diffText(content, remote, ignoreWhitespace), [content, remote, ignoreWhitespace]);
+  const sameXml = typeof remote === 'string' && xmlContentEqual(content, remote);
+  const diff = useMemo(() => typeof remote !== 'string' ? null : diffText(content, remote, ignoreWhitespace), [content, remote, ignoreWhitespace]);
   const displayRows = useMemo(() => diff ? visibleDiffRows(diff.rows, diff.changeStarts, expanded) : [], [diff, expanded]);
   const jumpToChange = (direction: number) => {
     if (!diff?.changeStarts.length) return;
@@ -149,7 +153,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
             <small>{normalized.length} 个文件 · 只读查看，不会修改工程文件</small>
           </div>
           <div className="xml-source-actions">
-            {loadRemoteContent && <button className="xml-source-review-button" onClick={() => void openRemote()} disabled={!selected || remoteLoading}>{remoteLoading ? '⏳ 读取仿真机…' : remote ? '✓ 已读取仿真机' : '⇄ 对比仿真机'}</button>}
+            {loadRemoteContent && <button className="xml-source-review-button" onClick={() => void openRemote()} disabled={!selected || remoteLoading}>{remoteLoading ? '⏳ 读取仿真机…' : remote === null ? '＋ 仿真机待创建' : remote !== undefined ? '✓ 已读取仿真机' : '⇄ 对比仿真机'}</button>}
             <button onClick={() => void copySource()} disabled={!selected}>{copied ? '✓ 已复制' : '📋 复制源码'}</button>
             <button onClick={onClose} aria-label="关闭 XML 源码浏览器">×</button>
           </div>
@@ -162,7 +166,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
               {visible.map(document => (
                 <button key={document.path} className={document.path === selected?.path ? 'selected' : ''} onClick={() => setSelectedPath(document.path)}>
                   <span>{document.category === 'main' ? '📄' : '🔗'}</span>
-                  <span><strong>{fileName(document.path)}</strong><small>{document.path}{remoteContent[document.path] !== undefined && xmlContentEqual(document.content, remoteContent[document.path]) ? ' · XML 内容一致' : document.dirty ? ' · 待同步' : ''}</small></span>
+                  <span><strong>{fileName(document.path)}</strong><small>{document.path}{remoteContent[document.path] === null ? ' · 仿真机待创建' : typeof remoteContent[document.path] === 'string' && xmlContentEqual(document.content, remoteContent[document.path]!) ? ' · XML 内容一致' : document.dirty ? ' · 待同步' : ''}</small></span>
                 </button>
               ))}
               {!visible.length && <div className="xml-source-empty">没有匹配的 XML 文件</div>}
@@ -171,18 +175,19 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
           <main className="xml-source-content">
             <div className="xml-source-content-head">
               <strong>{selected?.path || '暂无 XML 文件'}</strong>
-              {remote !== undefined && <span className={sameXml ? 'found' : 'not-found'}>{sameXml ? content === remote ? '内容完全一致' : '模型内容一致，仅格式不同' : 'XML 内容不同'}</span>}
+              {typeof remote === 'string' && <span className={sameXml ? 'found' : 'not-found'}>{sameXml ? content === remote ? '内容完全一致' : '模型内容一致，仅格式不同' : 'XML 内容不同'}</span>}
               <label>查找 <input value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} placeholder="源码内搜索" /></label>
               {sourceFilter && <span className={sourceMatch ? 'found' : 'not-found'}>{sourceMatch ? '已找到' : '未找到'}</span>}
               {loadRemoteContent && <div className="xml-git-view-switch" role="group" aria-label="对比显示方式">
                 <button className={viewMode === 'source' ? 'active' : ''} onClick={() => setViewMode('source')}>源码</button>
-                <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')} disabled={remote === undefined}>双栏</button>
-                <button className={viewMode === 'unified' ? 'active' : ''} onClick={() => setViewMode('unified')} disabled={remote === undefined}>单栏</button>
+                <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')} disabled={typeof remote !== 'string'}>双栏</button>
+                <button className={viewMode === 'unified' ? 'active' : ''} onClick={() => setViewMode('unified')} disabled={typeof remote !== 'string'}>单栏</button>
               </div>}
             </div>
             {selected ? (
               <>
                 {remoteError && <div className="xml-source-remote-error">仿真机读取失败：{remoteError}</div>}
+                {remote === null && <div className="xml-source-remote-pending">仿真机上尚无此 XML；确认上传后将创建。</div>}
                 {viewMode !== 'source' && diff ? <>
                   <div className="xml-git-toolbar">
                     <span className="xml-git-counts"><b className="removed">−{diff.deletions}</b><b className="added">+{diff.additions}</b><span>{diff.changeStarts.length} 处差异</span></span>

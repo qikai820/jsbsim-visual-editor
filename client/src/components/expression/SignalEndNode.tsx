@@ -24,12 +24,16 @@ function SignalEndNode({ id, data, selected }: NodeProps) {
     <div
       className={`sig-end ${isSource ? 'sig-end-source' : 'sig-end-sink'} ${selected ? 'selected' : ''}`}
       style={{ '--block-color': color } as React.CSSProperties}
-      title={d.signalName}
+      title={isSource && d.initialValue !== undefined ? undefined : d.signalName}
     >
       {!isSource && (
         <DiagramPort id="in" />
       )}
       <span className="sig-end-label">{shortName(d.signalName)}</span>
+      {isSource && d.initialValue !== undefined && <span className="sig-end-tooltip" role="tooltip">
+        <strong>{d.signalName}</strong>
+        <span>初始值 <b>{d.initialValue}</b></span>
+      </span>}
       {isSource && (
         <DiagramPort id="out" output />
       )}

@@ -296,10 +296,11 @@ function AppContent() {
             ...data,
             params: Object.fromEntries(Object.entries(data?.params || {}).filter(([key]) => key !== 'layout')),
           });
-          if (!oldNode || JSON.stringify(xmlData(oldNode.data)) === JSON.stringify(xmlData(node.data))) continue;
+          if (oldNode && JSON.stringify(xmlData(oldNode.data)) === JSON.stringify(xmlData(node.data))) continue;
           const type = node.data?.componentType;
-          if (['input', 'output', 'uavcan'].includes(type)) files.add(mainFile);
+          if (['input', 'output', 'uavcan', 'serial_hil'].includes(type)) files.add(mainFile);
           if (type === 'serial_sensor') files.add(`config/models/${state.aircraft.name}.serial.xml`);
+          if (type === 'pwm_capture') files.add(`config/models/${state.aircraft.name}.pwm.xml`);
           const rawSource = resolveNodeOwnedPath(node as any) || node.data?.params?.source?.path;
           if (rawSource) {
             const source = String(rawSource).includes('/') ? String(rawSource) :
@@ -307,6 +308,11 @@ function AppContent() {
                 type === 'engine' || type === 'propeller' ? `engine/${rawSource}` : String(rawSource));
             files.add(source.toLowerCase().endsWith('.xml') ? source : `${source}.xml`);
           }
+        }
+        for (const oldNode of previous.nodes || []) {
+          if (next.nodes.some(node => node.id === oldNode.id)) continue;
+          if (oldNode.data?.componentType === 'serial_sensor') files.add(`config/models/${state.aircraft.name}.serial.xml`);
+          if (oldNode.data?.componentType === 'pwm_capture') files.add(`config/models/${state.aircraft.name}.pwm.xml`);
         }
         const previousSubFiles = new Map((previous.subFiles || []).map((file: any) => [file.id, file]));
         for (const file of next.subFiles) {
@@ -555,6 +561,7 @@ function AppContent() {
   })();
   let focusedChannels: any[] = [];
   let focusedTopLevelItems: any[] = [];
+  let focusedPropertyDefinitions: { name: string; attrs?: Record<string, string> }[] = [];
   let focusedCoefficients: any[] = [];
   let focusedLayout: Record<string, { x: number; y: number }> | undefined;
   if (focusedModule) {
@@ -574,6 +581,10 @@ function AppContent() {
       try {
         const parsed = JSON.parse(focusedModule.data.params.topLevelItems || '[]');
         if (Array.isArray(parsed)) focusedTopLevelItems = parsed;
+      } catch { /* ignore malformed */ }
+      try {
+        const parsed = JSON.parse(focusedModule.data.params.propertyDefinitions || '[]');
+        if (Array.isArray(parsed)) focusedPropertyDefinitions = parsed;
       } catch { /* ignore malformed */ }
     }
     try {
@@ -623,6 +634,16 @@ function AppContent() {
               .split(',')
               .map((s: string) => s.trim())
               .filter(Boolean)}
+            propertyDefinitions={focusedPropertyDefinitions}
+            onPropertyValueChange={(name, value) => {
+              const definitions = focusedPropertyDefinitions.map(definition =>
+                definition.name === name
+                  ? { ...definition, attrs: { ...definition.attrs, value } }
+                  : definition);
+              updateNodeParams(focusedModule.id, {
+                propertyDefinitions: JSON.stringify(definitions),
+              });
+            }}
             modelId={focusedModule.id}
             initialLayout={focusedLayout}
             onChannelsChange={(chs) => {

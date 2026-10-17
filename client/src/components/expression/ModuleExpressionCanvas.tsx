@@ -51,6 +51,8 @@ interface ModuleExpressionCanvasProps {
   onChange?: (id: string, expr: ExprNode) => void;
   channels?: any[];
   topLevelProps?: string[];
+  propertyDefinitions?: { name: string; attrs?: Record<string, string> }[];
+  onPropertyValueChange?: (name: string, value: string) => void;
   onChannelsChange?: (channels: any[]) => void;
   onBack: () => void;
   title?: string;
@@ -67,6 +69,44 @@ interface ModuleExpressionCanvasProps {
   initialOpenComponentId?: string;
   findPropertySource?: (signal: string) => { label: string } | null;
   onOpenPropertySource?: (signal: string) => void;
+}
+
+function withInitialPropertyValues(nodes: Node[], definitions: ModuleExpressionCanvasProps['propertyDefinitions']): Node[] {
+  const values = new Map((definitions || [])
+    .filter(definition => definition?.name && definition.attrs?.value !== undefined)
+    .map(definition => [definition.name, String(definition.attrs!.value)]));
+  return nodes.map(node => {
+    if (node.data?.kind !== 'signal' || node.data.signalRole !== 'source') return node;
+    const initialValue = values.get(String(node.data.signalName || ''));
+    return node.data.initialValue === initialValue ? node
+      : { ...node, data: { ...node.data, initialValue } };
+  });
+}
+
+function InitialPropertyValue({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState('');
+  useEffect(() => { setDraft(value); setError(''); }, [value]);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (!next || !Number.isFinite(Number(next))) {
+      setError('请输入有效数字');
+      return;
+    }
+    setError('');
+    if (next !== value) onChange(next);
+  };
+
+  return <div className="signal-panel-field">
+    <label htmlFor="signal-initial-value">初始值</label>
+    <input id="signal-initial-value" type="text" inputMode="decimal" value={draft}
+      onChange={event => { setDraft(event.target.value); setError(''); }}
+      onBlur={commit}
+      onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} />
+    <small>模型加载时使用的数值。按 Enter 或离开输入框后应用。</small>
+    {error && <p className="signal-panel-error" role="alert">{error}</p>}
+  </div>;
 }
 
 // ── Merge multiple expression trees into one graph (expr mode) ───────────────
@@ -293,6 +333,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   const initial = useMemo(() => {
     const g = isSignal ? buildSignalGraph(channels, topLevelProps) : buildMergedGraph(expressions);
+    if (isSignal) g.nodes = withInitialPropertyValues(g.nodes, props.propertyDefinitions);
     // Restore saved positions for this model, if any.
     if (initialLayout) {
       for (const n of g.nodes) {
@@ -365,6 +406,15 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+  const propertyValuesKey = JSON.stringify(props.propertyDefinitions || []);
+  useEffect(() => {
+    setNodes(current => {
+      const updated = withInitialPropertyValues(current, props.propertyDefinitions);
+      if (updated.every((node, index) => node === current[index])) return current;
+      nodesRef.current = updated;
+      return updated;
+    });
+  }, [propertyValuesKey]);
 
   // Per-model layout persistence (optional).
   const onLayoutChangeRef = useRef(onLayoutChange);
@@ -409,14 +459,15 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   // ── Signal-mode commit (recompute edges + report channel changes) ──
   const commitSignal = useCallback((nextNodes: any[]) => {
     const { nodes: rn, edges: re } = recomputeGraph(nextNodes, edgesRef.current);
-    nodesRef.current = rn;
+    const valuedNodes = withInitialPropertyValues(rn, props.propertyDefinitions);
+    nodesRef.current = valuedNodes;
     edgesRef.current = re;
-    setNodes(rn);
+    setNodes(valuedNodes);
     setEdges(re);
-    const ch = graphToChannels(rn, re);
+    const ch = graphToChannels(valuedNodes, re);
     onChannelsChange?.(ch);
     persistLayout();
-  }, [onChannelsChange, persistLayout]);
+  }, [onChannelsChange, persistLayout, propertyValuesKey]);
 
   // ── Signal-edge bendpoints (waypoints) ──
   // Write waypoints to edges state only (no recompute), so a drag isn't blown
@@ -1134,14 +1185,28 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             </div>
           ) : selectedNode && (selectedNode.data as any)?.kind === 'signal' ? (
             <div className="expr-props-empty signal-end-editor">
-              <p>信号端点</p>
-              <label>类型</label>
-              <input value={(selectedNode.data as any).signalRole === 'source' ? '输入信号' : '输出信号'} readOnly />
-              <label>变量名</label>
-              <SignalPathInput value={String((selectedNode.data as any).signalName || '')}
-                onChange={signalName => updateComponent(selectedNode.id, { signalName })}
-                placeholder="例如 position/h-sl-ft" />
-              <p className="expr-props-hint">修改后会自动更新同名信号连线。</p>
+              <div className="signal-panel-heading">
+                <div><span>信号端点</span><strong>信号属性</strong></div>
+                <span className={`signal-panel-role ${(selectedNode.data as any).signalRole === 'source' ? 'source' : 'sink'}`}>
+                  {(selectedNode.data as any).signalRole === 'source' ? '输入信号' : '输出信号'}
+                </span>
+              </div>
+              <div className="signal-panel-field">
+                <label>变量名</label>
+                <SignalPathInput value={String((selectedNode.data as any).signalName || '')}
+                  onChange={signalName => updateComponent(selectedNode.id, { signalName })}
+                  placeholder="例如 position/h-sl-ft" />
+              </div>
+              {(() => {
+                if ((selectedNode.data as any).signalRole !== 'source') return null;
+                const name = String((selectedNode.data as any).signalName || '');
+                const definition = props.propertyDefinitions?.find(item => item.name === name);
+                const value = definition?.attrs?.value;
+                return value === undefined ? null :
+                  <InitialPropertyValue key={name} value={value}
+                    onChange={next => props.onPropertyValueChange?.(name, next)} />;
+              })()}
+              <p className="signal-panel-hint">修改变量名会更新同名连线；初始值保存到仿真机后，在下次加载模型时生效。</p>
             </div>
           ) : isSignal ? (
             <div className="expr-props-empty">

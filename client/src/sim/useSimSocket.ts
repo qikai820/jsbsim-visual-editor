@@ -34,7 +34,10 @@ function mergeTelemetry(previous: Telemetry | null, frame: Telemetry): Telemetry
   const previousModel = typeof previous?.model === 'string' ? previous.model : undefined;
   const frameModel = typeof frame.model === 'string' ? frame.model : undefined;
   const modelChanged = !!previousModel && !!frameModel && previousModel !== frameModel;
-  const next: Telemetry = modelChanged ? {} : { ...(previous || {}) };
+  const treeChanged = typeof previous?.tree_generation === 'number'
+    && typeof frame.tree_generation === 'number'
+    && previous.tree_generation !== frame.tree_generation;
+  const next: Telemetry = modelChanged || treeChanged ? {} : { ...(previous || {}) };
   const properties = frame.properties;
 
   for (const [key, value] of Object.entries(frame)) {

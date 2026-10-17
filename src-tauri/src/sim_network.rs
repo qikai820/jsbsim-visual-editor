@@ -85,6 +85,12 @@ pub fn set(name: &str, address: &str, netmask: &str, gateway: &str) -> Result<In
     if response.contains("nsh: ") || response.contains("Failed") {
         return Err(format!("Simulator rejected network configuration: {response}"));
     }
+    if before.contains(" at DOWN ") {
+        let response = crate::usb_file::nsh_execute(&format!("ifup {name}"))?;
+        if !response.contains(&format!("ifup {name}...OK")) {
+            return Err(format!("Simulator could not bring up {name}: {response}"));
+        }
+    }
     let output = crate::usb_file::nsh_execute(&format!("ifconfig {name}"))?;
     let actual = parse_ifconfig(&output).into_iter().find(|item| item.name == name)
         .ok_or_else(|| format!("No {name} readback after configuration: {output}"))?;
