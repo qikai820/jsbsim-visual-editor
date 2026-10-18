@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { createPortal } from 'react-dom';
 import {
   ftpDeleteLog, ftpDownloadLog, ftpListLogs, ftpLogInfo, listenLogDownloadProgress,
-  openPlotJugglerLog, pickPlotJugglerLog,
+  listDownloadedMcapLogs, openPlotJugglerLog, pickPlotJugglerLog,
   type LocalMcapLog, type RemoteLogFile, type RemoteMcapInfo,
 } from '../utils/tauriApi';
 
@@ -45,9 +45,16 @@ const MIN_WINDOW_HEIGHT = 320;
 export default function LogCenter({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<'remote' | 'local'>('remote');
   const [remoteLogs, setRemoteLogs] = useState<RemoteLogFile[]>([]);
-  const [localLogs, setLocalLogs] = useState<LocalMcapLog[]>([]);
+  const [downloadedLogs, setDownloadedLogs] = useState<LocalMcapLog[]>([]);
+  const [pickedLogs, setPickedLogs] = useState<LocalMcapLog[]>([]);
+  const localLogs = useMemo(() => {
+    const byPath = new Map(downloadedLogs.map(log => [log.path, log]));
+    for (const log of pickedLogs) if (!byPath.has(log.path)) byPath.set(log.path, log);
+    return [...byPath.values()];
+  }, [downloadedLogs, pickedLogs]);
   const [selected, setSelected] = useState('');
-  const [status, setStatus] = useState('正在读取仿真机日志…');
+  const [remoteStatus, setRemoteStatus] = useState('正在读取仿真机日志…');
+  const [localStatus, setLocalStatus] = useState('正在读取本地日志…');
   const [busy, setBusy] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{ name: string; bytes: number; retries: number } | null>(null);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
@@ -109,15 +116,22 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
   }, []);
 
   const refreshRemote = async () => {
-    setStatus('正在读取仿真机日志…');
+    setRemoteStatus('正在读取仿真机日志…');
     try {
       const files = await ftpListLogs();
       infoCache.current.clear();
       setRemoteLogs(files);
-      setStatus(files.length ? `仿真机上有 ${files.length} 个 MCAP 日志` : '仿真机上没有 MCAP 日志');
-    } catch (error) { setStatus(`读取失败：${errorText(error)}`); }
+      setRemoteStatus(files.length ? `仿真机上有 ${files.length} 个 MCAP 日志` : '仿真机上没有 MCAP 日志');
+    } catch (error) { setRemoteStatus(`读取失败：${errorText(error)}`); }
   };
-  useEffect(() => { void refreshRemote(); }, []);
+  const refreshLocal = async () => {
+    try {
+      const logs = await listDownloadedMcapLogs(downloadDirectory());
+      setDownloadedLogs(logs);
+      setLocalStatus(logs.length ? `下载目录中有 ${logs.length} 个 MCAP 日志` : '下载目录中没有 MCAP 日志');
+    } catch (error) { setLocalStatus(`读取本地失败：${errorText(error)}`); }
+  };
+  useEffect(() => { void refreshRemote(); void refreshLocal(); }, []);
   useEffect(() => {
     if (tab !== 'remote' || !selected) {
       setInfoResult(null); setInfoLoading(false); setInfoError('');
@@ -156,7 +170,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
   }, []);
 
   const rememberLocal = (log: LocalMcapLog) => {
-    setLocalLogs(current => [log, ...current.filter(item => item.path !== log.path)]);
+    setPickedLogs(current => [log, ...current.filter(item => item.path !== log.path)]);
     setTab('local');
     setSelected(log.path);
   };
@@ -167,37 +181,37 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
       const log = await pickPlotJugglerLog();
       if (!log) return;
       rememberLocal(log);
-      setStatus(`正在用 PlotJuggler 打开 ${log.name}…`);
+      setLocalStatus(`正在用 PlotJuggler 打开 ${log.name}…`);
       await openPlotJugglerLog(log.path);
-      setStatus(`已启动 PlotJuggler 加载 ${log.name}`);
-    } catch (error) { setStatus(`打开失败：${errorText(error)}`); }
+      setLocalStatus(`已启动 PlotJuggler 加载 ${log.name}`);
+    } catch (error) { setLocalStatus(`打开失败：${errorText(error)}`); }
     finally { setBusy(false); }
   };
   const downloadRemote = async (name: string, open: boolean) => {
     if (busy) return;
     setBusy(true); setSelected(name);
     setDownloadProgress({ name, bytes: 0, retries: 0 });
-    setStatus(`正在下载 ${name}…`);
+    setRemoteStatus(`正在下载 ${name}…`);
     try {
       const result = await ftpDownloadLog(name, downloadDirectory(), remoteLogs.find(log => log.name === name)?.size, open);
       const log: LocalMcapLog = { path: result.path, name: result.path.split('/').pop() || name,
         size: result.size, modified: Date.now() };
-      setLocalLogs(current => [log, ...current.filter(item => item.path !== log.path)]);
+      setDownloadedLogs(current => [log, ...current.filter(item => item.path !== log.path)]);
       if (open) {
-        setStatus(`正在用 PlotJuggler 打开 ${log.name}…`);
+        setRemoteStatus(`正在用 PlotJuggler 打开 ${log.name}…`);
         await openPlotJugglerLog(result.path);
-        setStatus(`已启动 PlotJuggler 加载 ${log.name}`);
-      } else setStatus(result.hasMcapMarkers ? `已下载到 ${result.path}` : `已下载原始文件到 ${result.path}；MCAP 文件头或文件尾无效，无法用 PlotJuggler 查看`);
-    } catch (error) { setStatus(`${open ? '打开失败' : '下载失败'}：${errorText(error)}`); }
+        setRemoteStatus(`已启动 PlotJuggler 加载 ${log.name}`);
+      } else setRemoteStatus(result.hasMcapMarkers ? `已下载到 ${result.path}` : `已下载原始文件到 ${result.path}；MCAP 文件头或文件尾无效，无法用 PlotJuggler 查看`);
+    } catch (error) { setRemoteStatus(`${open ? '打开失败' : '下载失败'}：${errorText(error)}`); }
     finally { setDownloadProgress(null); setBusy(false); }
   };
   const viewLocal = async (path: string) => {
     if (busy) return;
     const log = localLogs.find(item => item.path === path);
     if (!log) return;
-    setBusy(true); setStatus(`正在用 PlotJuggler 打开 ${log.name}…`);
-    try { await openPlotJugglerLog(log.path); setStatus(`已启动 PlotJuggler 加载 ${log.name}`); }
-    catch (error) { setStatus(`打开失败：${errorText(error)}`); }
+    setBusy(true); setLocalStatus(`正在用 PlotJuggler 打开 ${log.name}…`);
+    try { await openPlotJugglerLog(log.path); setLocalStatus(`已启动 PlotJuggler 加载 ${log.name}`); }
+    catch (error) { setLocalStatus(`打开失败：${errorText(error)}`); }
     finally { setBusy(false); }
   };
   const viewSelected = async () => {
@@ -213,8 +227,8 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
       await ftpDeleteLog(removed);
       setSelected('');
       await refreshRemote();
-      setStatus(`已删除 ${removed}`);
-    } catch (error) { setStatus(`删除失败：${errorText(error)}`); }
+      setRemoteStatus(`已删除 ${removed}`);
+    } catch (error) { setRemoteStatus(`删除失败：${errorText(error)}`); }
     finally { setBusy(false); }
   };
 
@@ -242,8 +256,8 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     ? Math.min(100, Math.floor(downloadProgress.bytes / totalBytes * 100)) : null;
   const displayedStatus = downloadProgress
     ? `${downloadProgress.retries ? `重新下载（第 ${downloadProgress.retries + 1} 次）` : '正在下载'} ${downloadProgress.name.split('/').pop()}：${formatSize(downloadProgress.bytes)}${totalBytes ? ` / ${formatSize(totalBytes)}（${progressPercent}%）` : ''}`
-    : status;
-  const errorStatus = /^(打开失败|下载失败|下载或打开失败|读取失败|删除失败)：/.test(status) || status.includes('MCAP 文件头或文件尾无效') ? status : null;
+    : tab === 'remote' ? remoteStatus : localStatus;
+  const errorStatus = /^(打开失败|下载失败|下载或打开失败|读取失败|读取本地失败|删除失败)：/.test(displayedStatus) || displayedStatus.includes('MCAP 文件头或文件尾无效') ? displayedStatus : null;
   const toggleDay = (day: string) => setExpandedDays(currentDays => {
     const next = new Set(currentDays);
     if (next.has(day)) next.delete(day); else next.add(day);
@@ -262,14 +276,14 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     </header>
     <div className="log-center-actions">
         <button onClick={() => void openLocal()} disabled={busy}>＋ 打开本地 MCAP</button>
-        <button onClick={() => void refreshRemote()} disabled={busy}>↻ 刷新仿真机</button>
+        <button onClick={() => void (tab === 'remote' ? refreshRemote() : refreshLocal())} disabled={busy}>↻ 刷新{tab === 'remote' ? '仿真机' : '本地'}</button>
         {current && <button onClick={() => void viewSelected()} disabled={busy}>📈 PlotJuggler 查看</button>}
         {tab === 'remote' && current && <button onClick={() => void downloadRemote(selected, false)} disabled={busy}>↓ 下载</button>}
         {tab === 'remote' && current && <button className="danger" onClick={() => void deleteRemote()} disabled={busy}>删除</button>}
     </div>
     <div className="log-center-tabs">
       <button className={tab === 'remote' ? 'active' : ''} onClick={() => { setTab('remote'); setSelected(''); }}>🛰 仿真机日志 <b>{remoteLogs.length}</b></button>
-      <button className={tab === 'local' ? 'active' : ''} onClick={() => { setTab('local'); setSelected(''); }}>💻 本地日志 <b>{localLogs.length}</b></button>
+      <button className={tab === 'local' ? 'active' : ''} onClick={() => { setTab('local'); setSelected(''); void refreshLocal(); }}>💻 本地日志 <b>{localLogs.length}</b></button>
       <span>{displayedStatus}</span>
     </div>
     <main className="log-center-body">

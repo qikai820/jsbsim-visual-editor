@@ -994,6 +994,11 @@ async fn plotjuggler_pick_log(window: tauri::WebviewWindow) -> Result<Option<log
 }
 
 #[tauri::command]
+async fn plotjuggler_list_downloaded_logs(directory: Option<String>) -> Result<Vec<log_picker::LogSelection>, String> {
+    run_blocking(move || log_picker::list_downloaded_logs(directory.as_deref())).await
+}
+
+#[tauri::command]
 async fn ftp_delete_log(file: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
         ftp_sync::delete_log(&file)?;
@@ -1578,6 +1583,7 @@ fn main() {
             plotjuggler_set_rate,
             plotjuggler_open_log,
             plotjuggler_pick_log,
+            plotjuggler_list_downloaded_logs,
             sim_start,
             sim_stop,
             nsh_execute,

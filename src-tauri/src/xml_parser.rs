@@ -1326,6 +1326,11 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
                     ] {
                         params[key] = json!(property);
                     }
+                } else if get_attr(out, "type") == Some("VIZTRA_UDP_JSON") && prop_names.len() == 3 {
+                    for (key, property) in ["viztra_north", "viztra_east", "viztra_down"]
+                        .iter().zip(&prop_names) {
+                        params[*key] = json!(property);
+                    }
                 }
             }
         }
@@ -1944,6 +1949,30 @@ mod ownership_tests {
         graph["nodes"].as_array().unwrap().iter()
             .find(|item| item["data"]["componentType"] == component_type)
             .unwrap_or_else(|| panic!("missing component {component_type}"))
+    }
+
+    #[test]
+    fn viztra_udp_json_output_round_trips_property_mapping() {
+        let xml = r#"<fdm_config name="H7" version="2.0">
+  <output name="Viztra JSON" type="VIZTRA_UDP_JSON" host="192.168.3.100" port="9870" rate="20">
+    <property>px4/viztra/relative-n-m</property>
+    <property>px4/viztra/relative-e-m</property>
+    <property>px4/viztra/relative-d-m</property>
+  </output>
+</fdm_config>"#;
+        let mut graph = parse_xml(xml, &HashMap::new()).expect("parse Viztra output");
+        let output = graph["nodes"].as_array_mut().unwrap().iter_mut()
+            .find(|item| item["data"]["componentType"] == "output").unwrap();
+        let params = &mut output["data"]["params"];
+        assert_eq!(params["type"], "VIZTRA_UDP_JSON");
+        assert_eq!(params["host"], "192.168.3.100");
+        assert_eq!(params["viztra_down"], "px4/viztra/relative-d-m");
+        params["viztra_east"] = json!("px4/viztra/new-east");
+        let saved = crate::xml_generator::generate_xml(&graph).expect("save Viztra output");
+        assert!(saved.contains("type=\"VIZTRA_UDP_JSON\""));
+        assert!(saved.contains("host=\"192.168.3.100\""));
+        assert!(saved.contains("<property>px4/viztra/new-east</property>"));
+        assert!(!saved.contains("<property>px4/viztra/relative-e-m</property>"));
     }
 
     #[test]

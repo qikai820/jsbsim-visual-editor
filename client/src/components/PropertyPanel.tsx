@@ -332,6 +332,20 @@ export default function PropertyPanel() {
       updateNodeParams(node.id, params);
       return;
     }
+    if (node.data.componentType === 'output' && key === 'type' && value === 'VIZTRA_UDP_JSON') {
+      updateNodeParams(node.id, {
+        type: value,
+        name: node.data.params?.name === 'localhost' ? 'Viztra UDP JSON' : node.data.params?.name,
+        transport: 'UDP',
+        host: '192.168.3.100',
+        port: 9870,
+        rate: 20,
+        viztra_north: 'px4/viztra/relative-n-m',
+        viztra_east: 'px4/viztra/relative-e-m',
+        viztra_down: 'px4/viztra/relative-d-m',
+      });
+      return;
+    }
     if (node.data.componentType === 'uavcan' && key === 'sensor_type') {
       const mapping = UAVCAN_SENSOR_MAPPINGS[value];
       updateNodeParams(node.id, {
@@ -435,6 +449,7 @@ export default function PropertyPanel() {
           rocket: '🚀 火箭 Rocket',
           electric: '⚡ 电动 Electric',
           brushless_dc: '⚡ 无刷直流 BLDC',
+          VIZTRA_UDP_JSON: 'Viztra 目标相对位置 UDP JSON',
         };
         return (
           <div key={key} className="field-row">
@@ -532,13 +547,18 @@ export default function PropertyPanel() {
           const selectedType = node.data.params?.type;
           const hilInput = node.data.componentType === 'input' && selectedType === 'HIL_ACTUATOR_CONTROLS';
           const hilOutput = node.data.componentType === 'output' && (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS');
+          const viztraOutput = node.data.componentType === 'output' && selectedType === 'VIZTRA_UDP_JSON';
           if (node.data.componentType === 'input' || node.data.componentType === 'output') {
-            if (['transport', 'device', 'baud', 'host'].includes(key) && !hilInput && !hilOutput) return false;
+            if (['transport', 'device', 'baud', 'host'].includes(key) && !hilInput && !hilOutput && !(viztraOutput && key === 'host')) return false;
             const serial = node.data.params?.transport === 'SERIAL';
-            if (serial && ['port', 'host'].includes(key)) return false;
+            if (serial && !viztraOutput && ['port', 'host'].includes(key)) return false;
             if (!serial && ['device', 'baud'].includes(key)) return false;
           }
           if (node.data.componentType === 'output') {
+            if (selectedType === 'VIZTRA_UDP_JSON') {
+              return ['name', 'type', 'host', 'port', 'rate',
+                'viztra_north', 'viztra_east', 'viztra_down'].includes(key);
+            }
             if (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS') {
               const common = new Set(['name', 'type', 'transport', 'port', 'host', 'device', 'baud', 'rate']);
               const allowed = selectedType === 'HIL_SENSOR'
@@ -550,6 +570,7 @@ export default function PropertyPanel() {
             if (selectedType === 'HIL_SENSOR' && key.startsWith('hil_gps_')) return false;
             if (selectedType === 'HIL_GPS' && key.startsWith('hil_imu_')) return false;
             if (selectedType !== 'HIL_SENSOR' && selectedType !== 'HIL_GPS' && key.startsWith('hil_')) return false;
+            if (key.startsWith('viztra_')) return false;
           }
           if (node.data.componentType === 'serial_sensor' &&
               node.data.params?.protocol === 'VIZTRA_HYM1' &&

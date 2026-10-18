@@ -417,9 +417,7 @@ pub fn list_logs() -> Result<Vec<LogFileInfo>, String> {
     Ok(files.into_iter().map(log_info).collect())
 }
 
-fn log_download_paths(file: &str, configured_directory: Option<&str>) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    let file = safe_log_path(file)?;
-    if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
+pub fn log_download_directory(configured_directory: Option<&str>) -> Result<std::path::PathBuf, String> {
     let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| "user home directory is not available")?;
     let requested = configured_directory.unwrap_or("~/Downloads/JSBSim-Logs");
@@ -429,6 +427,13 @@ fn log_download_paths(file: &str, configured_directory: Option<&str>) -> Result<
     if !directory.is_absolute() || !directory.starts_with(&home) {
         return Err("log download directory must be an absolute path inside the current user's home directory".into());
     }
+    Ok(directory)
+}
+
+fn log_download_paths(file: &str, configured_directory: Option<&str>) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let file = safe_log_path(file)?;
+    if !file.to_ascii_lowercase().ends_with(".mcap") { return Err("remote file is not MCAP".into()); }
+    let directory = log_download_directory(configured_directory)?;
     let local_name = file.rsplit('/').next().ok_or("invalid remote log path")?;
     let target = directory.join(local_name);
     let partial = directory.join(format!(".{local_name}.part"));

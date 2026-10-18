@@ -25,6 +25,29 @@ pub fn inspect_log(path: &Path) -> Result<LogSelection, String> {
     })
 }
 
+fn scan_mcap_directory(directory: &Path) -> Result<Vec<LogSelection>, String> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("无法读取日志下载目录 {}：{error}", directory.display())),
+    };
+    let mut logs = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取日志下载目录失败：{error}"))?;
+        // A partial download or a symlink must not appear as a finished local log.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) { continue; }
+        if !entry.path().extension().is_some_and(|ext| ext.eq_ignore_ascii_case("mcap")) { continue; }
+        if let Ok(log) = inspect_log(&entry.path()) { logs.push(log); }
+    }
+    logs.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.name.cmp(&b.name)));
+    Ok(logs)
+}
+
+pub fn list_downloaded_logs(configured_directory: Option<&str>) -> Result<Vec<LogSelection>, String> {
+    let directory = super::ftp_sync::log_download_directory(configured_directory)?;
+    scan_mcap_directory(&directory)
+}
+
 #[cfg(target_os = "linux")]
 pub async fn pick_log(window: tauri::WebviewWindow) -> Result<Option<LogSelection>, String> {
     use gtk::prelude::*;

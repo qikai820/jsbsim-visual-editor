@@ -132,15 +132,16 @@ fn resolve_lifecycle_state(requested: Option<&str>, latest: Option<&Value>) -> O
 }
 
 fn jsbsim_task_alive(frame: Option<&Value>) -> Option<bool> {
-    let tasks = frame?
-        .get("task_top")?
-        .get("tasks")?
-        .as_array()?;
-    Some(tasks.iter().any(|task| {
+    let top = frame?.get("task_top")?;
+    let tasks = top.get("tasks")?.as_array()?;
+    let present = tasks.iter().any(|task| {
         task.get("name").and_then(Value::as_str)
             .map(|name| name.eq_ignore_ascii_case("jsbsim") || name.to_ascii_lowercase().starts_with("jsbsim "))
             .unwrap_or(false)
-    }))
+    });
+    if present { Some(true) }
+    else if top.get("list_complete").and_then(Value::as_bool) == Some(true) { Some(false) }
+    else { None }
 }
 
 fn combined_telemetry(
@@ -445,7 +446,11 @@ impl SimClient {
                                                     if let Some(tasks) = state.task_list_assembler.push(&val) {
                                                         let assembled = json!({
                                                             "kind":"task_top_tasks",
-                                                            "task_top":{"tasks":tasks}
+                                                            "task_top":{
+                                                                "tasks":tasks,
+                                                                "list_complete":val.get("task_complete")
+                                                                    .and_then(Value::as_bool).unwrap_or(false)
+                                                            }
                                                         });
                                                         merge_task_top_packet(
                                                             &mut state.latest_task_top, &assembled);
@@ -674,8 +679,9 @@ impl SimClient {
             .unwrap_or(false)
     }
 
-    /// `Some(false)` means a fresh task snapshot was received and JSBSim is
-    /// absent. `None` means no task snapshot is available yet.
+    /// `Some(false)` requires a fresh, explicitly complete task list without
+    /// JSBSim. Older firmware sends only its top 12 tasks, so absence there
+    /// is unknown rather than evidence of an exited bridge.
     pub fn jsbsim_task_alive(&self) -> Option<bool> {
         let state = self.inner.lock().unwrap();
         if !state.last_complete_task_list_time
@@ -950,9 +956,11 @@ mod tests {
     #[test]
     fn task_snapshot_detects_jsbsim_exit() {
         let alive = serde_json::json!({"task_top":{"tasks":[{"name":"FTP_daemon"},{"name":"jsbsim"}]}});
-        let crashed = serde_json::json!({"task_top":{"tasks":[{"name":"FTP_daemon"},{"name":"nsh_main"}]}});
+        let crashed = serde_json::json!({"task_top":{"list_complete":true,"tasks":[{"name":"FTP_daemon"},{"name":"nsh_main"}]}});
+        let truncated = serde_json::json!({"task_top":{"list_complete":false,"tasks":[{"name":"FTP_daemon"},{"name":"nsh_main"}]}});
         assert_eq!(jsbsim_task_alive(Some(&alive)), Some(true));
         assert_eq!(jsbsim_task_alive(Some(&crashed)), Some(false));
+        assert_eq!(jsbsim_task_alive(Some(&truncated)), None);
         assert_eq!(jsbsim_task_alive(Some(&serde_json::json!({"state":"running"}))), None);
     }
 
@@ -1017,7 +1025,7 @@ mod tests {
             "kind":"task_top", "task_top":{"tasks":[{"pid":10,"name":"jsbsim"}]}
         }));
         let empty = serde_json::json!({
-            "kind":"task_top_tasks", "task_top":{"tasks":[]}
+            "kind":"task_top_tasks", "task_top":{"list_complete":true,"tasks":[]}
         });
         merge_task_top_packet(&mut stored, &empty);
         assert_eq!(jsbsim_task_alive(stored.as_ref()), Some(false));

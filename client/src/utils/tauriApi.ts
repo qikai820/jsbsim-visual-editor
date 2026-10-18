@@ -72,6 +72,7 @@ export interface PlotJugglerStatus {
 export async function startPlotJuggler(): Promise<PlotJugglerStatus> { return call('plotjuggler_start'); }
 export interface LocalMcapLog { path: string; name: string; size: number; modified: number | null }
 export async function pickPlotJugglerLog(): Promise<LocalMcapLog | null> { return call('plotjuggler_pick_log'); }
+export async function listDownloadedMcapLogs(directory?: string): Promise<LocalMcapLog[]> { return call('plotjuggler_list_downloaded_logs', { directory }); }
 export async function openPlotJugglerLog(path: string): Promise<string> { return call('plotjuggler_open_log', { path }); }
 export function getPlotJugglerRate(): number {
   const saved = localStorage.getItem(PLOTJUGGLER_RATE_KEY);

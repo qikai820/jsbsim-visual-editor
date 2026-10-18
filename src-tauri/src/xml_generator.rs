@@ -1807,6 +1807,7 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
             ],
             _ => &[],
         };
+        let viztra_keys = ["viztra_north", "viztra_east", "viztra_down"];
         let legacy_properties: Vec<&str> = p.get("properties").and_then(Value::as_str)
             .unwrap_or("").split(',').map(str::trim).filter(|value| !value.is_empty())
             .collect();
@@ -1827,7 +1828,17 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                     .unwrap_or("")
             })
             .collect();
-        if !hil_properties.is_empty() && hil_properties.iter().all(|value| !value.is_empty()) {
+        if output_type == "VIZTRA_UDP_JSON" {
+            for (index, key) in viztra_keys.iter().enumerate() {
+                let property = p.get(*key).and_then(Value::as_str).map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| legacy_properties.get(index).copied())
+                    .unwrap_or("");
+                if !property.is_empty() {
+                    out_lines.push(xml_element("property", &[], Some(property), 1));
+                }
+            }
+        } else if !hil_properties.is_empty() && hil_properties.iter().all(|value| !value.is_empty()) {
             for property in hil_properties {
                 out_lines.push(xml_element("property", &[], Some(property), 1));
             }
@@ -1901,7 +1912,11 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                 attrs.push(("rate".to_string(), s));
             }
         }
-        if matches!(output_type, "HIL_SENSOR" | "HIL_GPS") {
+        if output_type == "VIZTRA_UDP_JSON" {
+            if let Some(host) = p.get("host").and_then(Value::as_str) {
+                if !host.trim().is_empty() { attrs.push(("host".to_string(), host.trim().to_string())); }
+            }
+        } else if matches!(output_type, "HIL_SENSOR" | "HIL_GPS") {
             let serial = p.get("transport").and_then(Value::as_str) == Some("SERIAL");
             if serial {
                 attrs.push(("transport".to_string(), "SERIAL".to_string()));

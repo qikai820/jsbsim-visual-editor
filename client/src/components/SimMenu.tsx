@@ -566,6 +566,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         }
       } else if (status.running) {
         crashReportedRef.current = false;
+        setError(current => current === 'JSBSim 任务异常退出' ? '' : current);
       }
       setCurrentScript(status.script || null);
       setCurrentModel(status.model || null);

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLanguage } from '../i18n';
+import boardSerialPortsImage from '../assets/myd-lmx9x-official-serial-ports.png';
 import './J23GuideDialog.css';
 
 type PinRow = {
@@ -140,7 +141,7 @@ export default function J23GuideDialog({ onClose }: J23GuideDialogProps) {
           <div className="j23-guide-photo-layout">
             <figure className="j23-guide-board-photo">
               <div className="j23-guide-board-photo-image">
-                <img src="/images/myd-lmx9x-official-serial-ports.png" alt={isZh ? '米尔官方 MYD-LMX9X 开发板正面接口图，标有 A55 Debug、M33 Debug、RS232/RS485/CAN 和 RGB' : 'Official MYIR MYD-LMX9X top-view connector diagram with A55 Debug, M33 Debug, RS232/RS485/CAN and RGB labels'} loading="lazy" />
+                <img src={boardSerialPortsImage} alt={isZh ? '米尔官方 MYD-LMX9X 开发板正面接口图，标有 A55 Debug、M33 Debug、RS232/RS485/CAN 和 RGB' : 'Official MYIR MYD-LMX9X top-view connector diagram with A55 Debug, M33 Debug, RS232/RS485/CAN and RGB labels'} />
                 <span className="j23-guide-photo-highlight j23-guide-photo-highlight--a55" aria-hidden="true"><b>1</b></span>
                 <span className="j23-guide-photo-highlight j23-guide-photo-highlight--m33" aria-hidden="true"><b>2</b></span>
                 <span className="j23-guide-photo-highlight j23-guide-photo-highlight--terminal" aria-hidden="true"><b>3</b></span>

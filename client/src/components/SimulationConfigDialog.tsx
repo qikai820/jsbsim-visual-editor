@@ -24,7 +24,7 @@ const defaults = {
   integrators: { rotationalRate: 1, translationalRate: 3, rotationalPosition: 1, translationalPosition: 4 },
   initial: { latitudeDeg: 0, longitudeDeg: 0, altitudeM: 0, rollDeg: 0, pitchDeg: 0, yawDeg: 0, airspeedMps: 0, trim: false },
   environment: { pressureSlPsf: 2116.22, temperatureBiasR: 0, relativeHumidityPct: 0, windNorthFps: 0, windEastFps: 0, windDownFps: 0, turbulenceType: 0, turbulenceWindspeed20ftFps: 0, turbulenceSeverity: 0 },
-  mcap: { enabled: true, rateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 256, bufferMb: 500, minFreeMb: 128, selectedVariables: [] as string[] },
+  mcap: { enabled: true, rateHz: 50, backgroundRateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 1024, bufferMb: 500, minFreeMb: 128, selectedVariables: [] as string[], criticalVariables: [] as string[] },
   safety: { cpuCore: 0, taskPriority: 120, stackKb: 256, fdmTimeoutMs: 4, cpuWarningPercent: 90, ramWarningPercent: 85, nanCheck: true, faultAction: 'stop' },
   diagnostics: { usbDebugPrint: false },
 };
@@ -47,6 +47,21 @@ function SelectField({ label, value, onChange, children }: any) {
   return <label className="sim-config-field"><span>{label}</span><select value={value} onChange={e => onChange(e.target.value)}>{children}</select></label>;
 }
 const integratorOptions = (isZh: boolean) => <>{[['0',isZh?'冻结':'Freeze'],['1',isZh?'矩形欧拉':'Rectangular Euler'],['2',isZh?'梯形':'Trapezoidal'],['3','Adams–Bashforth 2'],['4','Adams–Bashforth 3'],['5','Adams–Bashforth 4']].map(([v,n]) => <option key={v} value={v}>{n}</option>)}</>;
+
+const formatBuildTime = (value: string | undefined, isZh: boolean) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const locale = isZh ? 'zh-CN' : 'en-US';
+  const localTime = date.toLocaleString(locale, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const zone = new Intl.DateTimeFormat(locale, { timeZoneName: 'short' })
+    .formatToParts(date).find(part => part.type === 'timeZoneName')?.value;
+  return zone ? `${localTime} ${zone}` : localTime;
+};
 
 export default function SimulationConfigDialog({ model, onClose }: { model: string; onClose: () => void }) {
   const { isZh } = useLanguage();
@@ -89,10 +104,13 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   const serialized = useMemo(() => JSON.stringify(config, null, 2), [config]);
   const set = (group: string, key: string, value: any) => setConfig((current: any) => ({ ...current, [group]: { ...current[group], [key]: value } }));
   const selectedVariables: string[] = Array.isArray(config.mcap.selectedVariables) ? config.mcap.selectedVariables : [];
+  const criticalVariables: string[] = Array.isArray(config.mcap.criticalVariables) ? config.mcap.criticalVariables : [];
   const toggleVariable = (path: string) => {
-    if (selectedVariables.includes(path)) set('mcap', 'selectedVariables', selectedVariables.filter(item => item !== path));
+    if (selectedVariables.includes(path)) setConfig((current: any) => ({ ...current, mcap: { ...current.mcap, selectedVariables: selectedVariables.filter(item => item !== path), criticalVariables: criticalVariables.filter(item => item !== path) } }));
     else set('mcap', 'selectedVariables', [...selectedVariables, path]);
   };
+  const toggleCriticalVariable = (path: string) => set('mcap', 'criticalVariables',
+    criticalVariables.includes(path) ? criticalVariables.filter(item => item !== path) : [...criticalVariables, path]);
   const allVariables = useMemo(() => [...new Set([...availableVariables, ...selectedVariables])].sort((a, b) => a.localeCompare(b)), [availableVariables, selectedVariables]);
   const filteredVariables = useMemo(() => allVariables.filter(path => path.toLowerCase().includes(variableFilter.trim().toLowerCase())), [allVariables, variableFilter]);
   const variableGroups = useMemo(() => categoryOrder.map(category => ({ category, paths: filteredVariables.filter(path => variableCategory(path) === category) })).filter(group => group.paths.length > 0), [filteredVariables]);
@@ -311,7 +329,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
       <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><span>{tr('模型', 'Model')}: {safeModel}</span></div><button disabled={firmwareUpdating} onClick={onClose}>×</button></header>
       <div className="simulator-version-card">
         <div><strong>{tr('仿真机版本', 'Simulator Version')}</strong><small>{versionStatus}</small></div>
-        {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span><span>{tr('编译时间', 'Built')} {simulatorVersion.build_time || '—'} · Git {simulatorVersion.git_short_hash || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}
+        {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span><span title={simulatorVersion.build_time}>{tr('编译时间', 'Built')} {formatBuildTime(simulatorVersion.build_time, isZh)} · Git {simulatorVersion.git_short_hash || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}
         <button type="button" disabled={firmwareUpdating} onClick={() => setTab('固件升级')}>{tr('升级固件', 'Upgrade Firmware')}</button>
         <button type="button" disabled={firmwareUpdating} onClick={() => setShowVersionManager(true)}>{tr('版本管理', 'Version Manager')}</button>
         <button type="button" disabled={firmwareUpdating} onClick={() => void refreshSimulatorVersion()}>{tr('刷新', 'Refresh')}</button>
@@ -367,21 +385,21 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
           </div></section>}
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
             <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 MCAP 日志','Enable MCAP logging')}</label>
-            <NumberField label={tr('高频字段记录频率','High-rate field frequency')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',v)} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',v)} />
+            <NumberField label={tr('状态与关键字段频率','State and critical field rate')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',Math.min(500,v))} /><NumberField label={tr('普通字段频率','Background field rate')} value={config.mcap.backgroundRateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','backgroundRateHz',Math.min(500,v))} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',Math.min(2048,v))} />
             <NumberField label={tr('RAM日志缓冲区','RAM log buffer')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>set('mcap','bufferMb',Math.min(1536,v))} />
             <NumberField label={tr('单文件上限','Maximum file size')} value={config.mcap.maxFileMb} min={16} unit="MiB" onChange={(v:any)=>set('mcap','maxFileMb',v)} /><NumberField label={tr('最长记录时间','Maximum duration')} value={config.mcap.maxDurationMin} min={1} unit="min" onChange={(v:any)=>set('mcap','maxDurationMin',v)} /><NumberField label={tr('最小剩余空间','Minimum free space')} value={config.mcap.minFreeMb} min={32} unit="MiB" onChange={(v:any)=>set('mcap','minFreeMb',v)} />
           </div>
           <div className="mcap-variable-selector">
             <div>
-              <b>{tr('高频记录变量选择器', 'High-rate Variable Selector')}</b>
+              <b>{tr('记录变量选择器', 'Recorded Variable Selector')}</b>
               <small>{tr(
-                `已选 ${selectedVariables.length} 项；所选属性按上方频率记录，全部实时数值属性另按遥测频率记录。重新加载模型后生效。`,
-                `Selected ${selectedVariables.length}; selected properties use the high-rate setting, while all live numeric properties are also recorded at telemetry rate. Applies after model reload.`
+                `已选 ${selectedVariables.length} 项，其中 ${criticalVariables.length} 项关键字段按状态频率记录，其余按普通字段频率记录。基础状态始终按状态频率记录。重新加载模型后生效。`,
+                `${selectedVariables.length} selected; ${criticalVariables.length} critical fields use the state rate, others use the background rate. Base state always uses the state rate. Applies after model reload.`
               )}</small>
             </div>
             <div className="mcap-variable-toolbar">
               <button type="button" onClick={() => selectPaths(availableVariables)} disabled={availableVariables.length === 0}>{tr('全选', 'Select All')}</button>
-              <button type="button" onClick={() => set('mcap', 'selectedVariables', [])} disabled={selectedVariables.length === 0}>{tr('清空选择', 'Clear')}</button>
+              <button type="button" onClick={() => setConfig((current: any) => ({ ...current, mcap: { ...current.mcap, selectedVariables: [], criticalVariables: [] } }))} disabled={selectedVariables.length === 0}>{tr('清空选择', 'Clear')}</button>
               <span>{tr(`已发现 ${availableVariables.length} 项`, `${availableVariables.length} discovered`)}</span>
             </div>
             <input value={variableFilter} onChange={event => setVariableFilter(event.target.value)} placeholder={tr('搜索属性路径…', 'Search property paths…')} />
@@ -393,7 +411,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
             {connected && telemetry?.model && telemetry.model !== model &&
               <small>{tr(`当前运行模型为 ${telemetry.model}；此处仅显示 ${model} 的已保存变量。`, `Running model: ${telemetry.model}; showing saved variables for ${model}.`)}</small>}
             {selectedVariables.length > 0 && <div className="mcap-selected-variables">
-              {selectedVariables.map(path => <button key={path} onClick={() => toggleVariable(path)} title={tr('移除', 'Remove')}>× {path}</button>)}
+              {selectedVariables.map(path => <span key={path}><button onClick={() => toggleVariable(path)} title={tr('移除', 'Remove')}>× {path}</button><label><input type="checkbox" checked={criticalVariables.includes(path)} onChange={() => toggleCriticalVariable(path)} />{tr('关键','Critical')}</label></span>)}
             </div>}
             <div className="mcap-variable-list">
               {variableGroups.map(group => <section className="mcap-variable-category" key={group.category}>

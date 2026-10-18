@@ -273,13 +273,15 @@ function importCategoryLabel(category: ImportFileCategory | 'main', isZh: boolea
  * into the main aircraft XML.
  */
 function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
-  const ioNodes = nodes.filter(node => ['input', 'output', 'uavcan'].includes(node?.data?.componentType));
+  const ioNodes = nodes.filter(node => ['input', 'output', 'uavcan'].includes(node?.data?.componentType) &&
+    node?.data?.params?.type !== 'VIZTRA_UDP_JSON');
   const used = new Set<number>();
 
   // Top-level JSBSim transport declarations have both name and type
   // attributes. Nested FCS expression tags such as <input>property</input>
   // do not; excluding them prevents an I/O edit from touching control logic.
   return sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>/gi, (tag, tagName: string) => {
+    if (getXmlAttribute(tag, 'type') === 'VIZTRA_UDP_JSON') return tag;
     if (getXmlAttribute(tag, 'transport') === 'SERIAL' && !getXmlAttribute(tag, 'editor_module') &&
         ['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].includes(getXmlAttribute(tag, 'type'))) return tag;
     const expectedTypes = tagName.toLowerCase() === 'input' ? new Set(['input']) : new Set(['output', 'uavcan']);
@@ -334,6 +336,130 @@ function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
     }
     return patched;
   });
+}
+
+/** Update only Viztra JSON declarations; preserve every other model section. */
+function patchMainViztraUdpOutputs(sourceXml: string, nodes: any[], previousNodes: any[] = []): string {
+  const unsafe = (message: string) => Object.assign(new Error(message), { name: 'XmlPatchUnsafeError' });
+  const outputs = nodes.filter(node => node?.data?.componentType === 'output' &&
+    node?.data?.params?.type === 'VIZTRA_UDP_JSON');
+  const otherOutputNames = new Set(nodes.filter(node => node?.data?.componentType === 'output' &&
+    node?.data?.params?.type !== 'VIZTRA_UDP_JSON')
+    .map(node => String(node.data.params?.name || '').trim()));
+  const names = new Set<string>();
+  for (const node of outputs) {
+    const p = node.data.params || {};
+    const name = String(p.name || '').trim();
+    const host = String(p.host || '').trim();
+    const port = Number(p.port);
+    const rate = Number(p.rate);
+    if (!name || names.has(name) || otherOutputNames.has(name)) {
+      throw unsafe('Viztra UDP JSON 输出名称须与其他输出不同且不能为空。');
+    }
+    names.add(name);
+    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.split('.').some(part => Number(part) > 255)) {
+      throw unsafe(`${name}：目标 IP 须为有效的 IPv4 地址。`);
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw unsafe(`${name}：UDP 端口须为 1～65535。`);
+    if (!Number.isFinite(rate) || rate <= 0 || rate > 250) throw unsafe(`${name}：频率须大于 0 且不超过 250 Hz。`);
+    for (const key of ['viztra_north', 'viztra_east', 'viztra_down']) {
+      if (!String(p[key] || '').trim()) throw unsafe(`${name}：${key} 属性不能为空。`);
+    }
+  }
+
+  const escaped = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const used = new Set<string>();
+  const previousById = new Map(previousNodes.map(node => [node.id, node]));
+  const blockFor = (node: any, indent: string) => {
+    const p = node.data.params;
+    const attributes = `name="${escaped(String(p.name))}" type="VIZTRA_UDP_JSON" host="${escaped(String(p.host).trim())}" port="${Number(p.port)}" rate="${Number(p.rate)}" editor_module="output"`;
+    const properties = ['viztra_north', 'viztra_east', 'viztra_down']
+      .map(key => `${indent}  <property>${escaped(String(p[key]).trim())}</property>`).join('\n');
+    return `${indent}<output ${attributes}>\n${properties}\n${indent}</output>`;
+  };
+  const otherBlockFor = (node: any, indent: string) => {
+    const p = node.data.params || {};
+    const type = String(p.type || 'SOCKET');
+    const attributes = [`name="${escaped(String(p.name || ''))}"`, `type="${escaped(type)}"`];
+    if (p.port != null) attributes.push(`port="${escaped(String(p.port))}"`);
+    if (p.rate != null) attributes.push(`rate="${escaped(String(p.rate))}"`);
+    if (['HIL_SENSOR', 'HIL_GPS'].includes(type)) {
+      if (p.transport === 'SERIAL') {
+        attributes.push('transport="SERIAL"', 'editor_module="output"',
+          `device="${escaped(String(p.device || '/dev/ttyS1'))}"`,
+          `baud="${escaped(String(p.baud || '921600'))}"`);
+      } else if (String(p.host || '').trim()) {
+        attributes.push(`host="${escaped(String(p.host).trim())}"`);
+      }
+    }
+    const groups = ['simulation', 'atmosphere', 'massprops', 'rates', 'velocities',
+      'forces', 'moments', 'position', 'propulsion', 'aerosurfaces', 'fcs',
+      'ground_reactions', 'coefficients'];
+    const lines = groups.filter(key => p[key] === 'ON')
+      .map(key => `${indent}  <${key}>ON</${key}>`);
+    const keys = type === 'HIL_SENSOR'
+      ? ['hil_imu_accel_x', 'hil_imu_accel_y', 'hil_imu_accel_z', 'hil_imu_gyro_x',
+          'hil_imu_gyro_y', 'hil_imu_gyro_z', 'hil_imu_mag_x', 'hil_imu_mag_y',
+          'hil_imu_mag_z', 'hil_pressure_abs', 'hil_pressure_diff', 'hil_pressure_alt', 'hil_temperature']
+      : type === 'HIL_GPS'
+        ? ['hil_gps_lat', 'hil_gps_lon', 'hil_gps_alt', 'hil_gps_vn', 'hil_gps_ve',
+            'hil_gps_vn', 'hil_gps_ve', 'hil_gps_vd'] : [];
+    const properties = keys.length
+      ? keys.map(key => String(p[key] || '').trim()).filter(Boolean)
+      : String(p.properties || '').split(',').map(value => value.trim()).filter(Boolean);
+    lines.push(...properties.map(value => `${indent}  <property>${escaped(value)}</property>`));
+    return `${indent}<output ${attributes.join(' ')}>\n${lines.join('\n')}\n${indent}</output>`;
+  };
+
+  // Match by the existing output name so an output node can be changed from
+  // SOCKET/HIL to this protocol without leaving a second declaration behind.
+  let xml = sourceXml.replace(/([ \t]*)<output\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>[\s\S]*?<\/output\s*>/gi,
+    (block, indent: string) => {
+      const tag = block.slice(block.indexOf('<output'), block.indexOf('>') + 1);
+      const oldName = getXmlAttribute(tag, 'name');
+      const oldType = getXmlAttribute(tag, 'type');
+      const candidate = outputs.find(node => {
+        const previous = previousById.get(node.id) as any;
+        return previous?.data?.componentType === 'output' &&
+          String(previous.data.params?.name || '').trim() === oldName;
+      }) || outputs.find(node =>
+        String(node.data.params?.name || '').trim() === oldName &&
+        (!previousNodes.length || previousById.has(node.id)));
+      if (!candidate && oldType === 'VIZTRA_UDP_JSON') {
+        const replacement = nodes.find(node => {
+          const previous = previousById.get(node.id) as any;
+          return node.data?.componentType === 'output' && node.data?.params?.type !== 'VIZTRA_UDP_JSON' &&
+            (previous?.data?.params?.type === 'VIZTRA_UDP_JSON' &&
+             String(previous.data.params?.name || '').trim() === oldName ||
+             !previousNodes.length && String(node.data?.params?.name || '').trim() === oldName);
+        });
+        return replacement ? otherBlockFor(replacement, indent) : '';
+      }
+      if (!candidate) return block;
+      if (oldType !== 'VIZTRA_UDP_JSON' &&
+          outputs.some(node => node !== candidate && String(node.data.params?.name || '').trim() === oldName)) {
+        throw unsafe(`Viztra UDP JSON 输出名称 ${oldName} 与现有输出冲突。`);
+      }
+      if (used.has(oldName)) throw unsafe(`主模型中有多个名为 ${oldName} 的输出，无法安全写入 Viztra UDP JSON。`);
+      used.add(oldName);
+      used.add(String(candidate.data.params?.name || '').trim());
+      return blockFor(candidate, indent);
+    });
+  const pending = outputs.filter(node => !used.has(String(node.data.params?.name || '').trim()));
+  if (pending.length) {
+    const end = xml.lastIndexOf('</fdm_config>');
+    if (end < 0) throw unsafe('主模型缺少 fdm_config 结束标签，无法添加 Viztra UDP JSON 输出。');
+    xml = `${xml.slice(0, end).replace(/\s*$/, '')}\n\n${pending.map(node => blockFor(node, '  ')).join('\n\n')}\n${xml.slice(end)}`;
+  }
+  return xml;
+}
+
+function savedRemoteNodes(model: string): any[] {
+  try {
+    const nodes = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}').nodes;
+    return Array.isArray(nodes) ? nodes : [];
+  } catch { return []; }
 }
 
 /** Patch the three legacy serial HIL declarations in place so unrelated model XML survives. */
@@ -938,7 +1064,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (!mainSource.trim()) {
           throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
         }
-        const ioXml = patchMainIoAttributes(mainSource, current.nodes);
+        const ioXml = patchMainViztraUdpOutputs(
+          patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model));
         xml = await patchInlineSerialLogic(
           serialHilChanged ? patchMainSerialHil(ioXml, current.nodes) : ioXml,
           current.nodes, current.edges);
@@ -1221,8 +1348,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     }
     const candidateMainXml = mainCandidate
       ? serialHilChanged
-        ? patchMainSerialHil(patchMainIoAttributes(mainSource, current.nodes), current.nodes)
-        : patchMainIoAttributes(mainSource, current.nodes)
+        ? patchMainSerialHil(patchMainViztraUdpOutputs(patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model)), current.nodes)
+        : patchMainViztraUdpOutputs(patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model))
       : mainSource;
     const childCandidates = (current.xmlFiles || []).filter(file => file.dirty && file.category !== 'main');
     const childContent = new Map<string, string>();
