@@ -56,6 +56,8 @@ struct SimClientInner {
     /// lifecycle frame may arrive immediately afterwards and must not make
     /// the toolbar CPU indicator disappear.
     latest_task_top: Option<Value>,
+    latest_flight_controller: Option<Value>,
+    last_flight_controller_time: Option<Instant>,
     /// Receipt time of the latest CPU/RAM/FDM health frame, excluding task
     /// table slices which can arrive even when live CPU samples have stopped.
     last_health_packet_time: Option<Instant>,
@@ -230,8 +232,8 @@ impl SimClient {
             /* Lifecycle and actuator commands must not be discarded merely
              * because the receiver currently owns the vendor interface for
              * one short bulk-read timeout.  The periodic heartbeat below
-             * remains non-blocking; this bounded wait is only for an actual
-             * user command such as START or LOAD. */
+             * has a shorter bounded wait; actual user commands such as
+             * START or LOAD can wait through a console read. */
             match crate::usb_file::sim_write_control(packet) {
                 Ok(()) => return Ok(()),
                 Err(error) => last_error = Some(std::io::Error::other(error)),
@@ -310,6 +312,8 @@ impl SimClient {
                 latest_load_diagnostic: None,
                 diagnostic_protocol: false,
                 latest_task_top: None,
+                latest_flight_controller: None,
+                last_flight_controller_time: None,
                 last_health_packet_time: None,
                 task_list_assembler: TaskListAssembler::default(),
                 last_complete_task_list_time: None,
@@ -355,6 +359,11 @@ impl SimClient {
                                             }
                                             let mut state = inner.lock().unwrap();
                                             let xml_diagnostic = val.get("kind").and_then(Value::as_str) == Some("xml_diagnostic");
+                                            let flight_controller = val.get("kind").and_then(Value::as_str) == Some("flight_controller");
+                                            if flight_controller {
+                                                state.latest_flight_controller = Some(val.clone());
+                                                state.last_flight_controller_time = Some(Instant::now());
+                                            }
                                             if xml_diagnostic {
                                                 state.diagnostic_protocol = true;
                                                 if val.get("request_id").and_then(Value::as_u64) == state.active_load_id.map(u64::from) {
@@ -450,7 +459,7 @@ impl SimClient {
                                             /* Heartbeat acknowledgements prove board reachability
                                              * but carry no model data and must not replace the
                                              * latest visual/task snapshot. */
-                                            if !heartbeat && !xml_diagnostic {
+                                            if !heartbeat && !xml_diagnostic && !flight_controller {
                                                 state.latest = Some(val);
                                             }
                                             state.connected = true;
@@ -565,11 +574,9 @@ impl SimClient {
                 .spawn(move || loop {
                     let packet = [b'V', b'C', b'M', b'D', 7u8];
                     if crate::transport::allows_usb() {
-                        /* The USB receiver holds the shared interface during
-                         * each 100 ms read.  Give this 1 Hz heartbeat the
-                         * same bounded lock wait as lifecycle commands so
-                         * repeated try_lock misses cannot trip the board's
-                         * 10-second connection watchdog. */
+                        /* The USB receiver owns the interface during each
+                         * 100 ms read. Heartbeats wait up to 250 ms for it,
+                         * independently of the EP3 file/NSH response lock. */
                         let _ = crate::usb_file::sim_write_control(&packet);
                     }
                     if crate::transport::allows_network() {
@@ -651,6 +658,14 @@ impl SimClient {
             .map(|at| at.elapsed().as_millis().min(u64::MAX as u128) as u64)
     }
 
+    pub fn flight_controller_status(&self) -> Option<Value> {
+        let state = self.inner.lock().unwrap();
+        crate::flight_controller_status::snapshot(
+            state.latest_flight_controller.as_ref(),
+            state.last_flight_controller_time.map(|at| at.elapsed()),
+        )
+    }
+
     /// Whether the reported JSBSim simulation clock advanced in the recent
     /// past.  This is more trustworthy than a stale lifecycle label.
     pub fn simulation_is_advancing(&self) -> bool {
@@ -724,6 +739,15 @@ impl SimClient {
             "averageMs": top.get("fdm_avg_ms")?,
             "maxMs": top.get("fdm_max_ms")?,
             "samples": top.get("fdm_samples")?,
+            "sequence": top.get("fdm_seq"),
+            "coreMs": top.get("fdm_core_ms"),
+            "ioMs": top.get("fdm_io_ms"),
+            "captureMs": top.get("fdm_capture_ms"),
+            "workMs": top.get("fdm_work_ms"),
+            "periodMs": top.get("fdm_period_ms"),
+            "realtimeFactor": top.get("fdm_rtf"),
+            "overruns": top.get("fdm_overruns"),
+            "windowMs": top.get("fdm_window_ms"),
         }))
     }
 

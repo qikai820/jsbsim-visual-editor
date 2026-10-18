@@ -5,9 +5,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QtPlugin>
+#include <QTextCodec>
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -163,6 +165,30 @@ size_t add_json_message(Slice payload, double time, PJ::PlotDataMapRef& output) 
   }
   return added;
 }
+
+class ConsoleDecoder {
+  std::unique_ptr<QTextDecoder> decoder;
+  uint64_t next_offset = 0;
+public:
+  size_t add(Slice payload, double time, PJ::PlotDataMapRef& output) {
+    const auto document = QJsonDocument::fromJson(
+        QByteArray(reinterpret_cast<const char*>(payload.data), int(payload.size)));
+    if (!document.isObject()) return 0;
+    const auto object = document.object();
+    const auto offset = uint64_t(object.value("offset").toDouble());
+    if (!decoder || offset != next_offset)
+      decoder.reset(QTextCodec::codecForName("UTF-8")->makeDecoder());
+    const auto raw = QByteArray::fromHex(object.value("raw_hex").toString().toLatin1());
+    next_offset = offset + uint64_t(raw.size());
+    // Carry incomplete UTF-8 across batches; a byte gap resets the decoder.
+    // The MCAP raw_hex field preserves invalid bytes as well as valid text.
+    const auto text = decoder->toUnicode(raw).toUtf8();
+    if (!text.isEmpty())
+      output.addStringSeries("/jsbsim/console/text")->second.pushBack(
+          std::pair<double, PJ::StringRef>{time, PJ::StringRef(text.constData(), size_t(text.size()))});
+    return size_t(!text.isEmpty()) + add_json_value("/jsbsim/console", object, time, output);
+  }
+};
 } // namespace
 
 class JSBSimMcap : public PJ::DataLoader {
@@ -185,11 +211,13 @@ public:
     std::map<uint16_t, std::map<uint32_t, std::string>> channel_fields;
     std::map<uint16_t, std::string> topics;
     std::set<uint16_t> json_channels;
+    std::set<uint16_t> console_channels;
     const auto schemas = reader.schemas();
     for (const auto& [id, channel] : reader.channels()) {
       if (channel->schemaId == 0 && channel->messageEncoding == "json" &&
-          channel->topic == "/jsbsim/telemetry") {
+          (channel->topic == "/jsbsim/telemetry" || channel->topic == "/jsbsim/console")) {
         json_channels.insert(id);
+        if (channel->topic == "/jsbsim/console") console_channels.insert(id);
         continue;
       }
       const auto schema = schemas.find(channel->schemaId);
@@ -202,6 +230,7 @@ public:
       topics[id] = channel->topic.empty() ? "jsbsim" : channel->topic;
     }
     size_t messages = 0, samples = 0;
+    ConsoleDecoder console;
     std::string problem;
     auto on_problem = [&](const mcap::Status& error) { problem = error.message; };
     for (const auto& view : reader.readMessages(on_problem)) {
@@ -212,7 +241,9 @@ public:
       const Slice payload{reinterpret_cast<const uint8_t*>(view.message.data),
                           view.message.dataSize};
       const double time = double(view.message.publishTime) * 1e-9;
-      if (channel == channel_fields.end())
+      if (console_channels.count(view.message.channelId))
+        samples += console.add(payload, time, output);
+      else if (channel == channel_fields.end())
         samples += add_json_message(payload, time, output);
       else
         samples += add_message(payload, channel->second,

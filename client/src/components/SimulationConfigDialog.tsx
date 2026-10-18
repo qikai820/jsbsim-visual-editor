@@ -26,6 +26,7 @@ const defaults = {
   environment: { pressureSlPsf: 2116.22, temperatureBiasR: 0, relativeHumidityPct: 0, windNorthFps: 0, windEastFps: 0, windDownFps: 0, turbulenceType: 0, turbulenceWindspeed20ftFps: 0, turbulenceSeverity: 0 },
   mcap: { enabled: true, rateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 256, bufferMb: 500, minFreeMb: 128, selectedVariables: [] as string[] },
   safety: { cpuCore: 0, taskPriority: 120, stackKb: 256, fdmTimeoutMs: 4, cpuWarningPercent: 90, ramWarningPercent: 85, nanCheck: true, faultAction: 'stop' },
+  diagnostics: { usbDebugPrint: false },
 };
 
 const merge = (source: any) => ({
@@ -36,6 +37,7 @@ const merge = (source: any) => ({
   environment: { ...defaults.environment, ...source?.environment },
   mcap: { ...defaults.mcap, ...source?.mcap },
   safety: { ...defaults.safety, ...source?.safety },
+  diagnostics: { ...defaults.diagnostics, ...source?.diagnostics },
 });
 
 function NumberField({ label, value, onChange, unit, step = 1, min }: any) {
@@ -407,6 +409,8 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
             <NumberField label={tr('CPU核心','CPU core')} value={config.safety.cpuCore} min={0} onChange={(v:any)=>set('safety','cpuCore',v)} /><NumberField label={tr('任务优先级','Task priority')} value={config.safety.taskPriority} min={1} onChange={(v:any)=>set('safety','taskPriority',v)} /><NumberField label={tr('任务栈','Task stack')} value={config.safety.stackKb} min={64} unit="KiB" onChange={(v:any)=>set('safety','stackKb',v)} />
             <NumberField label={tr('FDM超时阈值','FDM timeout')} value={config.safety.fdmTimeoutMs} step={0.1} unit="ms" onChange={(v:any)=>set('safety','fdmTimeoutMs',v)} /><NumberField label={tr('CPU告警','CPU warning')} value={config.safety.cpuWarningPercent} unit="%" onChange={(v:any)=>set('safety','cpuWarningPercent',v)} /><NumberField label={tr('RAM告警','RAM warning')} value={config.safety.ramWarningPercent} unit="%" onChange={(v:any)=>set('safety','ramWarningPercent',v)} />
             <label className="sim-config-check"><input type="checkbox" checked={config.safety.nanCheck} onChange={e=>set('safety','nanCheck',e.target.checked)} />{tr('NaN/Inf检测','NaN/Inf detection')}</label><SelectField label={tr('异常处理','Fault action')} value={config.safety.faultAction} onChange={(v:any)=>set('safety','faultAction',v)}><option value="stop">{tr('停止仿真','Stop simulation')}</option><option value="pause">{tr('暂停','Pause')}</option><option value="restart">{tr('重新加载','Reload')}</option></SelectField>
+            <label className="sim-config-check"><input type="checkbox" checked={config.diagnostics.usbDebugPrint} onChange={e=>set('diagnostics','usbDebugPrint',e.target.checked)} />{tr('USB 调试打印','USB debug prints')}</label>
+            <p className="sim-config-readonly">{tr('默认关闭 USB 状态和收发统计打印。保存后重新加载模型生效；开启可用于排查通信问题。', 'USB status and transfer statistics are off by default. Save and reload the model to apply; enable when diagnosing communication issues.')}</p>
           </div></section>}
           {tab === '固件升级' && <section className="firmware-upgrade-page">
             <h3>{tr('固件升级', 'Firmware Upgrade')}</h3>

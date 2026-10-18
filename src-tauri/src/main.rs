@@ -7,6 +7,7 @@ mod load_diagnostics;
 mod xml_generator;
 mod expression_xml;
 mod sim_client;
+mod flight_controller_status;
 mod telemetry_recorder;
 mod plotjuggler;
 mod log_picker;
@@ -782,6 +783,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let memory = client.memory_usage();
         let fdm_run_ms = client.fdm_run_ms();
         let simulation_dt = client.simulation_dt();
+        let flight_controller = client.flight_controller_status();
         return Ok(serde_json::json!({
             "external": true,
             /* Lifecycle and transport health are independent.  A brief UDP
@@ -803,6 +805,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "fdmRunMs": fdm_run_ms,
             "fdmWindow": client.fdm_window_stats(),
             "simulationDt": simulation_dt,
+            "flightController": flight_controller,
         }));
     }
     let state = app.state::<AppState>();
@@ -918,7 +921,20 @@ async fn ftp_list_logs() -> Result<serde_json::Value, String> {
 async fn ftp_log_info(file: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
         let command = ftp_sync::log_info_command(&file)?;
-        let output = nsh_execute_inner(&command)?;
+        // MCAP inspection can spend several seconds seeking on the SD card.
+        // Prefer Ethernet even when live simulation uses USB, so previewing a
+        // log never has to monopolize the USB telemetry interface.
+        let network_result = nsh_execute_tcp(&command);
+        let output = match network_result {
+            Ok(output) if output.contains("MCAP_INFO:") || output.contains("MCAP_INFO_ERROR:") ||
+                          output.contains("Unknown option: --mcap-info") => output,
+            Ok(output) if transport::mode() == transport::TransportMode::Network => output,
+            Err(error) if transport::mode() == transport::TransportMode::Network => return Err(error),
+            other => usb_file::nsh_execute(&command).map_err(|usb_error| {
+                let network_error = other.err().unwrap_or_else(|| "任务机网口未返回 MCAP 信息".into());
+                format!("网口读取失败：{network_error}；USB 备用读取失败：{usb_error}")
+            })?,
+        };
         if let Some(error) = output.lines().find_map(|line| line.find("MCAP_INFO_ERROR:").map(|position| &line[position + "MCAP_INFO_ERROR:".len()..])) {
             return Err(error.trim().to_string());
         }

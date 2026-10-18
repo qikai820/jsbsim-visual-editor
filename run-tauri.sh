@@ -24,4 +24,34 @@ export NUTTX_FTP_USER="${NUTTX_FTP_USER:-root}"
 export NUTTX_FTP_PASSWORD="${NUTTX_FTP_PASSWORD:-abc123}"
 
 cd "${SCRIPT_DIR}"
-exec npx tauri dev
+
+# Closing the native window can leave Vite running. Starting a second Vite
+# then fails because strictPort is enabled, taking Tauri down with it. Reuse
+# only a listener owned by this checkout's Vite; never kill an unrelated app
+# or silently connect the editor to another checkout's frontend.
+if command -v ss >/dev/null && command -v curl >/dev/null; then
+  DEV_URL="$(node -p 'require("./src-tauri/tauri.conf.json").build.devUrl')"
+  DEV_PORT="$(node -e 'const url = new URL(process.argv[1]); console.log(url.port || (url.protocol === "https:" ? 443 : 80))' "${DEV_URL}")"
+  SERVER_PID="$(ss -H -ltnp "sport = :${DEV_PORT}" 2>/dev/null |
+    sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u)"
+
+  if [[ "${SERVER_PID}" =~ ^[0-9]+$ ]] &&
+     [[ "$(readlink -f "/proc/${SERVER_PID}/cwd" 2>/dev/null)" == "${SCRIPT_DIR}" ]] &&
+     [[ -r "/proc/${SERVER_PID}/cmdline" ]]; then
+    SERVER_ARGS=()
+    mapfile -d '' -t SERVER_ARGS < "/proc/${SERVER_PID}/cmdline"
+    for arg in "${SERVER_ARGS[@]}"; do
+      if [[ "${arg}" == "${SCRIPT_DIR}/node_modules/.bin/vite" ||
+            "${arg}" == "${SCRIPT_DIR}/node_modules/vite/bin/vite.js" ]]; then
+        if curl --noproxy '*' --fail --silent --max-time 2 \
+          "${DEV_URL%/}/@vite/client" >/dev/null; then
+          echo "复用当前项目的页面服务（端口 ${DEV_PORT}），正在打开上位机…"
+          exec npx tauri dev --config '{"build":{"beforeDevCommand":""}}' "$@"
+        fi
+        break
+      fi
+    done
+  fi
+fi
+
+exec npx tauri dev "$@"

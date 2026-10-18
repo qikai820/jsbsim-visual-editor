@@ -19,6 +19,22 @@ production VID/PID before shipping hardware.
 Simulation records are `SIM1`, a little-endian `u32` payload length, then the
 existing UDP payload. USB and UDP operate in parallel.
 
+The desktop serializes physical interface access separately from outstanding
+file responses. EP3 file/NSH requests retain their file-response lock while a
+slow command yields the interface between response polls. EP2 clock sync,
+START/LOAD/STOP and heartbeat packets do not take that file lock. User control
+packets wait up to 3 seconds for interface access, while periodic heartbeats
+wait up to 250 ms; each bulk write is bounded to 250 ms. A timed-out lock wait
+does not leave a command queued, and failed/short writes are not replayed here.
+
+`USB file transport is busy` during START was caused by routing EP2 control
+through the best-effort EP3 helper. Console polling and Auto discovery still
+skip an occupied file channel, but control now uses the independent path.
+This fix is in the desktop backend and requires reopening the rebuilt desktop
+application; it does not require a board firmware change. Host contention
+tests cover file requests held open, console reads, expiration and send-once
+behavior; a successful real-board start remains a separate acceptance check.
+
 File records use a 32-byte little-endian `JBS1` header containing version,
 opcode, request ID, status/read length, payload length, file offset, and
 CRC32. Supported operations are ping, list, stat, chunked read, staged write,

@@ -291,7 +291,47 @@ export async function simRestart(): Promise<any> {
   return call('sim_restart');
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: { averageMs: number; maxMs: number; samples: number }; simulationDt?: number }> {
+export interface FlightControllerStatus {
+  usb_connected: boolean;
+  device_path?: string;
+  heartbeat_alive: boolean;
+  heartbeat_count: number;
+  heartbeat_age_ms: number;
+  actuator_rate_available?: boolean;
+  actuator_rate_hz?: number;
+  armed: boolean;
+  autopilot: number;
+  vehicle_type: number;
+  base_mode: number;
+  custom_mode: number;
+  board_id_available?: boolean;
+  board_id?: number;
+  vendor_name?: string;
+  model_name?: string;
+  usb_info_available?: boolean;
+  usb_vendor_id?: number;
+  usb_product_id?: number;
+  usb_product?: string;
+  status_stale?: boolean;
+  status_age_ms?: number;
+}
+
+export interface FdmWindowStats {
+  averageMs: number;
+  maxMs: number;
+  samples: number;
+  sequence?: number | null;
+  coreMs?: number | null;
+  ioMs?: number | null;
+  captureMs?: number | null;
+  workMs?: number | null;
+  periodMs?: number | null;
+  realtimeFactor?: number | null;
+  overruns?: number | null;
+  windowMs?: number | null;
+}
+
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null }> {
   return call('sim_status');
 }
 

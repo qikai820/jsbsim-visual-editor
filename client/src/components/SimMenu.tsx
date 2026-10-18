@@ -9,6 +9,8 @@ import {
   simGetStatus,
   simListTests,
   simListModels,
+  type FlightControllerStatus,
+  type FdmWindowStats,
   ftpDownloadScript,
   ftpUploadFile,
 } from '../utils/tauriApi';
@@ -35,6 +37,74 @@ interface AircraftModel {
   name: string;
   file: string;
   path: string;
+}
+
+function flightMode(status: FlightControllerStatus | null): string {
+  if (!status?.heartbeat_alive || status.status_stale) return '--';
+  if (status.autopilot === 12) { // MAV_AUTOPILOT_PX4
+    const main = (status.custom_mode >>> 16) & 0xff;
+    const sub = (status.custom_mode >>> 24) & 0xff;
+    if (main === 4) {
+      const autoModes: Record<number, string> = {
+        1: '自动待命', 2: '起飞', 3: '盘旋', 4: '任务', 5: '返航',
+        6: '降落', 7: '返场', 8: '跟随', 9: '精准降落',
+      };
+      return autoModes[sub] || `自动(${sub})`;
+    }
+    const modes: Record<number, string> = {
+      1: '手动', 2: '高度', 3: '位置', 5: '特技', 6: 'Offboard',
+      7: '增稳', 8: 'Rattitude',
+    };
+    return modes[main] || `PX4(${main})`;
+  }
+  return status.base_mode & 1 ? `自定义(${status.custom_mode})` :
+    status.base_mode & 4 ? '自动' : status.base_mode & 8 ? '引导' : '手动';
+}
+
+// These IDs are unique in the PX4 board configurations used by this project.
+// Other IDs can be shared by different boards and must remain unidentified.
+const PX4_BOARD_MODELS: Record<number, string> = {
+  0x0033: 'PX4 FMU v5X 系列',
+  0x0035: 'PX4 FMU v6X 系列',
+  0x0039: 'ARK FMU v6X',
+  0x003a: 'ARK Pi6X',
+  0x004e: 'Holybro Pix32 v5',
+  0x1012: 'CubePilot Cube Yellow',
+  0x1013: 'Matek H743 Slim',
+  0x1016: 'CubePilot Cube Orange',
+  0x1017: 'mRo Pixracer Pro',
+  0x1022: 'mRo Control Zero Classic',
+  0x1023: 'mRo Control Zero H7',
+  0x1024: 'mRo Control Zero H7 OEM',
+  0x1058: 'CubePilot Cube Orange+',
+};
+
+function flightControllerModel(status: FlightControllerStatus): string {
+  if (status.status_stale) return '--';
+  const model = status.heartbeat_alive ? status.model_name?.trim() : '';
+  if (model) {
+    const vendor = status.vendor_name?.trim();
+    return vendor && !model.toLowerCase().includes(vendor.toLowerCase()) ? `${vendor} ${model}` : model;
+  }
+  const usbProduct = status.usb_connected ? status.usb_product?.trim() : '';
+  if (usbProduct && !/^(PX4|ArduPilot|CDC ACM Serial|USB Serial|USB CDC|NuttX CDC\/ACM)$/i.test(usbProduct)) return usbProduct;
+  if (status.autopilot === 12 && status.board_id_available && status.board_id != null) {
+    const boardModel = PX4_BOARD_MODELS[status.board_id];
+    return boardModel ? `${boardModel}（Board ID 推断）` : '未识别';
+  }
+  return '未识别';
+}
+
+function flightControllerUsbId(status: FlightControllerStatus): string {
+  if (status.status_stale || !status.usb_connected || !status.usb_info_available ||
+      status.usb_vendor_id == null || status.usb_product_id == null) return '--';
+  return `${status.usb_vendor_id.toString(16).toUpperCase().padStart(4, '0')}:${status.usb_product_id.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
+function flightControllerFirmware(autopilot: number): string {
+  if (autopilot === 12) return 'PX4';
+  if (autopilot === 3) return 'ArduPilot';
+  return `MAVLink 类型 ${autopilot}`;
 }
 
 function readVariableCache(key: string): string[] {
@@ -241,12 +311,18 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [connected, setConnected] = useState(false);
   const [cpuLoad, setCpuLoad] = useState<number | null>(null);
   const [cpuCores, setCpuCores] = useState<number[]>([]);
+  const [flightController, setFlightController] = useState<FlightControllerStatus | null>(null);
+  const [flightControllerPopupOpen, setFlightControllerPopupOpen] = useState(false);
+  const flightControllerRef = useRef<HTMLDivElement>(null);
   const [healthFresh, setHealthFresh] = useState(false);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
   const [fdmIsWindow, setFdmIsWindow] = useState(false);
+  const [fdmDetails, setFdmDetails] = useState<FdmWindowStats | null>(null);
+  const fdmSampleKeyRef = useRef<string | null>(null);
+  const fdmSampleSourceRef = useRef<string | null>(null);
   const [simulationDt, setSimulationDt] = useState<number | null>(null);
-  const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number; peak: number }[]>([]);
+  const [fdmHistory, setFdmHistory] = useState<{ at: number; value: number; peak: number; samples: number }[]>([]);
   const [performancePopupOpen, setPerformancePopupOpen] = useState(false);
   const [hiddenPerformanceSeries, setHiddenPerformanceSeries] = useState<Record<string, boolean>>({});
   const togglePerformanceSeries = (series: string) => {
@@ -366,6 +442,10 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         ? status.cpuCores.map((value: unknown) => Number(value)).filter(Number.isFinite)
         : [];
       setCpuCores(cores);
+      // A short loss of the desktop transport must not erase the board's
+      // independently reported flight-controller state. The backend marks a
+      // cached record stale once it has genuinely aged out.
+      setFlightController(status.flightController || null);
       const fresh = !!status.connected && typeof status.healthAgeMs === 'number' &&
         status.healthAgeMs <= 1500;
       setHealthFresh(fresh);
@@ -422,16 +502,30 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         percent: Number(remoteMemory.percent) || 0,
       } : null);
       const window = status.fdmWindow;
-      const hasWindow = !!window && Number.isFinite(window.averageMs) && Number.isFinite(window.maxMs);
+      const hasWindow = !!window && window.samples > 0 && Number.isFinite(window.averageMs) && Number.isFinite(window.maxMs);
       const remoteFdmRunMs = hasWindow ? window!.averageMs
         : typeof status.fdmRunMs === 'number' ? status.fdmRunMs : null;
       const peak = hasWindow ? window!.maxMs : remoteFdmRunMs;
-      setFdmIsWindow(hasWindow);
+      setFdmDetails(fresh && status.state === 'running' && hasWindow ? window! : null);
+      const sampleSource = `${status.model || ''}:${hasWindow ? 'window' : 'sample'}`;
+      if (!fresh || status.state !== 'running') {
+        fdmSampleKeyRef.current = null;
+      } else {
+        setFdmIsWindow(hasWindow);
+        if (sampleSource !== fdmSampleSourceRef.current) {
+          fdmSampleKeyRef.current = null;
+          setFdmHistory([]);
+        }
+        fdmSampleSourceRef.current = sampleSource;
+      }
       if (remoteFdmRunMs != null && Number.isFinite(remoteFdmRunMs) && remoteFdmRunMs >= 0) {
         setFdmRunMs(remoteFdmRunMs);
-        if (status.connected && status.state === 'running' && !launchInProgressRef.current) {
+        const sampleKey = hasWindow && window!.sequence != null ? `${sampleSource}:${window!.sequence}` : null;
+        if (fresh && status.state === 'running' && !launchInProgressRef.current &&
+            (sampleKey === null || sampleKey !== fdmSampleKeyRef.current)) {
+          fdmSampleKeyRef.current = sampleKey;
           const now = Date.now();
-          setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs, peak: peak ?? remoteFdmRunMs }]
+          setFdmHistory(history => [...history, { at: now, value: remoteFdmRunMs, peak: peak ?? remoteFdmRunMs, samples: hasWindow ? window!.samples : 1 }]
             .filter(sample => now - sample.at <= MAX_PERFORMANCE_PERIOD_SECONDS * 4 * 1000));
         }
       }
@@ -544,6 +638,24 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
+
+  useEffect(() => {
+    if (!flightControllerPopupOpen) return;
+    const onDown = (event: PointerEvent) => {
+      if (!flightControllerRef.current?.contains(event.target as Node)) {
+        setFlightControllerPopupOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFlightControllerPopupOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [flightControllerPopupOpen]);
 
   const runBusy = parentLoading || loading ||
     (external && connected && remoteState === 'loading');
@@ -875,9 +987,14 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     Math.ceil(Math.max(0, ...cpuVisibleHistory.flatMap(sample => sample.values)) * 1.1 / 5) * 5));
   const fdmChartMax = Math.max(0.1, ...fdmVisibleHistory.map(sample => sample.peak)) * 1.1;
   const fdmValues = fdmVisibleHistory.map(sample => sample.value);
-  const fdmAverage = fdmValues.length ? fdmValues.reduce((sum, value) => sum + value, 0) / fdmValues.length : 0;
+  const fdmSampleCount = fdmVisibleHistory.reduce((sum, sample) => sum + sample.samples, 0);
+  const fdmAverage = fdmSampleCount ? fdmVisibleHistory.reduce((sum, sample) => sum + sample.value * sample.samples, 0) / fdmSampleCount : 0;
   const fdmMaximum = fdmVisibleHistory.length ? Math.max(...fdmVisibleHistory.map(sample => sample.peak)) : 0;
   const fdmMinimum = fdmValues.length ? Math.min(...fdmValues) : 0;
+  const fdmCurveLabel = fdmIsWindow ? 'FDM 窗口均值' : 'FDM 周期采样';
+  const fdmCurveDescription = fdmIsWindow
+    ? '板端统计窗口内的周期平均耗时，包含输入、输出等待'
+    : '板端每次上报最近一个周期的耗时，包含输入、输出等待；下方统计覆盖收到的样本';
   const chartX = (at: number) => 35 + (1 - Math.min(fdmWindow * 1000, Math.max(0, chartNow - at)) / (fdmWindow * 1000)) * 290;
   const cpuChartPoints = cpuCores.map((_, core) => cpuVisibleHistory.map(sample => {
     const x = chartX(sample.at);
@@ -924,9 +1041,15 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   };
 
   useEffect(() => {
-    if (showRuntimeStatus) return;
+    if (showRuntimeStatus && external) return;
     setPerformancePopupOpen(false);
-  }, [showRuntimeStatus]);
+    setFlightControllerPopupOpen(false);
+  }, [showRuntimeStatus, external]);
+
+  const flightConnection = !flightController || flightController.status_stale
+    ? '待更新' : flightController.usb_connected ? '已连接' : '未连接';
+  const flightConnectionClass = !flightController || flightController.status_stale
+    ? 'stale' : flightController.usb_connected ? 'online' : 'offline';
 
   return (
     <div className="sim-menu-wrap" ref={wrapRef}>
@@ -974,6 +1097,51 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             </button>}
         </span>
       )}
+      {showRuntimeStatus && external && (
+        <div className="sim-flight-controller-anchor" ref={flightControllerRef}>
+          <button type="button" className={`sim-flight-controller ${flightConnectionClass}`}
+            aria-label={`飞控 USB ${flightConnection}，点击查看详情`}
+            aria-expanded={flightControllerPopupOpen} aria-controls="sim-flight-controller-popover"
+            onClick={() => {
+              setPerformancePopupOpen(false);
+              setFlightControllerPopupOpen(value => !value);
+            }}>
+            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <rect x="4.5" y="4.5" width="11" height="11" rx="2" />
+              <path d="M7 1.5v3m6-3v3M7 15.5v3m6-3v3m-11.5-11h3m-3 8h3m11-8h3m-3 8h3" />
+              <circle cx="10" cy="10" r="2" />
+            </svg>
+            <span>USB {flightConnection}</span>
+          </button>
+          {flightControllerPopupOpen && (
+            <div id="sim-flight-controller-popover" className="sim-flight-controller-popover" role="region" aria-label="飞控详细状态">
+              <div className="sim-flight-controller-popover-head">
+                <strong>飞控信息</strong>
+                <button type="button" aria-label="关闭飞控信息" onClick={() => setFlightControllerPopupOpen(false)}>×</button>
+              </div>
+              {!flightController && <p>等待仿真机上报飞控状态</p>}
+              {flightController && <>
+                {flightController.status_stale && <p>状态上报已中断 {((flightController.status_age_ms ?? 0) / 1000).toFixed(1)} 秒，等待更新</p>}
+                <dl>
+                  <dt>飞控型号</dt><dd>{flightControllerModel(flightController)}</dd>
+                  <dt>Board ID</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale && flightController.board_id_available && flightController.board_id != null ? `0x${flightController.board_id.toString(16).toUpperCase().padStart(4, '0')} (${flightController.board_id})` : '--'}</dd>
+                  <dt>USB 产品名</dt><dd>{(!flightController.status_stale && flightController.usb_connected && flightController.usb_product?.trim()) || '--'}</dd>
+                  <dt>USB VID:PID</dt><dd>{flightControllerUsbId(flightController)}</dd>
+                  <dt>设备路径</dt><dd>{(!flightController.status_stale && flightController.usb_connected && flightController.device_path?.trim()) || '--'}</dd>
+                  <dt>飞控固件</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale ? flightControllerFirmware(flightController.autopilot) : '--'}</dd>
+                  <dt>USB 连接</dt><dd>{flightController.status_stale ? '待更新' : flightController.usb_connected ? '已连接' : '未连接'}</dd>
+                  <dt>心跳</dt><dd>{flightController.status_stale ? '待更新' : flightController.heartbeat_alive ? '在线' : '离线'}</dd>
+                  <dt>已接收心跳</dt><dd>{flightController.heartbeat_count} 包</dd>
+                  <dt>最近心跳</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale ? `${flightController.heartbeat_age_ms} ms 前` : '--'}</dd>
+                  <dt>HIL_ACTUATOR_CONTROLS</dt><dd>{!flightController.status_stale && flightController.actuator_rate_available && Number.isFinite(flightController.actuator_rate_hz) ? `${flightController.actuator_rate_hz!.toFixed(1)} Hz` : '--'}</dd>
+                  <dt>解锁状态</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale ? (flightController.armed ? '已解锁' : '未解锁') : '未知'}</dd>
+                  <dt>模式</dt><dd>{flightMode(flightController)}</dd>
+                </dl>
+              </>}
+            </div>
+          )}
+        </div>
+      )}
       {showRuntimeStatus && external && performancePopupOpen && (
         <div id="sim-performance-popup" className="sim-performance-popup" role="region" aria-label="性能曲线">
           <div className="sim-performance-head">
@@ -993,12 +1161,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
               <i aria-hidden="true" />CPU{core} <b>{healthFresh ? `${value.toFixed(1)}%` : '--'}</b>
             </button>)}
             {!fdmLoading && fdmRunMs != null && <>
-              <button type="button" className="sim-performance-series fdm-mean" aria-label="FDM 均值曲线"
-                aria-pressed={!hiddenPerformanceSeries['fdm-mean']} title={`${hiddenPerformanceSeries['fdm-mean'] ? '显示' : '隐藏'} FDM 均值曲线`}
-                onClick={() => togglePerformanceSeries('fdm-mean')}><i aria-hidden="true" />FDM 均值</button>
-              <button type="button" className="sim-performance-series fdm-peak" aria-label="FDM 峰值曲线"
+              <button type="button" className="sim-performance-series fdm-mean" aria-label={`${fdmCurveLabel}曲线`}
+                aria-pressed={!hiddenPerformanceSeries['fdm-mean']} title={fdmCurveDescription}
+                onClick={() => togglePerformanceSeries('fdm-mean')}><i aria-hidden="true" />{fdmCurveLabel}</button>
+              {fdmIsWindow && <button type="button" className="sim-performance-series fdm-peak" aria-label="FDM 峰值曲线"
                 aria-pressed={!hiddenPerformanceSeries['fdm-peak']} title={`${hiddenPerformanceSeries['fdm-peak'] ? '显示' : '隐藏'} FDM 峰值曲线`}
-                onClick={() => togglePerformanceSeries('fdm-peak')}><i aria-hidden="true" />峰值</button>
+                onClick={() => togglePerformanceSeries('fdm-peak')}><i aria-hidden="true" />峰值</button>}
             </>}
           </div>
           <div className="sim-performance-network-row" aria-label="板端网口实时速率">
@@ -1037,7 +1205,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             {cpuChartPoints.map((points, core) => !hiddenPerformanceSeries[`cpu-${core}`] && <polyline key={core} points={points} className={`sim-performance-line core-${core}`} />)}
             {!fdmLoading && <>
               {!hiddenPerformanceSeries['fdm-mean'] && <polyline points={fdmChartPoints} className="sim-performance-line fdm-mean" />}
-              {!hiddenPerformanceSeries['fdm-peak'] && <polyline points={fdmPeakPoints} className="sim-performance-line fdm-peak" />}
+              {fdmIsWindow && !hiddenPerformanceSeries['fdm-peak'] && <polyline points={fdmPeakPoints} className="sim-performance-line fdm-peak" />}
             </>}
             <text x="35" y="145">-{fdmWindow}s</text><text x="325" y="145" textAnchor="end">现在</text>
           </svg>
@@ -1058,9 +1226,18 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
             <text x="35" y="123">-{fdmWindow}s</text><text x="325" y="123" textAnchor="end">现在</text>
           </svg>
           {!fdmLoading && fdmVisibleHistory.length > 0 && <div className="sim-performance-stats">
-            <span>FDM 平均 <b>{fdmAverage.toFixed(3)} ms</b></span>
-            <span>最大 <b>{fdmMaximum.toFixed(3)} ms</b></span>
-            <span>最低均值 <b>{fdmMinimum.toFixed(3)} ms</b></span>
+            <span>{fdmIsWindow ? '周期均值' : '采样均值'} <b>{fdmAverage.toFixed(3)} ms</b></span>
+            <span>{fdmIsWindow ? '最大' : '采样最大'} <b>{fdmMaximum.toFixed(3)} ms</b></span>
+            <span>{fdmIsWindow ? '最低均值' : '采样最小'} <b>{fdmMinimum.toFixed(3)} ms</b></span>
+          </div>}
+          {!fdmLoading && fdmDetails && fdmDetails.coreMs != null && <div className="sim-performance-stats"
+            title="最近统计窗口的每周期平均耗时；计算和 I/O 含调度等待，日志采样为读取变量耗时。超时按含遥测、日志入队的周期总工作时间超过目标周期统计。">
+            <span>计算 <b>{fdmDetails.coreMs.toFixed(3)} ms</b></span>
+            <span>I/O <b>{fdmDetails.ioMs?.toFixed(3) ?? '--'} ms</b></span>
+            <span>日志采样 <b>{fdmDetails.captureMs?.toFixed(3) ?? '--'} ms</b></span>
+            <span>目标周期 <b>{fdmDetails.periodMs?.toFixed(2) ?? '--'} ms</b></span>
+            <span>实时倍率 <b>{fdmDetails.realtimeFactor?.toFixed(2) ?? '--'}×</b></span>
+            <span>超时周期 <b>{fdmDetails.overruns ?? '--'}/{fdmDetails.samples}</b></span>
           </div>}
         </div>
       )}

@@ -55,6 +55,9 @@ const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(8);
 
 static REQUEST_ID: OnceLock<AtomicU32> = OnceLock::new();
 static USB_ACCESS: UsbAccess = UsbAccess::new();
+// EP3 responses have no independent reader. Keep one file request in flight
+// even when a slow NSH command releases the interface for EP2 telemetry.
+static FILE_ACCESS: Mutex<()> = Mutex::new(());
 
 // std::sync::Mutex does not guarantee fairness: a continuous telemetry reader
 // can reacquire it ahead of a sleeping file writer indefinitely. Announce
@@ -237,12 +240,12 @@ fn take_file_response(buffer: &mut Vec<u8>, opcode: u16, request_id: u32) -> Res
     }
 }
 
-fn read_file_response(
+fn poll_file_response(
     handle: &DeviceHandle<Context>,
     opcode: u16,
     request_id: u32,
     timeout: Duration,
-) -> Result<Response, String> {
+) -> Result<Option<Response>, String> {
     let mut buffer = FILE_RX.lock().map_err(|_| "USB file receive buffer lock poisoned")?;
     let deadline = std::time::Instant::now() + timeout;
     // Always read multiples of the endpoint's 512-byte packet size. Reading
@@ -252,34 +255,44 @@ fn read_file_response(
     let mut packet = [0u8; 512];
     loop {
         if let Some(response) = take_file_response(&mut buffer, opcode, request_id)? {
-            return Ok(response);
+            return Ok(Some(response));
         }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         // libusb interprets a zero millisecond timeout as infinite.
         if remaining.as_millis() == 0 {
-            return Err(format!("USB file response timed out (opcode={opcode}, request={request_id}, buffered={} bytes)", buffer.len()));
+            return Ok(None);
         }
         match handle.read_bulk(FILE_IN, &mut packet, remaining) {
             Ok(count) => buffer.extend_from_slice(&packet[..count]),
-            Err(rusb::Error::Timeout) => return Err(format!("USB file response timed out (opcode={opcode}, request={request_id}, buffered={} bytes)", buffer.len())),
+            Err(rusb::Error::Timeout) => return Ok(None),
             Err(error) => return Err(format!("USB bulk read failed (opcode={opcode}): {error}")),
         }
     }
 }
 
-fn transaction_locked_with_timeout(
+fn read_file_response(
+    handle: &DeviceHandle<Context>, opcode: u16, request_id: u32,
+    timeout: Duration,
+) -> Result<Response, String> {
+    poll_file_response(handle, opcode, request_id, timeout)?.ok_or_else(|| {
+        let buffered = FILE_RX.lock().map(|buffer| buffer.len()).unwrap_or(0);
+        format!("USB file response timed out (opcode={opcode}, request={request_id}, buffered={buffered} bytes)")
+    })
+}
+
+fn write_file_request(
     handle: &DeviceHandle<Context>,
     opcode: u16,
     status: i32,
     offset: u64,
     payload: &[u8],
+    request_id: u32,
     timeout: Duration,
-) -> Result<Response, String> {
+) -> Result<(), String> {
     if payload.len() > MAX_PAYLOAD {
         return Err(format!("USB payload exceeds {MAX_PAYLOAD} bytes"));
     }
 
-    let request_id = next_request_id();
     let mut header = [0u8; HEADER_SIZE];
     header[0..4].copy_from_slice(&MAGIC.to_le_bytes());
     header[4..6].copy_from_slice(&VERSION.to_le_bytes());
@@ -294,7 +307,15 @@ fn transaction_locked_with_timeout(
     if !payload.is_empty() {
         write_exact(handle, payload, timeout)?;
     }
+    Ok(())
+}
 
+fn transaction_locked_with_timeout(
+    handle: &DeviceHandle<Context>, opcode: u16, status: i32, offset: u64,
+    payload: &[u8], timeout: Duration,
+) -> Result<Response, String> {
+    let request_id = next_request_id();
+    write_file_request(handle, opcode, status, offset, payload, request_id, timeout)?;
     let response = read_file_response(handle, opcode, request_id, timeout)?;
     if response.status < 0 {
         return Err(format!("board file operation failed: errno {}", -response.status));
@@ -310,14 +331,18 @@ fn transaction_locked(
 }
 
 fn with_device<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
+    let _file_guard = FILE_ACCESS.lock().map_err(|_| "USB file request lock poisoned")?;
     let _guard = USB_ACCESS.acquire(TIMEOUT)?;
     let handle = open()?;
     operation(&handle)
 }
 
-/* Used only by Auto-mode library discovery.  Leave the receiver one short
- * read interval to release EP2, but never queue behind it for seconds. */
+/* Best-effort EP3 operations (Auto discovery and console polling). Leave
+ * EP2 a short read interval, but never queue behind another file request.
+ * Simulation control must NOT use this helper: FILE_ACCESS serializes
+ * EP3 replies, and has no relationship to EP2 control frames. */
 fn with_device_quick<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
+    let _file_guard = FILE_ACCESS.try_lock().map_err(|_| "USB file transport is busy")?;
     let _guard = USB_ACCESS.acquire(AUTO_LOCK_WAIT)?;
     let handle = open()?;
     operation(&handle)
@@ -349,12 +374,32 @@ pub fn nsh_execute(command: &str) -> Result<String, String> {
     if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
         return Err("NSH command must be one non-empty line of at most 512 bytes".into());
     }
-    with_device(|handle| {
-        let response = transaction_locked_with_timeout(
-            handle, NSH_EXEC, 0, 0, command.as_bytes(), NSH_EXEC_TIMEOUT,
-        )?;
-        Ok(String::from_utf8_lossy(&response.payload).into_owned())
-    })
+    let _file_guard = FILE_ACCESS.lock().map_err(|_| "USB file request lock poisoned")?;
+    let request_id = next_request_id();
+    {
+        let _guard = USB_ACCESS.acquire(TIMEOUT)?;
+        let handle = open()?;
+        write_file_request(&handle, NSH_EXEC, 0, 0, command.as_bytes(), request_id, TIMEOUT)?;
+    }
+    let deadline = std::time::Instant::now() + NSH_EXEC_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("USB file response timed out (opcode={NSH_EXEC}, request={request_id})"));
+        }
+        let response = {
+            let _guard = USB_ACCESS.acquire(TIMEOUT)?;
+            let handle = open()?;
+            poll_file_response(&handle, NSH_EXEC, request_id, remaining.min(SIM_READ_TIMEOUT))?
+        };
+        if let Some(response) = response {
+            if response.status < 0 {
+                return Err(format!("board file operation failed: errno {}", -response.status));
+            }
+            return Ok(String::from_utf8_lossy(&response.payload).into_owned());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[derive(Serialize)]
@@ -907,23 +952,40 @@ pub fn apply_firmware_with_progress(
     })
 }
 
-/// Send a simulation control frame, including the periodic heartbeat.  Wait
-/// only for the receiver's short read window to release the shared USB lock.
-pub fn sim_write_control(payload: &[u8]) -> Result<(), String> {
+// Serialize only physical interface access, independent of an outstanding
+// EP3 file/NSH response. The callback also lets contention tests exercise the
+// actual framing and send-once path without claiming a connected board.
+fn sim_write_control_with(
+    access: &UsbAccess,
+    payload: &[u8],
+    write: impl FnOnce(&[u8], Duration) -> Result<usize, String>,
+) -> Result<(), String> {
     if payload.len() > 4096 {
         return Err("simulation USB record is too large".into());
     }
-    with_device_quick(|handle| {
-        let mut frame = Vec::with_capacity(payload.len() + 8);
-        frame.extend_from_slice(b"SIM1");
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(payload);
-        let count = handle.write_bulk(SIM_OUT, &frame, SIM_TIMEOUT)
-            .map_err(|error| format!("simulation USB write failed: {error}"))?;
-        if count != frame.len() {
-            return Err(format!("short simulation USB write: {count}/{}", frame.len()));
-        }
-        Ok(())
+    // A user action can wait through a 300 ms console read. Keep the 1 Hz
+    // heartbeat bounded separately so a busy interface cannot stall it for
+    // seconds. No operation is queued to execute after its wait expires.
+    let lock_wait = if payload == b"VCMD\x07" { SIM_TIMEOUT } else { TIMEOUT };
+    let _guard = access.acquire(lock_wait)?;
+    let mut frame = Vec::with_capacity(payload.len() + 8);
+    frame.extend_from_slice(b"SIM1");
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    let count = write(&frame, SIM_TIMEOUT)?;
+    if count != frame.len() {
+        return Err(format!("short simulation USB write: {count}/{}", frame.len()));
+    }
+    Ok(())
+}
+
+/// EP2 controls wait for interface ownership, never for the EP3 file lock.
+/// A write error/short write is returned without replaying the command.
+pub fn sim_write_control(payload: &[u8]) -> Result<(), String> {
+    sim_write_control_with(&USB_ACCESS, payload, |frame, timeout| {
+        let handle = open()?;
+        handle.write_bulk(SIM_OUT, frame, timeout)
+            .map_err(|error| format!("simulation USB write failed: {error}"))
     })
 }
 
@@ -1046,6 +1108,88 @@ pub fn simulation_self_test() -> Result<String, String> {
 #[cfg(test)]
 mod response_tests {
     use super::*;
+
+    #[test]
+    fn startup_controls_and_heartbeat_do_not_take_the_file_response_lock() {
+        // Reproduce an NSH/MCAP preview still owning EP3 while it yields the
+        // interface for EP2. The old quick-file path failed immediately here.
+        let _file_request = FILE_ACCESS.lock().unwrap();
+        let access = UsbAccess::new();
+        for payload in [b"VCMD\x09clock".as_slice(), b"VCMD\x05H7_USB", b"VCMD\x01", b"VCMD\x07"] {
+            let mut writes = 0;
+            sim_write_control_with(&access, payload, |frame, timeout| {
+                writes += 1;
+                assert!(matches!(FILE_ACCESS.try_lock(), Err(TryLockError::WouldBlock)));
+                assert!(matches!(access.lock.try_lock(), Err(TryLockError::WouldBlock)));
+                assert_eq!(&frame[..4], b"SIM1");
+                assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()) as usize, payload.len());
+                assert_eq!(&frame[8..], payload);
+                assert_eq!(timeout, SIM_TIMEOUT);
+                Ok(frame.len())
+            }).unwrap();
+            assert_eq!(writes, 1);
+        }
+    }
+
+    #[test]
+    fn startup_waits_through_a_console_read_and_sends_once() {
+        use std::sync::Arc;
+        let access = Arc::new(UsbAccess::new());
+        let console = access.acquire(TIMEOUT).unwrap();
+        let sender_access = Arc::clone(&access);
+        let writes = Arc::new(AtomicUsize::new(0));
+        let sender_writes = Arc::clone(&writes);
+        let sender = std::thread::spawn(move || {
+            sim_write_control_with(&sender_access, b"VCMD\x05H7_USB", |frame, _| {
+                sender_writes.fetch_add(1, Ordering::SeqCst);
+                Ok(frame.len())
+            })
+        });
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while access.waiting.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        std::thread::sleep(AUTO_FILE_TIMEOUT);
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        drop(console);
+        sender.join().unwrap().unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert!(access.telemetry().is_ok());
+    }
+
+    #[test]
+    fn expired_heartbeat_does_not_send_after_interface_becomes_free() {
+        let access = UsbAccess::new();
+        let active = access.acquire(TIMEOUT).unwrap();
+        let started = std::time::Instant::now();
+        let mut writes = 0;
+        let error = sim_write_control_with(&access, b"VCMD\x07", |frame, _| {
+            writes += 1; Ok(frame.len())
+        }).unwrap_err();
+        assert!(error.contains("lock wait timed out"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(active);
+        assert_eq!(writes, 0);
+        assert_eq!(access.waiting.load(Ordering::SeqCst), 0);
+        assert!(access.telemetry().is_ok());
+    }
+
+    #[test]
+    fn control_write_failure_is_not_replayed() {
+        let access = UsbAccess::new();
+        for short in [false, true] {
+            let mut writes = 0;
+            let result = sim_write_control_with(&access, b"VCMD\x05H7_USB", |frame, _| {
+                writes += 1;
+                if short { Ok(frame.len()-1) } else { Err("injected USB write failure".into()) }
+            });
+            assert!(result.is_err());
+            assert_eq!(writes, 1);
+            assert!(access.telemetry().is_ok());
+        }
+        assert!(sim_write_control_with(&access, &[0;4097], |_, _| panic!("oversized frame sent")).is_err());
+    }
 
     #[test]
     fn file_request_gets_the_usb_channel_during_continuous_telemetry() {
@@ -1223,6 +1367,52 @@ mod response_tests {
         let mut noise = vec![b'x'; 16896];
         assert!(take_file_response(&mut noise, PING, 9).unwrap().is_none());
         assert_eq!(noise.len(), 3);
+    }
+
+    #[test]
+    #[ignore = "requires the real board, an existing completed MCAP log and active USB telemetry"]
+    fn live_mcap_preview_keeps_usb_telemetry_alive() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::time::Instant;
+
+        let file = list("LOG").unwrap().into_iter().find_map(|entry| {
+            let folder = if entry.directory { format!("LOG/{}", entry.name) } else { "LOG".into() };
+            let entries = if entry.directory { list(&folder).ok()? } else { vec![entry] };
+            entries.into_iter().find(|item| !item.directory && item.name.ends_with(".mcap"))
+                .map(|item| format!("{folder}/{}", item.name).trim_start_matches("LOG/").to_owned())
+        }).expect("board has no completed MCAP log");
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(Mutex::new(Vec::<Instant>::new()));
+        let receiver_stop = Arc::clone(&stop);
+        let receiver_seen = Arc::clone(&seen);
+        let receiver = std::thread::spawn(move || {
+            while !receiver_stop.load(Ordering::Relaxed) {
+                if matches!(sim_read(), Ok(Some(_))) {
+                    receiver_seen.lock().unwrap().push(Instant::now());
+                } else {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        });
+        let warmup = Instant::now() + Duration::from_secs(5);
+        while seen.lock().unwrap().is_empty() && Instant::now() < warmup {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!seen.lock().unwrap().is_empty(), "board is not sending USB telemetry");
+        let start = Instant::now();
+        let output = nsh_execute(&format!("jsbsim --mcap-info {file}")).unwrap();
+        let end = Instant::now();
+        std::thread::sleep(Duration::from_millis(300));
+        stop.store(true, Ordering::Relaxed);
+        receiver.join().unwrap();
+        assert!(output.contains("MCAP_INFO:"), "unexpected MCAP result: {output}");
+        let samples = seen.lock().unwrap();
+        let during: Vec<_> = samples.iter().filter(|time| **time >= start && **time <= end).collect();
+        assert!(!during.is_empty(), "USB telemetry stopped during MCAP preview");
+        let largest_gap = samples.windows(2).filter(|pair| pair[0] <= end && pair[1] >= start)
+            .map(|pair| pair[1].duration_since(pair[0])).max().unwrap_or_default();
+        println!("MCAP {file}: preview {:?}, {} telemetry packets during, largest gap {:?}", end - start, during.len(), largest_gap);
+        assert!(largest_gap < Duration::from_secs(2), "USB telemetry gap reached disconnect timeout");
     }
 
     #[test]

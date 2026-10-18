@@ -95,6 +95,12 @@ try {
   await until(open);
   await evaluate(`${open}.click()`);
   await until(`document.querySelector('.sim-config-dialog footer').textContent.includes('Current configuration')`);
+  const performanceTab = `[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'Performance & Safety')`;
+  const usbDebug = `[...document.querySelectorAll('.sim-config-check')].find(el => el.textContent.includes('USB debug prints'))?.querySelector('input')`;
+  await evaluate(`${performanceTab}.click()`);
+  await until(usbDebug);
+  assert.equal(await evaluate(`${usbDebug}.checked`), false, 'old configurations default to quiet USB diagnostics');
+  await evaluate(`${usbDebug}.click()`);
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'MCAP Logging').click()`);
   const rate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('High-rate field frequency'))?.querySelector('input')`;
   await until(`${rate}.value === '500'`);
@@ -122,6 +128,7 @@ try {
   await until(`${save}.textContent === 'Save to Simulator'`);
   assert.equal(await evaluate(`${save}.disabled`), true);
   assert.equal(await evaluate('JSON.parse(window.__stored).mcap.rateHz'), 400);
+  assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), true);
   assert.match(await evaluate(`document.querySelector('.sim-config-dialog footer').textContent`), /Saved and verified/);
   const shot = await send('Page.captureScreenshot', {format:'png'});
   await writeFile('/tmp/jsbsim-config-save-ui.png', Buffer.from(shot.data, 'base64'));
@@ -131,7 +138,17 @@ try {
   await until(`document.querySelector('.sim-config-dialog')`);
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'MCAP Logging').click()`);
   await until(`${rate}.value === '400'`);
-  console.log('PASS: save progress, timeout recovery, retained edits, retry and reopen. Desktop IPC mocked.');
+  await evaluate(`${performanceTab}.click()`);
+  await until(`${usbDebug}.checked === true`);
+  await evaluate(`${usbDebug}.click()`);
+  await evaluate(`${save}.click()`);
+  await until('window.__uploads.length === 3');
+  await evaluate('window.__saveSuccess()');
+  await until(`${save}.disabled && ${save}.textContent === 'Save to Simulator'`);
+  assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), false);
+  const usbShot = await send('Page.captureScreenshot', {format:'png'});
+  await writeFile('/tmp/jsbsim-usb-debug-config.png', Buffer.from(usbShot.data, 'base64'));
+  console.log('PASS: save progress, timeout recovery, retained edits, retry, reopen, USB debug default off and on/off persistence. Desktop IPC mocked.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));
