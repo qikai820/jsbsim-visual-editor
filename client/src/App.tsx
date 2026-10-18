@@ -285,7 +285,8 @@ function AppContent() {
         return;
       }
       if (previous) {
-        const mainFile = `${state.aircraft.name || 'aircraft'}.xml`;
+        const mainFile = (state.xmlFiles || []).find(file => file.category === 'main')?.path ||
+          `${state.aircraft.name || 'aircraft'}.xml`;
         const files = new Set<string>();
         if (JSON.stringify(previous.aircraft) !== JSON.stringify(next.aircraft) || JSON.stringify(previous.edges) !== JSON.stringify(next.edges)) files.add(mainFile);
         const previousNodes = new Map((previous.nodes || []).map((node: any) => [node.id, node]));

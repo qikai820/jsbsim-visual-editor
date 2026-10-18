@@ -326,9 +326,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const changesXml = changedKeys.some(key => key !== 'layout');
     const topLevelIo = ['input', 'output', 'uavcan'].includes(node.data.componentType);
     const xmlFiles = changesXml && (sourcePath || topLevelIo)
-      ? state.xmlFiles.map(file => sourcePath
-        ? (file.path === sourcePath ? { ...file, dirty: true } : file)
-        : (file.category === 'main' ? { ...file, dirty: true } : file))
+      ? state.xmlFiles.map(file => topLevelIo
+        ? (file.category === 'main' ? { ...file, dirty: true } : file)
+        : (file.path === sourcePath ? { ...file, dirty: true } : file))
       : state.xmlFiles;
     set({ nodes: nextNodes, xmlFiles });
   },

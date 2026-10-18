@@ -114,7 +114,7 @@ html, body, #root {
 .mcap-variable-list label { display: flex; gap: 7px; align-items: center; min-height: 24px; padding: 2px 3px; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #445866; }
 .mcap-variable-list label:hover { background: #edf7fc; }
 .mcap-variable-empty { display: block; padding: 10px 3px; color: #8294a2; font-size: 11px; }
-.toolbar-center { margin-right: auto; }
+.toolbar-center { margin-right: auto; gap: 6px; }
 
 .toolbar-title {
   font-size: 15px; font-weight: 700; color: var(--accent);
@@ -139,24 +139,24 @@ html, body, #root {
 .toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Scope the common sizing to the top row, leaving dropdown items independent. */
-.toolbar-left > button,
-.toolbar-left > .file-menu-anchor > .file-menu-trigger {
+.toolbar-center > button,
+.toolbar-center > .file-menu-anchor > .file-menu-trigger {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  height: var(--toolbar-control-height); padding: 0 11px;
+  height: var(--toolbar-control-height); padding: 0 10px;
   border: 1px solid #dbe3ec; border-radius: var(--toolbar-control-radius);
   background: #f8fafc; color: #405166;
   font-size: 12px; line-height: 16px; font-weight: 500;
   box-shadow: 0 1px 2px rgba(31, 52, 68, .035);
 }
-.toolbar-left > button:hover:not(:disabled),
-.toolbar-left > .file-menu-anchor > .file-menu-trigger:hover:not(:disabled),
-.toolbar-left > .file-menu-anchor > .file-menu-trigger.active {
+.toolbar-center > button:hover:not(:disabled),
+.toolbar-center > .file-menu-anchor > .file-menu-trigger:hover:not(:disabled),
+.toolbar-center > .file-menu-anchor > .file-menu-trigger.active {
   border-color: #b9d1e8; background: #edf5fd; color: #245e96;
 }
-.toolbar-left > button:focus-visible,
-.toolbar-left > .file-menu-anchor > .file-menu-trigger:focus-visible,
+.toolbar-center > button:focus-visible,
+.toolbar-center > .file-menu-anchor > .file-menu-trigger:focus-visible,
 .toolbar .sim-split-trigger button:focus-visible,
-.toolbar .sim-metric-button:focus-visible {
+.toolbar .sim-runtime-metrics:focus-visible {
   outline: 2px solid #60a5fa; outline-offset: 2px;
 }
 
@@ -165,13 +165,13 @@ html, body, #root {
 .toolbar .file-menu-dropdown .recent-project-item { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 280px; }
 .toolbar .file-menu-dropdown .recent-project-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar .file-menu-dropdown .recent-project-item small { overflow: hidden; color: var(--text-muted); font-size: 9px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
-.toolbar .file-menu-trigger { min-width: 72px; }
+.toolbar .file-menu-trigger { min-width: 0; }
 .toolbar .file-menu-trigger.active {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--bg-hover);
 }
-.file-menu-caret { margin-left: 3px; font-size: 10px; }
+.file-menu-caret { color: #94a3b8; font-size: 9px; }
 .file-menu-dropdown {
   position: absolute;
   top: calc(100% + 7px);
@@ -2300,11 +2300,12 @@ html, body, #root {
 .sim-target-status.online .sim-connection-dot { background:#22c55e; }
 .sim-target-status.syncing .sim-connection-dot { background:#f59e0b; }
 .sim-connection-label { overflow:hidden; text-overflow:ellipsis; }
-.sim-runtime-metrics { display:inline-flex; align-items:center; gap:1px; height:var(--toolbar-control-height); padding:2px; border:1px solid #d8e1e8; border-radius:var(--toolbar-control-radius); background:#f8fafc; color:#475569; font-size:11px; line-height:16px; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.toolbar .sim-runtime-metrics .sim-metric-button { display:inline-flex; align-items:center; justify-content:center; gap:3px; height:100%; padding:0 5px; border:0; border-radius:4px; background:transparent; color:inherit; font-size:11px; line-height:16px; font-weight:400; }
-.toolbar .sim-runtime-metrics .sim-metric-button:hover, .toolbar .sim-runtime-metrics .sim-metric-button:focus-visible { background:#e5edf5; color:#1d4ed8; }
-.sim-metric-memory,.sim-metric-loading { display:inline-flex; align-items:center; gap:3px; height:100%; padding:0 5px; }
-.sim-metric-label { color:#64748b; }
+.toolbar .sim-runtime-metrics { display:inline-flex; align-items:center; gap:8px; height:var(--toolbar-control-height); padding:0 8px; border:1px solid #d8e1e8; border-radius:var(--toolbar-control-radius); background:#f8fafc; color:#475569; font-size:11px; line-height:16px; font-weight:400; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.toolbar .sim-runtime-metrics:hover { border-color:#93c5fd; background:#eff6ff; color:#1d4ed8; }
+.sim-metric-item { display:inline-flex; align-items:center; gap:3px; }
+.sim-metric-item svg { flex:none; width:16px; height:16px; fill:none; stroke:#64748b; stroke-width:1.3; stroke-linecap:round; stroke-linejoin:round; }
+.sim-metric-item .sim-metric-ram-fill { fill:#60a5fa; stroke:none; }
+.sim-metric-caret { margin-left:-3px; color:#94a3b8; font-size:11px; }
 .sim-flight-controller-anchor { position:relative; display:inline-flex; }
 .toolbar .sim-flight-controller { display:inline-flex; align-items:center; gap:5px; height:var(--toolbar-control-height); padding:0 9px; border:1px solid #d8e1e8; border-radius:var(--toolbar-control-radius); background:#f8fafc; color:#64748b; font-size:11px; font-weight:400; font-variant-numeric:tabular-nums; }
 .toolbar .sim-flight-controller.online { border-color:#bbf7d0; background:#f0fdf4; color:#15803d; }
@@ -2321,7 +2322,18 @@ html, body, #root {
 .sim-flight-controller-popover dl { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; margin:0; font-variant-numeric:tabular-nums; }
 .sim-flight-controller-popover dt { color:#64748b; }
 .sim-flight-controller-popover dd { margin:0; text-align:right; font-weight:500; overflow-wrap:anywhere; }
-.sim-metric-button small { color:#64748b; font-size:11px; }
+.sim-mcap-anchor { position:relative; display:inline-flex; }
+.toolbar .sim-mcap-status { display:inline-flex; align-items:center; gap:5px; height:var(--toolbar-control-height); padding:0 7px; border:1px solid #d8e1e8; border-radius:var(--toolbar-control-radius); background:#f8fafc; color:#64748b; font-size:11px; font-weight:400; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.toolbar .sim-mcap-status.recording { border-color:#fecaca; background:#fef2f2; color:#b91c1c; }
+.toolbar .sim-mcap-status.failed { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
+.toolbar .sim-mcap-status.stale { border-color:#fde68a; background:#fffbeb; color:#b45309; }
+.toolbar .sim-mcap-status:hover,.toolbar .sim-mcap-status:focus-visible { border-color:#93c5fd; background:#eff6ff; color:#1d4ed8; }
+.toolbar .sim-mcap-status:focus-visible { outline:2px solid #60a5fa; outline-offset:2px; }
+.sim-mcap-status svg { flex:none; width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.5; }
+.sim-mcap-status.recording svg circle:last-child { fill:currentColor; }
+.sim-mcap-size { font-weight:500; }
+.sim-mcap-popover { width:270px; }
+.sim-mcap-popover .sim-mcap-note { margin:9px 0 0; color:#64748b; font-size:10px; }
 .nsh-console-overlay{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(15,23,42,.38)}
 .nsh-console{position:relative;width:min(760px,calc(100vw - 36px));height:min(520px,calc(100vh - 72px));min-width:420px;min-height:260px;max-width:calc(100vw - 18px);max-height:calc(100vh - 18px);display:flex;flex-direction:column;resize:both;overflow:hidden;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 24px 64px rgba(0,0,0,.35);color:#d1fae5}
 .nsh-console header{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#1f2937;border-bottom:1px solid #334155;user-select:none;cursor:move}.nsh-console header>div:first-child{display:grid;gap:2px}.nsh-console header small{color:#94a3b8;font-size:11px}.nsh-console header button{border:0;border-radius:5px;padding:6px 10px;background:#334155;color:#e2e8f0;cursor:pointer}.nsh-console-actions{display:flex;gap:8px}.nsh-console-actions button:first-child{background:#475569}

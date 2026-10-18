@@ -730,6 +730,13 @@ impl SimClient {
             .get("task_top")?.get("network").cloned()
     }
 
+    /// Current board MCAP recorder snapshot from the task_top health packet.
+    pub fn mcap_status(&self) -> Option<Value> {
+        let state = self.inner.lock().unwrap();
+        state.latest_task_top.as_ref()?
+            .get("task_top")?.get("mcap").cloned()
+    }
+
     /// Wall-clock execution time of the most recent FGFDMExec::Run call.
     pub fn fdm_run_ms(&self) -> Option<f64> {
         let state = self.inner.lock().unwrap();

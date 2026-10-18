@@ -11,6 +11,7 @@ import {
   simListModels,
   type FlightControllerStatus,
   type FdmWindowStats,
+  type McapStatus,
   ftpDownloadScript,
   ftpUploadFile,
 } from '../utils/tauriApi';
@@ -295,6 +296,13 @@ type NetworkCounter = { at: number; rxBytes: number; txBytes: number };
 type NetworkRate = { rx: number; tx: number };
 type NetworkPort = 'eth0' | 'eth1';
 type NetworkHistorySample = { at: number; name: NetworkPort; rx: number; tx: number };
+type McapCounter = { at: number; bytes: number };
+
+function formatMcapBytes(bytes: number): string {
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GiB`;
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MiB`;
+  return `${(bytes / 1024).toFixed(1)} KiB`;
+}
 
 function formatNetworkRate(bytesPerSecond: number): string {
   if (bytesPerSecond >= 1048576) return `${(bytesPerSecond / 1048576).toFixed(2)} MiB/s`;
@@ -314,6 +322,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   const [flightController, setFlightController] = useState<FlightControllerStatus | null>(null);
   const [flightControllerPopupOpen, setFlightControllerPopupOpen] = useState(false);
   const flightControllerRef = useRef<HTMLDivElement>(null);
+  const [mcapStatus, setMcapStatus] = useState<McapStatus | null>(null);
+  const [mcapRate, setMcapRate] = useState<number | null>(null);
+  const mcapCounterRef = useRef<McapCounter | null>(null);
+  const [mcapPopupOpen, setMcapPopupOpen] = useState(false);
+  const mcapRef = useRef<HTMLDivElement>(null);
   const [healthFresh, setHealthFresh] = useState(false);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
@@ -449,6 +462,22 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       const fresh = !!status.connected && typeof status.healthAgeMs === 'number' &&
         status.healthAgeMs <= 1500;
       setHealthFresh(fresh);
+      const mcap = fresh ? status.mcap || null : null;
+      setMcapStatus(mcap);
+      if (!mcap?.recording || mcap.stopping || mcap.bufferFull || !Number.isSafeInteger(mcap.recordedBytes)) {
+        mcapCounterRef.current = null;
+        setMcapRate(null);
+      } else {
+        const now = Date.now();
+        const previous = mcapCounterRef.current;
+        if (!previous || mcap.recordedBytes < previous.bytes) {
+          mcapCounterRef.current = { at: now, bytes: mcap.recordedBytes };
+          setMcapRate(null);
+        } else if (now - previous.at >= 900) {
+          setMcapRate((mcap.recordedBytes - previous.bytes) * 1000 / (now - previous.at));
+          mcapCounterRef.current = { at: now, bytes: mcap.recordedBytes };
+        }
+      }
       setNetworkReported(Array.isArray(status.network));
       if (!fresh) {
         networkCounterRef.current = {};
@@ -657,6 +686,22 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [flightControllerPopupOpen]);
+
+  useEffect(() => {
+    if (!mcapPopupOpen) return;
+    const onDown = (event: PointerEvent) => {
+      if (!mcapRef.current?.contains(event.target as Node)) setMcapPopupOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMcapPopupOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mcapPopupOpen]);
 
   const runBusy = parentLoading || loading ||
     (external && connected && remoteState === 'loading');
@@ -894,6 +939,17 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     appendLog(`重新运行当前模型: ${displayName || '当前模型'}`);
     setError('');
     try {
+      const modelToSync = currentModel || preparedTarget.model || selectedModel || scriptEditor.aircraft.trim();
+      if (modelToSync && onSyncRemoteModel) {
+        try {
+          const synced = await onSyncRemoteModel(modelToSync);
+          if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
+          else appendLog(`未上传本地修改，重新运行 NuttX 现有模型: ${modelToSync}`);
+        } catch (syncErr: any) {
+          if (syncErr?.name === 'ModelSyncCancelledError' || syncErr?.name === 'XmlPatchUnsafeError') throw syncErr;
+          appendLog(`模型同步失败，继续重新运行 NuttX 现有模型: ${syncErr?.message || syncErr}`);
+        }
+      }
       await simRestart();
       localLifecycleControlUntilRef.current = Date.now() + 3000;
       setRunning(true);
@@ -901,14 +957,20 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setPhase('running');
     } catch (err: any) {
       const message = err?.message || String(err);
-      setError(message);
-      setPhase('idle');
-      appendLog(`重新加载失败: ${message}`);
-      if (/xml|:\d+:\d+:/i.test(message)) showXmlDiagnostic(message, '仿真机加载诊断');
+      if (err?.name === 'ModelSyncCancelledError' || err?.name === 'XmlPatchUnsafeError') {
+        setPhase(paused ? 'paused' : 'running');
+        if (err?.name === 'XmlPatchUnsafeError') setError(message);
+        appendLog(message);
+      } else {
+        setError(message);
+        setPhase('idle');
+        appendLog(`重新加载失败: ${message}`);
+        if (/xml|:\d+:\d+:/i.test(message)) showXmlDiagnostic(message, '仿真机加载诊断');
+      }
     }
     launchInProgressRef.current = false;
     setLoading(false);
-  }, [appendLog, displayName]);
+  }, [appendLog, currentModel, displayName, onSyncRemoteModel, paused, preparedTarget.model, scriptEditor.aircraft, selectedModel]);
 
   const handlePauseToggle = useCallback(async () => {
     setLoading(true);
@@ -1045,12 +1107,25 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     if (showRuntimeStatus && external) return;
     setPerformancePopupOpen(false);
     setFlightControllerPopupOpen(false);
+    setMcapPopupOpen(false);
   }, [showRuntimeStatus, external]);
 
   const flightConnection = !flightController || flightController.status_stale
     ? '待更新' : flightController.usb_connected ? '已连接' : '未连接';
   const flightConnectionClass = !flightController || flightController.status_stale
     ? 'stale' : flightController.usb_connected ? 'online' : 'offline';
+  const cpuPeak = healthFresh && cpuCores.length > 0 ? Math.max(...cpuCores) : null;
+  const cpuSummary = cpuPeak == null ? '--' : `${cpuPeak.toFixed(1)}%`;
+  const memorySummary = healthFresh && memory ? `${memory.percent.toFixed(1)}%` : '--';
+  const fdmSummary = fdmLoading ? '…' : fdmRunMs == null ? '--' : `${fdmRunMs.toFixed(3)}ms`;
+  const metricsDescription = `CPU 最高核心 ${cpuSummary}${healthFresh && cpuCores.length > 0 ? `（${cpuCores.map((value, index) => `${index}: ${value.toFixed(1)}%`).join('，')}）` : ''}；内存 ${memorySummary}${memory ? `（已用 ${(memory.used / 1048576).toFixed(1)} / ${(memory.total / 1048576).toFixed(1)} MiB）` : ''}；FDM ${fdmLoading ? '加载中' : fdmRunMs == null ? '等待更新' : `${fdmRunMs.toFixed(3)} ms`}。点击查看性能曲线`;
+  const mcapState = !healthFresh || !mcapStatus ? '待更新'
+    : mcapStatus.stopping ? '保存中' : mcapStatus.bufferFull ? '缓存已满'
+      : mcapStatus.recording ? '录制中' : '未录制';
+  const mcapWriteState = !healthFresh || !mcapStatus ? '写入待更新'
+    : mcapStatus.writeFailed ? '写入失败'
+      : mcapStatus.writing ? '写入 SD'
+        : mcapStatus.recording ? '仅缓存' : mcapStatus.writtenBytes > 0 ? '已写入' : '未写入';
 
   return (
     <div className="sim-menu-wrap" ref={wrapRef}>
@@ -1083,20 +1158,28 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         </span>
       )}
       {showRuntimeStatus && external && (
-        <span className="sim-runtime-metrics">
-          <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="查看 CPU、FDM 与网速曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
-            <span className="sim-metric-label">CPU</span> {healthFresh && cpuCores.length > 0
-              ? cpuCores.map((value, index) => `${index}:${value.toFixed(1)}%`).join(' · ')
-              : '等待更新'}
-          </button>
-          {memory && <span className="sim-metric-memory" title={`已用 ${(memory.used / 1048576).toFixed(1)} MiB / ${(memory.total / 1048576).toFixed(1)} MiB`}>
-            <span className="sim-metric-label">RAM</span> {healthFresh ? `${memory.percent.toFixed(1)}%` : '等待更新'}
-          </span>}
-          {fdmLoading ? <span className="sim-metric-loading"><span className="sim-metric-label">FDM</span> 加载中</span>
-            : fdmRunMs != null && <button type="button" className="sim-metric-button" aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup" title="FDM 周期耗时包含输入/输出等待；查看 CPU、FDM 与网速曲线" onClick={() => setPerformancePopupOpen(open => !open)}>
-              <span className="sim-metric-label">FDM</span> {fdmRunMs.toFixed(3)} ms <small>⌄</small>
-            </button>}
-        </span>
+        <button type="button" className="sim-runtime-metrics"
+          aria-label={metricsDescription} aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup"
+          title={metricsDescription}
+          onClick={() => {
+            setFlightControllerPopupOpen(false);
+            setMcapPopupOpen(false);
+            setPerformancePopupOpen(value => !value);
+          }}>
+          <span className="sim-metric-item sim-metric-cpu" aria-hidden="true">
+            <svg viewBox="0 0 20 20" focusable="false"><rect x="4.5" y="4.5" width="11" height="11" rx="2" /><rect x="8" y="8" width="4" height="4" rx=".5" /><path d="M7 1.5v3m6-3v3M7 15.5v3m6-3v3m-11.5-11h3m-3 8h3m11-8h3m-3 8h3" /></svg>
+            <span>{cpuSummary}</span>
+          </span>
+          <span className="sim-metric-item sim-metric-ram" aria-hidden="true">
+            <svg viewBox="0 0 20 20" focusable="false"><rect x="2" y="4.5" width="16" height="11" rx="2" /><rect className="sim-metric-ram-fill" x="4" y="6.5" width={healthFresh && memory ? 12 * Math.max(0, Math.min(100, memory.percent)) / 100 : 0} height="7" rx=".7" /><path d="M5 1.5v3m5-3v3m5-3v3M5 15.5v3m5-3v3m5-3v3" /></svg>
+            <span>{memorySummary}</span>
+          </span>
+          <span className="sim-metric-item sim-metric-fdm" aria-hidden="true">
+            <svg viewBox="0 0 20 20" focusable="false"><circle cx="10" cy="11" r="6.5" /><path d="M10 4.5v-3M7 1.5h6M10 11l2.8-2.8" /></svg>
+            <span>{fdmSummary}</span>
+          </span>
+          <span className="sim-metric-caret" aria-hidden="true">⌄</span>
+        </button>
       )}
       {showRuntimeStatus && external && (
         <div className="sim-flight-controller-anchor" ref={flightControllerRef}>
@@ -1138,6 +1221,42 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
                   <dt>解锁状态</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale ? (flightController.armed ? '已解锁' : '未解锁') : '未知'}</dd>
                   <dt>模式</dt><dd>{flightMode(flightController)}</dd>
                 </dl>
+              </>}
+            </div>
+          )}
+        </div>
+      )}
+      {showRuntimeStatus && external && (
+        <div className="sim-mcap-anchor" ref={mcapRef}>
+          <button type="button" className={`sim-mcap-status ${!healthFresh || !mcapStatus ? 'stale' : mcapStatus.writeFailed ? 'failed' : mcapStatus.recording ? 'recording' : ''}`}
+            aria-label={`MCAP 日志${mcapState}，已录制${mcapStatus ? formatMcapBytes(mcapStatus.recordedBytes) : '待更新'}，录制速度${mcapRate == null ? '待更新' : formatNetworkRate(mcapRate)}，${mcapWriteState}，点击查看详情`}
+            aria-expanded={mcapPopupOpen} aria-controls="sim-mcap-popover"
+            title="MCAP 日志 · 点击查看录制详情"
+            onClick={() => {
+              setPerformancePopupOpen(false);
+              setFlightControllerPopupOpen(false);
+              setMcapPopupOpen(value => !value);
+            }}>
+            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="6" /><circle cx="10" cy="10" r="3" /></svg>
+            <span className="sim-mcap-size">{mcapStatus ? formatMcapBytes(mcapStatus.recordedBytes) : '--'}</span>
+          </button>
+          {mcapPopupOpen && (
+            <div id="sim-mcap-popover" className="sim-flight-controller-popover sim-mcap-popover" role="region" aria-label="MCAP 日志状态">
+              <div className="sim-flight-controller-popover-head">
+                <strong>MCAP 日志</strong>
+                <button type="button" aria-label="关闭 MCAP 日志状态" onClick={() => setMcapPopupOpen(false)}>×</button>
+              </div>
+              {!mcapStatus && <p>等待任务机上报 MCAP 状态</p>}
+              {mcapStatus && <>
+                {mcapStatus.bufferFull && <p>录制缓存已满，后续数据无法继续录入。</p>}
+                <dl>
+                  <dt>录制状态</dt><dd>{mcapState}</dd>
+                  <dt>已录制数据</dt><dd>{formatMcapBytes(mcapStatus.recordedBytes)}</dd>
+                  <dt>录制速度</dt><dd>{mcapRate == null ? (mcapStatus.recording ? '计算中' : '--') : formatNetworkRate(mcapRate)}</dd>
+                  <dt>SD 写入</dt><dd>{mcapWriteState}</dd>
+                  <dt>已写入 SD</dt><dd>{formatMcapBytes(mcapStatus.writtenBytes)}</dd>
+                </dl>
+                <p className="sim-mcap-note">已录制数据是内存中的 MCAP 记录量。最终文件经压缩，停止后完成校验，大小可能不同。</p>
               </>}
             </div>
           )}

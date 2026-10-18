@@ -79,6 +79,17 @@ function serialHilFingerprint(project: { nodes?: any[] }): string {
     .map(node => ({ id: node.id, data: node.data })));
 }
 
+function mainIoFingerprint(project: { nodes?: any[] }): string {
+  return JSON.stringify((project.nodes || [])
+    .filter(node => ['input', 'output', 'uavcan'].includes(node.data?.componentType))
+    .map(node => ({
+      id: node.id,
+      componentType: node.data.componentType,
+      params: Object.fromEntries(Object.entries(node.data.params || {})
+        .filter(([key]) => key !== 'layout')),
+    })));
+}
+
 function pwmCaptureFingerprint(project: { nodes?: any[] }): string {
   return JSON.stringify((project.nodes || [])
     .filter(node => node.data?.componentType === 'pwm_capture')
@@ -1277,6 +1288,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     if (!isRemoteUploadEnabled()) {
       const current = useFlowStore.getState();
       const dirtyFiles = (current.xmlFiles || []).filter(file => file.dirty).map(file => file.path);
+      const mainPath = (current.xmlFiles || []).find(file => file.category === 'main')?.path || `aircraft/${model}/${model}.xml`;
       const baseline = localStorage.getItem(remoteBaselineKey(model));
       if (baseline) {
         try {
@@ -1288,7 +1300,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             dirtyFiles.push(pwmCapturePath(model));
           }
           if (serialHilFingerprint(current) !== serialHilFingerprint(previous)) {
-            dirtyFiles.push((current.xmlFiles || []).find(file => file.category === 'main')?.path || `aircraft/${model}/${model}.xml`);
+            dirtyFiles.push(mainPath);
+          }
+          if (mainIoFingerprint(current) !== mainIoFingerprint(previous)) {
+            dirtyFiles.push(mainPath);
           }
         } catch { /* Existing XML dirty flags remain available for the warning. */ }
       } else {
@@ -1335,11 +1350,16 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const mainFile = (current.xmlFiles || []).find(file => file.category === 'main');
     const mainPath = mainFile?.path || `aircraft/${model}/${model}.xml`;
     let serialHilChanged = false;
+    let mainIoChanged = false;
     try {
       const baseline = localStorage.getItem(remoteBaselineKey(model));
-      if (baseline) serialHilChanged = serialHilFingerprint(current) !== serialHilFingerprint(JSON.parse(baseline));
+      if (baseline) {
+        const previous = JSON.parse(baseline);
+        serialHilChanged = serialHilFingerprint(current) !== serialHilFingerprint(previous);
+        mainIoChanged = mainIoFingerprint(current) !== mainIoFingerprint(previous);
+      }
     } catch { /* The tracked main-file dirty flag remains available. */ }
-    const mainCandidate = serialHilChanged || !!mainFile?.dirty || modifiedXmlFiles.some(file =>
+    const mainCandidate = serialHilChanged || mainIoChanged || !!mainFile?.dirty || modifiedXmlFiles.some(file =>
       file === `${model}.xml` || file.endsWith(`/${model}.xml`)
     );
     const mainSource = originalMainXml(mainFile);
@@ -1539,7 +1559,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               aria-haspopup="menu"
               aria-expanded={showFileMenu}
             >
-              📁 {isZh ? '文件' : 'File'} <span className="file-menu-caret">▾</span>
+              📁 {isZh ? '文件' : 'File'} <span className="file-menu-caret" aria-hidden="true">▾</span>
             </button>
             {showFileMenu && (
               <div className="file-menu-dropdown" role="menu">
@@ -1575,7 +1595,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
           <div className="file-menu-anchor" ref={editMenuRef}>
             <button className={`file-menu-trigger ${showEditMenu ? 'active' : ''}`}
               onClick={() => setShowEditMenu(value => !value)} aria-haspopup="menu" aria-expanded={showEditMenu}>
-              ✏️ {isZh ? '编辑' : 'Edit'} <span className="file-menu-caret">▾</span>
+              ✏️ {isZh ? '编辑' : 'Edit'} <span className="file-menu-caret" aria-hidden="true">▾</span>
             </button>
             {showEditMenu && (
               <div className="file-menu-dropdown" role="menu">
@@ -1589,7 +1609,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
           </div>
           <div className="file-menu-anchor" ref={displayMenuRef}>
             <button className={`file-menu-trigger ${showDisplayMenu ? 'active' : ''}`} onClick={() => setShowDisplayMenu(value => !value)} aria-haspopup="menu" aria-expanded={showDisplayMenu}>
-              👁️ {isZh ? '显示' : 'View'} <span className="file-menu-caret">▾</span>
+              👁️ {isZh ? '显示' : 'View'} <span className="file-menu-caret" aria-hidden="true">▾</span>
             </button>
             {showDisplayMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" onClick={() => { onToggleHud?.(); setShowDisplayMenu(false); }}>🛩️ HUD {hudVisible ? (isZh ? '✓ 已显示' : '✓ Shown') : (isZh ? '已隐藏' : 'Hidden')}</button>
@@ -1600,7 +1620,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
           <div className="file-menu-anchor" ref={toolsMenuRef}>
             <TelemetryRecorder open={showTelemetryRecorder} onClose={() => setShowTelemetryRecorder(false)} onRecordingChange={setTelemetryRecording} />
             <button className={`file-menu-trigger ${showToolsMenu ? 'active' : ''}`} onClick={() => setShowToolsMenu(value => !value)} aria-haspopup="menu" aria-expanded={showToolsMenu}>
-              {telemetryRecording ? '🔴' : '🧰'} {isZh ? '工具' : 'Tools'} <span className="file-menu-caret">▾</span>
+              {telemetryRecording ? '🔴' : '🧰'} {isZh ? '工具' : 'Tools'} <span className="file-menu-caret" aria-hidden="true">▾</span>
             </button>
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
@@ -1615,7 +1635,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
           </div>
           <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 {isZh ? '模型库' : 'Models'}</button>
           <button onClick={() => setShowSimulationConfig(true)} disabled={loading}>⚙ {isZh ? '仿真配置' : 'Simulation'}</button>
-          <button onClick={() => setShowLocalSettings(true)}>🔧 {isZh ? '本地配置' : 'Local Settings'}</button>
+          <button onClick={() => setShowLocalSettings(true)} title={isZh ? '本地配置' : 'Local Settings'} aria-label={isZh ? '本地配置' : 'Local Settings'}>🔧 {isZh ? '本地' : 'Settings'}</button>
           <SimMenu loading={loading} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}

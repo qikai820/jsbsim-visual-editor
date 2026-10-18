@@ -802,6 +802,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "healthAgeMs": health_age_ms,
             "memory": memory,
             "network": client.network_counters(),
+            "mcap": client.mcap_status(),
             "fdmRunMs": fdm_run_ms,
             "fdmWindow": client.fdm_window_stats(),
             "simulationDt": simulation_dt,

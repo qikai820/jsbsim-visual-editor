@@ -10,11 +10,16 @@ const downloadDirectory = () => localStorage.getItem('jsbsim-log-download-direct
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const formatSize = (size?: number | null) => size == null ? '大小未知' : size >= 1024 ** 2
   ? `${(size / 1024 ** 2).toFixed(1)} MiB` : size >= 1024 ? `${(size / 1024).toFixed(1)} KiB` : `${size} B`;
-const formatDate = (value?: string | number | null) => {
-  if (value == null) return '日期未知';
+const parseLogDate = (value?: string | number | null): Date | null => {
+  if (value == null) return null;
   const date = typeof value === 'number' ? new Date(value)
     : value.startsWith('epoch:') ? new Date(Number(value.slice(6)) * 1000) : new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+const formatDate = (value?: string | number | null) => {
+  if (value == null) return '日期未知';
+  const date = parseLogDate(value);
+  return date ? date.toLocaleString() : String(value);
 };
 const formatMcapTime = (nanoseconds: number) => nanoseconds >= 0
   ? `${(nanoseconds / 1_000_000_000).toFixed(3)} s` : '—';
@@ -238,14 +243,16 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
   const groups = useMemo(() => {
     const byDay = new Map<string, LogItem[]>();
     for (const item of items) {
-      const parsedDate = item.modified == null ? null : typeof item.modified === 'number'
-        ? new Date(item.modified) : item.modified.startsWith('epoch:')
-          ? new Date(Number(item.modified.slice(6)) * 1000) : new Date(item.modified);
+      const parsedDate = parseLogDate(item.modified);
       const day = tab === 'remote' && /^\d{4}-\d{2}-\d{2}\//.test(item.name)
-        ? item.name.slice(0, 10) : parsedDate && !Number.isNaN(parsedDate.getTime())
+        ? item.name.slice(0, 10) : parsedDate
           ? parsedDate.toLocaleDateString('en-CA') : '日期未知';
       if (!byDay.has(day)) byDay.set(day, []);
       byDay.get(day)!.push(item);
+    }
+    for (const files of byDay.values()) {
+      files.sort((a, b) => (parseLogDate(b.modified)?.getTime() ?? 0)
+        - (parseLogDate(a.modified)?.getTime() ?? 0) || b.name.localeCompare(a.name));
     }
     return [...byDay.entries()].sort(([a], [b]) => b.localeCompare(a));
   }, [tab, remoteLogs, localLogs]);

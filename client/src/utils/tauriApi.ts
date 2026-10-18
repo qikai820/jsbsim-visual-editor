@@ -332,7 +332,17 @@ export interface FdmWindowStats {
   windowMs?: number | null;
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null }> {
+export interface McapStatus {
+  recording: boolean;
+  stopping: boolean;
+  writing: boolean;
+  writeFailed: boolean;
+  bufferFull: boolean;
+  recordedBytes: number;
+  writtenBytes: number;
+}
+
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null; mcap?: McapStatus | null }> {
   return call('sim_status');
 }
 
