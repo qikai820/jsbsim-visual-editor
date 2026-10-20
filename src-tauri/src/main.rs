@@ -41,6 +41,12 @@ struct AppState {
     jsbsim: Mutex<jsbsim_process::JsbsimManager>,
 }
 
+// The XML index is a rebuildable cache. A previous parser panic can poison
+// this mutex without corrupting the cached files; allow later loads to retry.
+fn lock_file_index(state: &AppState) -> std::sync::MutexGuard<'_, Option<file_index::FileIndex>> {
+    state.file_index.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 // ── Request / Response types ────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -153,7 +159,7 @@ fn parse_xml(
         for file in files { xml_diagnostics::validate(&file.xml, &file.name)?; }
     }
     let state = app.state::<AppState>();
-    let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
+    let mut index_guard = lock_file_index(&state);
     let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
 
     let package_files: Vec<serde_json::Value> = files.as_ref().map(|items| items.iter().map(|file| {
@@ -194,6 +200,8 @@ fn parse_xml(
         }
     }
 
+    drop(index_guard);
+
     match xml_parser::parse_xml(&xml, &file_map) {
         Ok(mut result) => {
             result["packageFiles"] = serde_json::Value::Array(package_files);
@@ -206,7 +214,7 @@ fn parse_xml(
 #[tauri::command]
 fn get_jsbsim_files(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<AppState>();
-    let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
+    let mut index_guard = lock_file_index(&state);
     let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
 
     let mut seen = std::collections::HashSet::new();
@@ -363,7 +371,7 @@ async fn load_aircraft(
         return Ok(result);
     }
     let state = app.state::<AppState>();
-    let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
+    let mut index_guard = lock_file_index(&state);
     let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
 
     match aircraft_library::load_aircraft(&aircraft_id, file_index) {
@@ -413,7 +421,7 @@ fn parse_dataflow(
     files: Option<Vec<ReferenceFile>>,
 ) -> Result<serde_json::Value, String> {
     let state = app.state::<AppState>();
-    let mut index_guard = state.file_index.lock().map_err(|e| e.to_string())?;
+    let mut index_guard = lock_file_index(&state);
     let file_index = index_guard.get_or_insert_with(|| file_index::build_file_index());
 
     let mut file_map = std::collections::HashMap::new();
@@ -431,6 +439,8 @@ fn parse_dataflow(
             file_map.insert(key.clone(), content.clone());
         }
     }
+
+    drop(index_guard);
 
     dataflow::parse_dataflow_json(&xml, &file_map)
 }
