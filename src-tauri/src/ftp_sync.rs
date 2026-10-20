@@ -89,14 +89,19 @@ pub struct LogFileInfo {
     pub modified: Option<String>,
 }
 
-fn endpoint() -> String {
+fn endpoint() -> Result<String, String> {
+    // The running Tauri dev process can retain an old launcher environment
+    // after a Rust hot reload. A board verified by discovery or USB readback
+    // must take precedence over that stale FTP URL.
     if let Some(address) = transport::network_host_override() {
-        return format!("ftp://{address}");
+        return Ok(format!("ftp://{address}"));
     }
-    std::env::var("NUTTX_FTP_URL")
-        .unwrap_or_else(|_| "ftp://192.168.101.81".to_string())
-        .trim_end_matches('/')
-        .to_string()
+    if let Ok(url) = std::env::var("NUTTX_FTP_URL") {
+        return Ok(url.trim_end_matches('/').to_string());
+    }
+    let address = transport::network_host()
+        .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?;
+    Ok(format!("ftp://{address}"))
 }
 
 fn credentials() -> String {
@@ -193,7 +198,7 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
                "-Q", &format!("RNTO {unique_backup}"),
                "-Q", &format!("RNFR {temporary}"),
                "-Q", &format!("RNTO {target}"),
-               &format!("{}/", endpoint())])
+               &format!("{}/", endpoint()?)])
         .output()
         .map_err(|e| format!("cannot start curl: {e}"))?;
     std::thread::sleep(Duration::from_millis(300));
@@ -211,7 +216,7 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
                "--user", auth,
                "-Q", &format!("RNFR {temporary}"),
                "-Q", &format!("RNTO {target}"),
-               &format!("{}/", endpoint())])
+               &format!("{}/", endpoint()?)])
         .output()
         .map_err(|e| format!("cannot start curl: {e}"))?;
     std::thread::sleep(Duration::from_millis(300));
@@ -225,7 +230,7 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
 }
 
 fn verify_uploaded_file(auth: &str, path: &str, expected: &[u8]) -> Result<(), String> {
-    let url = format!("{}{}", endpoint(), path);
+    let url = format!("{}{}", endpoint()?, path);
     let output = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
                "--disable-epsv", "--connect-timeout", "3", "--max-time", "15",
@@ -250,7 +255,7 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
         if let Err(error) = &built_in {
             if transport::mode() == TransportMode::Auto && usb_file_transport_error(error) {
                 mark_auto_usb_file_unhealthy();
-                return list_ftp_directory(path)
+                return list_network_directory(path)
                     .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"));
             }
         }
@@ -264,7 +269,7 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
                     if usb_file_transport_error(&built_in_error) || usb_file_transport_error(&error) {
                         mark_auto_usb_file_unhealthy();
                     }
-                    return list_ftp_directory(path)
+                    return list_network_directory(path)
                         .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"));
                 }
                 return Err(error);
@@ -278,12 +283,28 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
         entries.dedup();
         return Ok(entries);
     }
-    list_ftp_directory(path)
+    list_network_directory(path)
+}
+
+fn list_network_directory(path: &str) -> Result<Vec<String>, String> {
+    let built_in = crate::romfs_network::list(path);
+    let user = list_ftp_directory(path);
+    let mut entries = match (built_in, user) {
+        (Ok(mut built_in), Ok(user)) => { built_in.extend(user); built_in },
+        (Ok(built_in), Err(_)) => built_in,
+        (Err(_), Ok(user)) => user,
+        (Err(romfs_error), Err(ftp_error)) => {
+            return Err(format!("ROMFS: {romfs_error}; FTP: {ftp_error}"));
+        },
+    };
+    entries.sort();
+    entries.dedup();
+    Ok(entries)
 }
 
 fn list_ftp_directory(path: &str) -> Result<Vec<String>, String> {
     let path = path.trim_matches('/');
-    let url = format!("{}/jsbsim{}{path}/", endpoint(), if path.is_empty() { "" } else { "/" });
+    let url = format!("{}/jsbsim{}{path}/", endpoint()?, if path.is_empty() { "" } else { "/" });
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
     let mut entries: Vec<String> = String::from_utf8_lossy(&bytes)
@@ -326,10 +347,18 @@ fn read_usb_library(path: &str, built_in_first: bool) -> Result<String, String> 
 }
 
 fn read_ftp_library(path: &str) -> Result<String, String> {
-    let url = format!("{}/jsbsim/{}", endpoint(), path);
-    let auth = credentials();
-    String::from_utf8(curl_output(&["--user", &auth, &url])?)
-        .map_err(|error| format!("remote XML is not UTF-8: {error}"))
+    safe_relative_path(path)?;
+    let sd_read = || -> Result<Vec<u8>, String> {
+        let url = format!("{}/jsbsim/{}", endpoint()?, path);
+        let auth = credentials();
+        curl_output(&["--user", &auth, &url])
+    };
+    match sd_read() {
+        Ok(bytes) => String::from_utf8(bytes)
+            .map_err(|error| format!("remote text is not UTF-8: {error}")),
+        Err(ftp_error) => crate::romfs_network::read_text(path)
+            .map_err(|romfs_error| format!("FTP: {ftp_error}; ROMFS: {romfs_error}")),
+    }
 }
 
 fn dsdl_root() -> String {
@@ -355,7 +384,7 @@ fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
             return Ok(entries.into_iter().map(|entry| entry.name).collect());
         } else { return Err(usb_entries.unwrap_err()); }
     }
-    let url = format!("{}/{}/", endpoint(), path.trim_matches('/'));
+    let url = format!("{}/{}/", endpoint()?, path.trim_matches('/'));
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
     Ok(String::from_utf8_lossy(&bytes).lines().map(str::trim)
@@ -378,7 +407,10 @@ fn log_info(name: String) -> LogFileInfo {
         let size = usb_file::stat(&format!("LOG/{name}")).ok().map(|entry| entry.size);
         return LogFileInfo { modified: log_name_timestamp(&name), name, size };
     }
-    let url = format!("{}/LOG/{}", endpoint(), name);
+    let Ok(ftp_endpoint) = endpoint() else {
+        return LogFileInfo { modified: log_name_timestamp(&name), name, size: None };
+    };
+    let url = format!("{}/LOG/{}", ftp_endpoint, name);
     let auth = credentials();
     let output = Command::new("curl")
         .args(["--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
@@ -492,7 +524,7 @@ pub fn download_log(file: &str, configured_directory: Option<&str>, expected_siz
         .map_err(|e| format!("cannot create download directory: {e}"))?;
     let valid_partial = || usable(&partial);
     let ftp_transfer = || -> Result<(), String> {
-        let url = format!("{}/LOG/{}", endpoint(), file); let auth = credentials();
+        let url = format!("{}/LOG/{}", endpoint()?, file); let auth = credentials();
         match if for_viewing { check_remote_mcap_header(&url, &auth) } else { Ok(()) } {
             Err(error) => Err(error),
             Ok(()) => {
@@ -547,7 +579,7 @@ pub fn delete_log(file: &str) -> Result<(), String> {
     /* curl sends --quote commands before navigating to the URL path.  The
      * old `DELE <file>` therefore ran in the FTP home directory rather than
      * LOG/, which NuttX reports as command-handler error -2 (ENOENT). */
-    let url = format!("{}/", endpoint());
+    let url = format!("{}/", endpoint()?);
     let auth = credentials();
     let command = format!("DELE /LOG/{file}");
     let output = Command::new("curl")
@@ -599,7 +631,7 @@ pub fn download_dsdl(file: &str) -> Result<String, String> {
     if use_usb() {
         return usb_file::read_text(&format!("{}/{}", dsdl_root(), file));
     }
-    let url = format!("{}/{}/{}", endpoint(), dsdl_root(), file);
+    let url = format!("{}/{}/{}", endpoint()?, dsdl_root(), file);
     let auth = credentials();
     String::from_utf8(curl_output(&["--user", &auth, &url])?)
         .map_err(|e| format!("DSDL is not UTF-8: {e}"))
@@ -620,10 +652,44 @@ pub fn download_simulator_version() -> Result<String, String> {
     if use_usb() {
         return read_usb_library("VERSION.json", true);
     }
-    let url = format!("{}/jsbsim/VERSION.json", endpoint());
-    let auth = credentials();
-    String::from_utf8(curl_output(&["--user", &auth, &url])?)
-        .map_err(|e| format!("simulator version is not UTF-8: {e}"))
+    read_ftp_library("VERSION.json")
+}
+
+// NuttX ftpd can stall when an XML or JSON file arrives in a large TCP burst.
+// Feed curl small chunks at the pace verified on the board; the caller still
+// uploads to a temporary pathname and verifies it before committing.
+fn upload_ftp_temporary(auth: &str, temp_url: &str, content: &[u8]) -> Result<(), String> {
+    const CHUNK_BYTES: usize = 256;
+    const CHUNK_DELAY: Duration = Duration::from_millis(60);
+    let chunks = content.len().div_ceil(CHUNK_BYTES) as u64;
+    let max_seconds = (chunks * 60 / 1000 + 30).to_string();
+    let mut child = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
+               "--disable-epsv", "--connect-timeout", "3", "--max-time", &max_seconds,
+               "--user", auth, "--ftp-create-dirs", "--upload-file", "-", temp_url])
+        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .map_err(|e| format!("cannot start curl: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("curl stdin unavailable")?;
+    let mut write_error = None;
+    for (index, chunk) in content.chunks(CHUNK_BYTES).enumerate() {
+        if let Err(error) = stdin.write_all(chunk) {
+            write_error = Some(error);
+            break;
+        }
+        if index + 1 < chunks as usize {
+            std::thread::sleep(CHUNK_DELAY);
+        }
+    }
+    drop(stdin);
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if let Some(error) = write_error {
+        return Err(format!("FTP upload stream failed: {error}; {}",
+                           String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
 }
 
 /// Atomically replace a file below the NuttX JSBSim root.  The caller passes
@@ -642,14 +708,8 @@ pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
     let temporary = format!("{}.upload", remote);
     let backup = format!("{}.bak", remote);
     let auth = credentials();
-    let temp_url = format!("{}{}", endpoint(), temporary);
-    let mut child = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv", "--connect-timeout", "3", "--max-time", "15", "--user", &auth, "--ftp-create-dirs", "--upload-file", "-", &temp_url])
-        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()
-        .map_err(|e| format!("cannot start curl: {e}"))?;
-    child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
-    let result = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).trim().to_string()); }
+    let temp_url = format!("{}{}", endpoint()?, temporary);
+    upload_ftp_temporary(&auth, &temp_url, content.as_bytes())?;
 
     verify_uploaded_file(&auth, &temporary, content.as_bytes())?;
     commit_uploaded_file(&auth, &temporary, &remote, &backup)
@@ -678,16 +738,9 @@ pub fn upload_model_asset(model: &str, name: &str, content: &[u8]) -> Result<(),
     let temporary = format!("{remote}.upload");
     let backup = format!("{remote}.bak");
     let auth = credentials();
-    let temp_url = format!("{}{}", endpoint(), temporary);
-    let mut child = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
-               "--connect-timeout", "3", "--max-time", "30", "--user", &auth,
-               "--ftp-create-dirs", "--upload-file", "-", &temp_url])
-        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()
-        .map_err(|e| format!("cannot start curl: {e}"))?;
-    child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content).map_err(|e| e.to_string())?;
-    let result = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).trim().to_string()); }
+    let temp_url = format!("{}{}", endpoint()?, temporary);
+    upload_ftp_temporary(&auth, &temp_url, content)?;
+
     verify_uploaded_file(&auth, &temporary, content)?;
     commit_uploaded_file(&auth, &temporary, &remote, &backup)?;
     verify_uploaded_file(&auth, &remote, content)
@@ -706,7 +759,7 @@ pub fn download_config(path: &str) -> Result<String, String> {
     if use_usb() {
         return read_usb_library(path, false);
     }
-    let url = format!("{}/jsbsim/{}", endpoint(), path);
+    let url = format!("{}/jsbsim/{}", endpoint()?, path);
     let auth = credentials();
     String::from_utf8(curl_output(&["--user", &auth, &url])?)
         .map_err(|e| format!("remote config is not UTF-8: {e}"))
@@ -724,16 +777,9 @@ pub fn upload_config(path: &str, content: &str) -> Result<(), String> {
     let temporary = format!("{remote}.upload");
     let backup = format!("{remote}.bak");
     let auth = credentials();
-    let temp_url = format!("{}{}", endpoint(), temporary);
-    let mut child = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
-               "--connect-timeout", "3", "--max-time", "15", "--user", &auth,
-               "--ftp-create-dirs", "--upload-file", "-", &temp_url])
-        .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()
-        .map_err(|e| format!("cannot start curl: {e}"))?;
-    child.stdin.take().ok_or("curl stdin unavailable")?.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
+    let temp_url = format!("{}{}", endpoint()?, temporary);
+    upload_ftp_temporary(&auth, &temp_url, content.as_bytes())?;
+
     verify_uploaded_file(&auth, &temporary, content.as_bytes())?;
     commit_uploaded_file(&auth, &temporary, &remote, &backup)?;
     verify_uploaded_file(&auth, &remote, content.as_bytes())
@@ -773,6 +819,11 @@ pub fn list_xml_parent(parent: &str) -> Result<Option<Vec<String>>, String> {
 }
 
 pub fn list_scripts() -> Result<Vec<String>, String> {
+    // A board may have aircraft models without a scripts directory. Treat
+    // that optional directory as empty, while preserving genuine FTP errors.
+    if !list_directory("")?.iter().any(|name| name.eq_ignore_ascii_case("scripts")) {
+        return Ok(Vec::new());
+    }
     Ok(list_directory("scripts")?.into_iter()
         .filter(|name| name.ends_with(".xml"))
         .collect())
@@ -793,13 +844,14 @@ pub fn list_engines() -> Result<Vec<String>, String> {
 pub fn list_engine_catalog() -> Result<(Vec<String>, Vec<String>), String> {
     let mut engines = Vec::new();
     let mut propellers = Vec::new();
+    let user_engine_names = if use_usb() { Vec::new() } else { list_ftp_directory("engine").unwrap_or_default() };
     for name in list_engines()? {
         let xml = if use_usb() {
             read_usb_library(&format!("engine/{name}"), true)?.to_ascii_lowercase()
+        } else if user_engine_names.contains(&name) {
+            read_ftp_library(&format!("engine/{name}"))?.to_ascii_lowercase()
         } else {
-            let url = format!("{}/jsbsim/engine/{}", endpoint(), name);
-            let auth = credentials();
-            String::from_utf8_lossy(&curl_output(&["--user", &auth, &url])?).to_ascii_lowercase()
+            crate::romfs_network::read_text(&format!("engine/{name}"))?.to_ascii_lowercase()
         };
         if xml.contains("<propeller") {
             propellers.push(name);
@@ -817,10 +869,7 @@ pub fn download_model(model: &str) -> Result<String, String> {
     if use_usb() {
         return read_usb_library(&format!("aircraft/{model}/{model}.xml"), true);
     }
-    let url = format!("{}/jsbsim/aircraft/{}/{}.xml", endpoint(), model, model);
-    let auth = credentials();
-    let bytes = curl_output(&["--user", &auth, &url])?;
-    String::from_utf8(bytes).map_err(|e| format!("model XML is not UTF-8: {e}"))
+    read_ftp_library(&format!("aircraft/{model}/{model}.xml"))
 }
 
 pub fn download_script(file: &str) -> Result<String, String> {
@@ -835,10 +884,7 @@ pub fn download_script(file: &str) -> Result<String, String> {
         return read_usb_library(&format!("scripts/{file}"), false);
     }
 
-    let url = format!("{}/jsbsim/scripts/{}", endpoint(), file);
-    let auth = credentials();
-    let bytes = curl_output(&["--user", &auth, &url])?;
-    String::from_utf8(bytes).map_err(|e| format!("script XML is not UTF-8: {e}"))
+    read_ftp_library(&format!("scripts/{file}"))
 }
 
 pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
@@ -852,25 +898,12 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
     let target = format!("{}/{}.xml", remote_dir, model);
     let backup = format!("{}.bak", target);
     let temporary = format!("{}.upload", target);
-    let temp_url = format!("{}{}", endpoint(), temporary);
+    let temp_url = format!("{}{}", endpoint()?, temporary);
     let auth = credentials();
 
     // Upload outside the live pathname first.  A failed transfer therefore
     // cannot truncate the model currently used by NuttX.
-    let mut child = Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
-               "--disable-epsv", "--connect-timeout", "3", "--max-time", "15"])
-        .args(["--user", &auth, "--ftp-create-dirs", "--upload-file", "-", &temp_url])
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot start curl: {e}"))?;
-    child.stdin.take().ok_or("curl stdin unavailable")?
-        .write_all(xml.as_bytes()).map_err(|e| e.to_string())?;
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
+    upload_ftp_temporary(&auth, &temp_url, xml.as_bytes())?;
 
     verify_uploaded_file(&auth, &temporary, xml.as_bytes())?;
     commit_uploaded_file(&auth, &temporary, &target, &backup)

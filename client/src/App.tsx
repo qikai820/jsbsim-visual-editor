@@ -10,14 +10,16 @@ import ModuleExpressionCanvas from './components/expression/ModuleExpressionCanv
 import Airplane3DViewer from './components/Airplane3DViewer';
 import FlightHud from './components/FlightHud';
 import LogCenter from './components/LogCenter';
-import { useSimSocket } from './sim/useSimSocket';
+import MultiSimPanel from './components/MultiSimPanel';
+import { useSimSocket, type Telemetry } from './sim/useSimSocket';
 import { resolveNodeOwnedPath, useFlowStore } from './store/flowStore';
 import type { ComponentType } from './types';
 import './App.css';
-import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simSyncTime, usbConsoleRead } from './utils/tauriApi';
+import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simInstanceControl, simInstanceSnapshot, simSyncTime, usbConsoleRead, type SimInstanceSummary } from './utils/tauriApi';
 import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
 import { extractOutputSignal, type ChannelItem } from './utils/signalGraph';
 import { installDialogDragging } from './utils/dialogDragging';
+import { normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from './utils/fleetModelGroups';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -175,6 +177,30 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
   }
 }
 
+const INSTANCE_IDS = Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0'));
+const SLOT_KEY = 'jsbsim-multi-model-slots-v1';
+const INITIAL_OVERRIDE_KEY = 'jsbsim-multi-initial-overrides-v1';
+const NETWORK_OVERRIDE_KEY = 'jsbsim-multi-network-overrides-v1';
+function savedInitialOverrides(): FleetInitialOverrides {
+  try { return normalizeFleetInitialOverrides(JSON.parse(localStorage.getItem(INITIAL_OVERRIDE_KEY) || '{}')); }
+  catch { return {}; }
+}
+function savedNetworkOverrides(): FleetNetworkOverrides {
+  try { return normalizeFleetNetworkOverrides(JSON.parse(localStorage.getItem(NETWORK_OVERRIDE_KEY) || '{}')); }
+  catch { return {}; }
+}
+function savedInstanceSlots(): Record<string, string> {
+  try {
+    const stored = localStorage.getItem(SLOT_KEY);
+    const value = JSON.parse(stored || '{}');
+    const slots = Object.fromEntries(INSTANCE_IDS.map(id => [id, typeof value?.[id] === 'string' ? value[id] : '']));
+    if (!stored && !slots['01']) slots['01'] = localStorage.getItem('jsbsim-remote-model') || '';
+    return slots;
+  } catch {
+    return Object.fromEntries(INSTANCE_IDS.map(id => [id, '']));
+  }
+}
+
 function AppContent() {
   useEffect(installDialogDragging, []);
   const selectedNodeId = useFlowStore(state => state.selectedNodeId);
@@ -193,16 +219,46 @@ function AppContent() {
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLogCenter, setShowLogCenter] = useState(false);
+  const [workspace, setWorkspace] = useState<'editor' | 'multi'>(() =>
+    new URLSearchParams(window.location.search).get('workspace') === 'multi' ? 'multi' : 'editor');
+  const [multiConfigEdited, setMultiConfigEdited] = useState(false);
+  const [fleetBusy, setFleetBusy] = useState(false);
+  const [fleetError, setFleetError] = useState('');
+  const [fleetState, setFleetState] = useState({ running: 0, paused: 0 });
+  const [activeInstance, setActiveInstance] = useState('01');
+  const [multiSelectedInstance, setMultiSelectedInstance] = useState('01');
+  const [instanceSlots, setInstanceSlots] = useState(savedInstanceSlots);
+  const [initialOverrides, setInitialOverrides] = useState(savedInitialOverrides);
+  const [networkOverrides, setNetworkOverrides] = useState(savedNetworkOverrides);
+  const [editorSwitchRequest, setEditorSwitchRequest] = useState<string | null>(null);
   const [sourceJump, setSourceJump] = useState<{ moduleId: string; componentId: string } | null>(null);
   const [webglFail, setWebglFail] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logWindowRef = useRef<HTMLDivElement | null>(null);
   const followLogTailRef = useRef(true);
   const { telemetry, connected } = useSimSocket();
-  const [logPos, setLogPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'));
+  const [editorSnapshot, setEditorSnapshot] = useState<SimInstanceSummary | null>(null);
+  useEffect(() => {
+    if (!isTauri || workspace !== 'editor' || activeInstance === '01') { setEditorSnapshot(null); return; }
+    let active = true;
+    setEditorSnapshot(null);
+    const refresh = () => { void simInstanceSnapshot(activeInstance)
+      .then(value => { if (active) setEditorSnapshot(value); })
+      .catch(() => { if (active) setEditorSnapshot(null); }); };
+    refresh();
+    const timer = window.setInterval(refresh, 750);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [workspace, activeInstance]);
+  const hudTelemetry: Telemetry | null = activeInstance === '01' ? telemetry : editorSnapshot && editorSnapshot.instance_id === activeInstance
+    ? { ...editorSnapshot.properties, t: editorSnapshot.timestamp, model: editorSnapshot.model,
+        altitude_m: editorSnapshot.altitude_m, airspeed_mps: editorSnapshot.airspeed_mps,
+        groundspeed_mps: editorSnapshot.groundspeed_mps } : null;
+  const hudConnected = activeInstance === '01' ? connected : connected && !!editorSnapshot &&
+    editorSnapshot.instance_id === activeInstance && (editorSnapshot.age_ms ?? Infinity) < 2000;
+  const [logPos, setLogPos] = useState<{ x: number; y: number }>(() => JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'));
   const logDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const [draggingLog, setDraggingLog] = useState(false);
-  const [hudPos, setHudPos] = useState(() => JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
+  const [hudPos, setHudPos] = useState<{ x: number; y: number }>(() => JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
   const [hudVisible, setHudVisible] = useState(() => localStorage.getItem('jsbsim-hud-visible') !== 'false');
   const [draggingHud, setDraggingHud] = useState(false);
   const hudDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
@@ -213,6 +269,9 @@ function AppContent() {
   const applyingHistory = useRef(false);
   const copiedNode = useRef<any>(null);
 
+  useEffect(() => { localStorage.setItem(SLOT_KEY, JSON.stringify(instanceSlots)); }, [instanceSlots]);
+  useEffect(() => { localStorage.setItem(INITIAL_OVERRIDE_KEY, JSON.stringify(initialOverrides)); }, [initialOverrides]);
+  useEffect(() => { localStorage.setItem(NETWORK_OVERRIDE_KEY, JSON.stringify(networkOverrides)); }, [networkOverrides]);
   useEffect(() => { localStorage.setItem('jsbsim-palette-collapsed', String(paletteCollapsed)); }, [paletteCollapsed]);
   useEffect(() => { localStorage.setItem('jsbsim-palette-width', String(paletteWidth)); }, [paletteWidth]);
   useEffect(() => { localStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
@@ -275,7 +334,9 @@ function AppContent() {
       // Loading another aircraft replaces the whole project in one store
       // update. That is navigation, not an edit to the newly selected model;
       // otherwise the old model's graph is reported as a local XML change.
-      if (previous && previous.aircraft?.name !== next.aircraft?.name) {
+      const previousMainPath = previous?.xmlFiles?.find((file: any) => file.category === 'main')?.path;
+      const nextMainPath = next.xmlFiles?.find((file: any) => file.category === 'main')?.path;
+      if (previous && (previous.aircraft?.name !== next.aircraft?.name || previousMainPath !== nextMainPath)) {
         historyCurrent.current = next;
         undoStack.current = [];
         redoStack.current = [];
@@ -596,10 +657,93 @@ function AppContent() {
     } catch { /* ignore malformed */ }
   }
 
+  const selectMultiInstanceFromToolbar = (id: string) => {
+    if (id !== multiSelectedInstance && multiConfigEdited &&
+        !window.confirm('当前模型配置尚未保存，切换实例会丢失本页修改。继续吗？')) return;
+    setMultiSelectedInstance(id);
+  };
+
+  async function runFleetCommand(action: 'start' | 'pause' | 'resume' | 'stop') {
+    if (fleetBusy || !connected) return;
+    const ids = action === 'start' ? INSTANCE_IDS.filter(id => !!instanceSlots[id]) : INSTANCE_IDS;
+    if (action === 'start' && multiConfigEdited) {
+      setFleetError('请先保存当前多机配置，再启动编组。');
+      return;
+    }
+    if (!ids.length) {
+      setFleetError('请先为实例选择模型。');
+      return;
+    }
+    setFleetBusy(true);
+    setFleetError('');
+    try {
+      const results = await Promise.allSettled(ids.map(id => simInstanceControl({ instanceId: id, action,
+        ...(action === 'start' ? { model: instanceSlots[id], initial: initialOverrides[id], network: networkOverrides[id] } : {}) })));
+      const failures = results.flatMap((result, index) => result.status === 'rejected'
+        ? [`${ids[index]}: ${String(result.reason)}`] : []);
+      const sent = ids.length - failures.length;
+      const actionName = { start: '启动', pause: '暂停', resume: '继续', stop: '停止' }[action];
+      const result = failures.length
+        ? `编组${actionName}：${sent} 架命令已发送；${failures.join('；')}`
+        : `编组${actionName}：${sent} 架命令已发送。`;
+      setJsbsimLogs(lines => [...lines, `[${new Date().toLocaleTimeString()}] ${result}`].slice(-200));
+      if (failures.length) setFleetError(result);
+    } finally {
+      setFleetBusy(false);
+    }
+  }
+
+  const handleModelContextChange = () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    setModifiedXmlFiles([]);
+    setXmlChangeNotice([]);
+    undoStack.current = [];
+    redoStack.current = [];
+    historyCurrent.current = snapshotProject();
+  };
+
   return (
     <div className="app">
       <Toolbar onShow3D={handleShow3D}
         onShowLogCenter={() => setShowLogCenter(true)}
+        workspace={workspace} onSelectWorkspace={next => {
+          if (workspace === 'multi' && next !== 'multi' && multiConfigEdited &&
+              !window.confirm('当前模型配置尚未保存，离开后会丢失本页修改。继续吗？')) return;
+          setShow3D(false);
+          if (workspace === 'multi' && next === 'editor') setEditorSwitchRequest(multiSelectedInstance);
+          setWorkspace(next);
+        }}
+        fleetControls={{ connected, configuredCount: INSTANCE_IDS.filter(id => !!instanceSlots[id]).length,
+          runningCount: fleetState.running, pausedCount: fleetState.paused,
+          busy: fleetBusy, error: fleetError, onCommand: action => void runFleetCommand(action) }}
+        activeInstance={workspace === 'multi' ? multiSelectedInstance : activeInstance} instanceSlots={instanceSlots}
+        editorSwitchRequest={editorSwitchRequest} onEditorSwitchHandled={() => setEditorSwitchRequest(null)}
+        onSelectInstance={id => { setActiveInstance(id); setMultiSelectedInstance(id); }}
+        onSelectMultiInstance={selectMultiInstanceFromToolbar}
+        onAssignInstanceModel={(id, model) => {
+          if (workspace === 'multi' && id === multiSelectedInstance &&
+              instanceSlots[id] !== model && multiConfigEdited &&
+              !window.confirm('当前模型配置尚未保存，更换模型会丢失本页修改。继续吗？')) return;
+          if (instanceSlots[id] !== model) setInitialOverrides(current => {
+            const next = { ...current }; delete next[id]; return next;
+          });
+          if (instanceSlots[id] !== model) setNetworkOverrides(current => {
+            const next = { ...current }; delete next[id]; return next;
+          });
+          setInstanceSlots(current => ({ ...current, [id]: model }));
+        }}
+        initialOverrides={initialOverrides}
+        networkOverrides={networkOverrides}
+        onLoadFleetGroup={(group: FleetModelGroup) => {
+          if (workspace === 'multi' && multiConfigEdited &&
+              !window.confirm('当前模型配置尚未保存，加载模型组会丢失本页修改。继续吗？')) return false;
+          setInstanceSlots(group.slots);
+          setInitialOverrides(group.initialOverrides);
+          setNetworkOverrides(group.networkOverrides);
+          return true;
+        }}
+        onModelContextChange={handleModelContextChange}
         onUndo={handleUndo} onRedo={handleRedo} onCopy={handleCopy} onPaste={handlePaste}
         modifiedXmlFiles={modifiedXmlFiles} onSaveComplete={savedFiles => setModifiedXmlFiles(current => savedFiles ? current.filter(file => !savedFiles.includes(file)) : [])}
         jsbsimLogs={jsbsimLogs}
@@ -614,7 +758,31 @@ function AppContent() {
         <button onClick={() => setXmlChangeNotice([])} aria-label="关闭提示">×</button>
       </div>}
       <div className="main-content">
-        {focusedModule ? (
+        {workspace === 'multi' ? (
+          <MultiSimPanel connected={connected} singleTelemetry={telemetry} onFleetStateChange={setFleetState}
+            selected={multiSelectedInstance} onSelect={setMultiSelectedInstance}
+            slots={instanceSlots} onSlotsChange={change => {
+              const next = typeof change === 'function' ? change(instanceSlots) : change;
+              setInitialOverrides(current => {
+                const updated = { ...current };
+                for (const id of Object.keys(next)) if (next[id] !== instanceSlots[id]) delete updated[id];
+                return updated;
+              });
+              setNetworkOverrides(current => {
+                const updated = { ...current };
+                for (const id of Object.keys(next)) if (next[id] !== instanceSlots[id]) delete updated[id];
+                return updated;
+              });
+              setInstanceSlots(next);
+            }}
+            initialOverrides={initialOverrides} onInitialOverridesChange={setInitialOverrides}
+            networkOverrides={networkOverrides} onNetworkOverridesChange={setNetworkOverrides}
+            onPendingChange={setMultiConfigEdited}
+            onOpenLogCenter={() => setShowLogCenter(true)} onOpenEditor={() => {
+              setEditorSwitchRequest(multiSelectedInstance);
+              setWorkspace('editor');
+            }} />
+        ) : focusedModule ? (
           <ModuleExpressionCanvas
             key={focusedModule.id}
             embedded
@@ -694,14 +862,14 @@ function AppContent() {
 
       {/* HUD belongs to the main model canvas. Full-screen editors and viewers
        * deliberately do not render it, so it cannot cover their controls. */}
-      {hudVisible && !focusedModule && !show3D && !showLogCenter && (
+      {hudVisible && workspace === 'editor' && !focusedModule && !show3D && !showLogCenter && (
         <div className="jsbsim-hud-window" style={{ transform: `translate(${hudPos.x}px, ${hudPos.y}px)` }}>
           <div className="jsbsim-hud-window-head" onPointerDown={e => {
             if ((e.target as HTMLElement).closest('button')) return;
             hudDrag.current = { x: e.clientX, y: e.clientY, left: hudPos.x, top: hudPos.y };
             setDraggingHud(true);
-          }}><span>HUD · FLIGHT DISPLAY</span><span className="hud-window-actions"><span>↕ 拖动</span><button onClick={() => setHudVisible(false)} title="隐藏 HUD" aria-label="隐藏 HUD">×</button></span></div>
-          <FlightHud telemetry={telemetry} connected={connected} />
+          }}><span>HUD · {activeInstance} · FLIGHT DISPLAY</span><span className="hud-window-actions"><span>↕ 拖动</span><button onClick={() => setHudVisible(false)} title="隐藏 HUD" aria-label="隐藏 HUD">×</button></span></div>
+          <FlightHud telemetry={hudTelemetry} connected={hudConnected} />
         </div>
       )}
 

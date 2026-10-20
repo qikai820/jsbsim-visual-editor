@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type Language, useLanguage } from '../i18n';
 import type { ToolbarAppearance } from '../utils/toolbarAppearance';
 import { MAX_PERFORMANCE_PERIOD_SECONDS, MIN_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod, savePerformancePeriod } from '../utils/performanceSettings';
 import {
   getSimulatorTransportMode,
+  getSimulatorNetworkTarget,
   isRemoteUploadEnabled,
   setRemoteUploadEnabled,
   setSimulatorTransportMode,
@@ -21,6 +22,17 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
   const [remoteUpload, setRemoteUpload] = useState(() => isRemoteUploadEnabled());
   const [transportMode, setTransportMode] = useState<SimulatorTransportMode>(() => getSimulatorTransportMode());
   const [transportError, setTransportError] = useState('');
+  const [networkTarget, setNetworkTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (transportMode === 'usb') return;
+    let active = true;
+    const refresh = () => { void getSimulatorNetworkTarget()
+      .then(target => { if (active) setNetworkTarget(target); })
+      .catch(() => { if (active) setNetworkTarget(null); }); };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [transportMode]);
   const [timeThreshold, setTimeThreshold] = useState(() => Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
   const [performancePeriod, setPerformancePeriod] = useState(readPerformancePeriod);
   const [logDirectory, setLogDirectory] = useState(() => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
@@ -82,7 +94,7 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
           </label>
         </div>
         <div className="local-settings-row">
-          <div><b>{isZh ? '仿真机通讯' : 'Simulator communication'}</b><small>{isZh ? '网络使用 UDP/FTP；自动模式在 USB 异常时继续使用网络' : 'Network uses UDP/FTP; Auto keeps network fallback available'}</small>{transportError && <small>{transportError}</small>}</div>
+          <div><b>{isZh ? '仿真机通讯' : 'Simulator communication'}</b><small>{isZh ? '网络使用 UDP/FTP；自动模式在 USB 异常时继续使用网络' : 'Network uses UDP/FTP; Auto keeps network fallback available'}</small>{transportMode !== 'usb' && <small>{networkTarget ? (isZh ? `已发现仿真机 IP：${networkTarget}` : `Discovered simulator IP: ${networkTarget}`) : (isZh ? '正在自动发现网口仿真机…' : 'Discovering network simulator…')}</small>}{transportError && <small>{transportError}</small>}</div>
           <select value={transportMode} onChange={event => void saveTransportMode(event.target.value as SimulatorTransportMode)}>
             <option value="auto">{isZh ? '自动' : 'Auto'}</option>
             <option value="network">{isZh ? '网络' : 'Network'}</option>

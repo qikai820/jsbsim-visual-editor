@@ -44,6 +44,18 @@ pub fn set_network_host_override(address: Ipv4Addr) {
     }
 }
 
+/// Explicit configuration wins; otherwise reuse a learned address or inspect
+/// existing Ethernet neighbors for the NuttX FTP service.
+pub fn network_host() -> Option<Ipv4Addr> {
+    if let Some(host) = std::env::var("SIM_UDP_HOST").ok().and_then(|value| value.parse().ok()) {
+        return Some(host);
+    }
+    if let Some(host) = network_host_override() { return Some(host); }
+    let host = crate::network_discovery::discover(None)?;
+    set_network_host_override(host);
+    Some(host)
+}
+
 fn state() -> &'static AtomicU8 {
     MODE.get_or_init(|| {
         let configured = std::env::var("SIM_TRANSPORT_MODE")

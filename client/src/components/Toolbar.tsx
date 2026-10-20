@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, loadAircraft, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, loadAircraft, simListModels, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
 import { parseSerialSensors, serializeSerialSensors } from '../utils/serialSensorXml';
 import { parsePwmCaptures, serializePwmCaptures } from '../utils/pwmCaptureXml';
 import AircraftWizard from './AircraftWizard';
 import AircraftLibrary from './AircraftLibrary';
-import SimMenu from './SimMenu';
+import SimMenu, { type FleetControls } from './SimMenu';
 import TelemetryRecorder from './TelemetryRecorder';
 import SimulationConfigDialog from './SimulationConfigDialog';
+import type { FleetInitialOverrides, FleetNetworkOverrides, FleetModelGroup } from '../utils/fleetModelGroups';
 import LocalSettingsDialog from './LocalSettingsDialog';
 import J23GuideDialog from './J23GuideDialog';
 import NshConsoleDialog from './NshConsoleDialog';
@@ -30,6 +31,20 @@ interface ToolbarProps {
   onToggleHud?: () => void;
   hudVisible?: boolean;
   onShowLogCenter?: () => void;
+  fleetControls?: FleetControls;
+  workspace?: 'editor' | 'multi';
+  onSelectWorkspace?: (workspace: 'editor' | 'multi') => void;
+  activeInstance?: string;
+  instanceSlots?: Record<string, string>;
+  editorSwitchRequest?: string | null;
+  onEditorSwitchHandled?: () => void;
+  onSelectInstance?: (id: string) => void;
+  onSelectMultiInstance?: (id: string) => void;
+  onAssignInstanceModel?: (id: string, model: string) => void;
+  initialOverrides?: FleetInitialOverrides;
+  networkOverrides?: FleetNetworkOverrides;
+  onLoadFleetGroup?: (group: FleetModelGroup) => boolean | void;
+  onModelContextChange?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onCopy?: () => void;
@@ -623,7 +638,8 @@ async function buildChildUploadXml(current: any, path: string): Promise<string> 
   return generateSubfile(subFile.fileType, subFile.fileName, subFile.data);
 }
 
-export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
+export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, fleetControls, workspace = 'editor', onSelectWorkspace, activeInstance = '01', instanceSlots = {}, editorSwitchRequest,
+  onEditorSwitchHandled, onSelectInstance, onSelectMultiInstance, onAssignInstanceModel, initialOverrides, networkOverrides, onLoadFleetGroup, onModelContextChange, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
   const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
   const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
@@ -648,6 +664,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [showWizard, setShowWizard] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
+  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
+  const [showInstanceMenu, setShowInstanceMenu] = useState(false);
+  const [instanceModels, setInstanceModels] = useState<string[]>([]);
+  const [instanceModelsError, setInstanceModelsError] = useState('');
   const [showEditMenu, setShowEditMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
@@ -670,6 +690,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directoryInputRef = useRef<HTMLInputElement>(null);
   const fileMenuRef = useRef<HTMLDivElement>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const instanceMenuRef = useRef<HTMLDivElement>(null);
   const editMenuRef = useRef<HTMLDivElement>(null);
   const displayMenuRef = useRef<HTMLDivElement>(null);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
@@ -730,6 +752,12 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
 
   useEffect(() => {
     const closeFileMenu = (event: MouseEvent) => {
+      if (workspaceMenuRef.current && !workspaceMenuRef.current.contains(event.target as Node)) {
+        setShowWorkspaceMenu(false);
+      }
+      if (instanceMenuRef.current && !instanceMenuRef.current.contains(event.target as Node)) {
+        setShowInstanceMenu(false);
+      }
       if (fileMenuRef.current && !fileMenuRef.current.contains(event.target as Node)) {
         setShowFileMenu(false);
       }
@@ -937,9 +965,14 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const target = `/mnt/sdcard/jsbsim/aircraft/${model}/${model}.xml`;
     const stateBeforeSave = useFlowStore.getState();
     let serialHilChanged = false;
+    let mainIoChanged = false;
     try {
       const baseline = localStorage.getItem(remoteBaselineKey(model));
-      if (baseline) serialHilChanged = serialHilFingerprint(stateBeforeSave) !== serialHilFingerprint(JSON.parse(baseline));
+      if (baseline) {
+        const previous = JSON.parse(baseline);
+        serialHilChanged = serialHilFingerprint(stateBeforeSave) !== serialHilFingerprint(previous);
+        mainIoChanged = mainIoFingerprint(stateBeforeSave) !== mainIoFingerprint(previous);
+      }
     } catch { /* The visible dirty-file list remains available. */ }
     const serialPath = serialSensorPath(model);
     const serialTarget = `/mnt/sdcard/jsbsim/${serialPath}`;
@@ -1007,7 +1040,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const hadInlineSerialLogic = originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main'))
       .includes('SERIAL_SENSOR_LOGIC_BEGIN');
     const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path),
-      ...(serialHilChanged ? [`aircraft/${model}/${model}.xml`] : []),
+      ...(serialHilChanged || mainIoChanged ? [`aircraft/${model}/${model}.xml`] : []),
       ...(serialXml !== null ? [serialPath] : []),
       ...(pwmXml !== null ? [pwmPath] : []),
       ...(hasInlineSerialLogic || hadInlineSerialLogic ? [`aircraft/${model}/${model}.xml`] : [])]));
@@ -1017,7 +1050,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const mainDirty = hasBaseline
       ? dirtyRecords.some(file => file.category === 'main') ||
         modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`)) ||
-        hasInlineSerialLogic || hadInlineSerialLogic || serialHilChanged
+        hasInlineSerialLogic || hadInlineSerialLogic || serialHilChanged || mainIoChanged
       : true;
     const externalPaths = new Set(dirtyRecords.filter(file => ['engine', 'thruster', 'system'].includes(file.category)).map(file => {
       const path = file.path.toLowerCase().endsWith('.xml') ? file.path : `${file.path}.xml`;
@@ -1167,6 +1200,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       ) });
       if (mainDirty) localStorage.setItem('jsbsim-raw-xml', xml);
       localStorage.setItem('jsbsim-remote-model', model);
+      onAssignInstanceModel?.(activeInstance, model);
       localStorage.setItem(remoteBaselineKey(model), projectFingerprint({ aircraft: current.aircraft, nodes: current.nodes, edges: current.edges, subFiles: current.subFiles }));
       onSaveComplete?.(changesList);
       const status = written.length > 0
@@ -1256,7 +1290,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     navigator.clipboard.writeText(xmlContent);
   };
 
-  const handleOpenRemoteModel = async (model: string) => {
+  const handleOpenRemoteModel = async (model: string, bindInstance = activeInstance) => {
     // The aircraft XML consists mostly of file references. Fetch the whole
     // reference tree before replacing the current canvas.
     const data = await withPwmCaptures(await withSerialSensors(await loadAircraft(model), model), model);
@@ -1281,7 +1315,66 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     localStorage.setItem('jsbsim-project', snapshot);
     localStorage.setItem('jsbsim-raw-xml', data.sourceXml || '');
     localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
+    onAssignInstanceModel?.(bindInstance, model);
     onLog?.(`[${new Date().toLocaleTimeString()}] 已从 NuttX 加载模型: ${model}`);
+  };
+
+  const handleSelectInstance = async (id: string, binding?: string) => {
+    if (loading || !onSelectInstance || !/^0[1-8]$/.test(id)) return;
+    const model = binding ?? instanceSlots[id] ?? '';
+    const currentModel = localStorage.getItem('jsbsim-remote-model') || loadedModelDirectory;
+    const replacesCanvas = !model || model !== currentModel || !hasLoadedModel;
+    if (replacesCanvas) {
+      const current = useFlowStore.getState();
+      const changes = Array.from(new Set([
+        ...modifiedXmlFiles,
+        ...(current.xmlFiles || []).filter(file => file.dirty).map(file => file.path),
+      ].filter(Boolean)));
+      if (changes.length && !confirm(`当前模型有未保存的修改：\n${changes.join('\n')}\n切换实例会丢弃这些修改。继续吗？`)) return;
+      setLoading(true);
+      try {
+        if (model) {
+          await handleOpenRemoteModel(model, id);
+        } else {
+          clearAll();
+          setAircraft({ name: 'New Aircraft', version: '2.0', release: 'PRODUCTION' });
+          localStorage.removeItem('jsbsim-remote-model');
+          localStorage.removeItem('jsbsim-project');
+          localStorage.removeItem('jsbsim-raw-xml');
+          localStorage.removeItem('jsbsim-reference-files');
+          localStorage.removeItem('jsbsim-import-assets');
+          localStorage.removeItem('jsbsim-import-directory');
+          setLibrarySimulationModel('');
+        }
+        onModelContextChange?.();
+        onSaveComplete?.();
+      } catch (error) {
+        alert(`实例 ${id} 模型加载失败：${String(error)}`);
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (binding !== undefined) onAssignInstanceModel?.(id, binding);
+    onSelectInstance(id);
+    setShowInstanceMenu(false);
+  };
+
+  useEffect(() => {
+    if (workspace !== 'editor' || !editorSwitchRequest) return;
+    void handleSelectInstance(editorSwitchRequest).finally(() => onEditorSwitchHandled?.());
+    // A request is issued only when returning from the multi-aircraft page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, editorSwitchRequest]);
+
+  const openInstanceMenu = () => {
+    setShowInstanceMenu(value => !value);
+    if (!instanceModels.length) {
+      void simListModels().then(items => {
+        setInstanceModels([...new Set(items.map(item => String(item?.name || '')).filter(Boolean))].sort());
+        setInstanceModelsError('');
+      }).catch(error => setInstanceModelsError(String(error)));
+    }
   };
 
   const syncRemoteModel = async (model: string, force: boolean): Promise<boolean> => {
@@ -1312,14 +1405,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const changedPaths = Array.from(new Set(dirtyFiles));
       if (changedPaths.length && !force) {
         const list = `\n\n${changedPaths.map(path => `  • ${path}`).join('\n')}`;
-        const message = isZh
-          ? `检测到本地模型修改${list}\n\n“本地配置 → 允许写入仿真机模型”当前已关闭。本次运行会使用仿真机上的旧模型。是否仍要启动？`
-          : `Local model changes detected${list}\n\nWriting simulator models is disabled in Local Settings. This run will use the existing simulator model. Start anyway?`;
-        if (!window.confirm(message)) {
-          const error = new Error(isZh ? '已取消启动：本地修改尚未同步到仿真机' : 'Start cancelled: local changes are not synced');
-          error.name = 'ModelSyncCancelledError';
-          throw error;
-        }
+        const error = new Error(isZh
+          ? `本地模型修改尚未同步到仿真机${list}\n\n请在“本地配置”中开启“允许写入仿真机模型”，然后重新运行。`
+          : `Local model changes are not synced to the simulator${list}\n\nEnable model uploads in Local Settings, then run again.`);
+        error.name = 'ModelSyncRequiredError';
+        throw error;
       }
       onLog?.(`[${new Date().toLocaleTimeString()}] 已保护模型文件，跳过上传到 NuttX: ${model}`);
       return false;
@@ -1335,12 +1425,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const sourceMain = (current.xmlFiles || []).find(file => file.category === 'main');
     const sourceDirectory = sourceMain?.path.match(/^aircraft\/([^/]+)\//)?.[1];
     if (sourceDirectory && sourceDirectory !== model) {
-      onLog?.(`[${new Date().toLocaleTimeString()}] 当前工程属于 ${sourceDirectory}，已取消上传到 ${model}`);
-      return false;
+      throw new Error(`当前工程属于 ${sourceDirectory}，无法同步到 ${model}；请先加载对应模型。`);
     }
     if (!sourceMain && current.aircraft.name !== model) {
-      onLog?.(`[${new Date().toLocaleTimeString()}] 当前工程为 ${current.aircraft.name}，已取消上传到 ${model}`);
-      return false;
+      throw new Error(`当前工程为 ${current.aircraft.name}，无法同步到 ${model}；请先加载对应模型。`);
     }
     const fingerprint = projectFingerprint(project);
     if (!force && localStorage.getItem(remoteBaselineKey(model)) === fingerprint) {
@@ -1465,8 +1553,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         ? `检测到本地修改，点击“确定”后将上传以下文件到仿真机：\n\n${fileList}\n\n上传后会覆盖仿真机对应文件，是否继续？`
         : `Local changes detected. The following files will be uploaded to the simulator:\n\n${fileList}\n\nExisting simulator files may be overwritten. Continue?`;
       if (!window.confirm(message)) {
-        onLog?.(`[${new Date().toLocaleTimeString()}] 用户取消上传，保留仿真机文件: ${model}`);
-        return false;
+        const error = new Error(`已取消上传，${model} 的本地修改尚未同步到仿真机。`);
+        error.name = 'ModelSyncCancelledError';
+        throw error;
       }
     }
     let uploadedMainXml = candidateMainXml;
@@ -1551,6 +1640,51 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         <div className="toolbar-left" data-tauri-drag-region>
         </div>
         <div className="toolbar-center" data-tauri-drag-region>
+          <div className="file-menu-anchor" ref={workspaceMenuRef}>
+            <button type="button" className={`file-menu-trigger workspace-menu-trigger ${showWorkspaceMenu ? 'active' : ''}`}
+              title={isZh ? '工作区' : 'Workspace'} aria-label={isZh ? '工作区菜单' : 'Workspace menu'}
+              aria-haspopup="menu" aria-expanded={showWorkspaceMenu}
+              onClick={() => setShowWorkspaceMenu(value => !value)}>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="6" height="6" rx="1"/><rect x="11.5" y="2.5" width="6" height="6" rx="1"/><rect x="2.5" y="11.5" width="6" height="6" rx="1"/><rect x="11.5" y="11.5" width="6" height="6" rx="1"/></svg>
+            </button>
+            {showWorkspaceMenu && <div className="file-menu-dropdown workspace-menu-dropdown" role="menu">
+              <button role="menuitem" onClick={() => { onSelectWorkspace?.('editor'); setShowWorkspaceMenu(false); }}>✎ {isZh ? '模型编辑' : 'Model Editor'}{workspace === 'editor' ? ' ✓' : ''}</button>
+              <button role="menuitem" onClick={() => { onSelectWorkspace?.('multi'); setShowWorkspaceMenu(false); }}>◫ {isZh ? '多机仿真' : 'Multi-Aircraft'}{workspace === 'multi' ? ' ✓' : ''}</button>
+              <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowWorkspaceMenu(false); }}>▤ {isZh ? '日志中心' : 'Log Center'}</button>
+            </div>}
+          </div>
+          {workspace === 'editor' && <div className="file-menu-anchor" ref={instanceMenuRef}>
+            <button type="button" className={`file-menu-trigger editor-instance-trigger ${showInstanceMenu ? 'active' : ''}`}
+              aria-label={`${instanceSlots[activeInstance] || (isZh ? '未绑定模型' : 'No model assigned')}，编辑实例 ${activeInstance}`} aria-haspopup="menu" aria-expanded={showInstanceMenu}
+              title={isZh ? '切换当前编辑的仿真实例' : 'Switch edited aircraft instance'}
+              onClick={openInstanceMenu}>
+              <span className="editor-instance-model">{instanceSlots[activeInstance] || (isZh ? '未绑定模型' : 'No model assigned')}</span>
+              <span className="file-menu-caret" aria-hidden="true">▾</span>
+            </button>
+            {showInstanceMenu && <div className="file-menu-dropdown editor-instance-dropdown" role="menu">
+              <div className="file-menu-section-title">{isZh ? '切换编辑实例' : 'Edit instance'}</div>
+              {Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0')).map(id =>
+                <button key={id} type="button" role="menuitem" className={activeInstance === id ? 'editor-instance-selected' : ''}
+                  disabled={loading} onClick={() => void handleSelectInstance(id)}>
+                  <strong>{id}</strong><span>{instanceSlots[id] || (isZh ? '未绑定模型' : 'No model assigned')}</span>{activeInstance === id && <b>✓</b>}
+                </button>)}
+              <div className="file-menu-separator" />
+              <label className="editor-instance-assign">
+                <span>{isZh ? `实例 ${activeInstance} 绑定模型` : `Assign model to ${activeInstance}`}</span>
+                <select aria-label={`实例 ${activeInstance} 绑定模型`} value={instanceSlots[activeInstance] || ''}
+                  disabled={loading} onChange={event => { if (event.target.value) void handleSelectInstance(activeInstance, event.target.value); }}>
+                  <option value="">{isZh ? '选择仿真机模型' : 'Select simulator model'}</option>
+                  {instanceSlots[activeInstance] && !instanceModels.includes(instanceSlots[activeInstance]) &&
+                    <option value={instanceSlots[activeInstance]}>{instanceSlots[activeInstance]}</option>}
+                  {instanceModels.map(model => <option key={model} value={model}>{model}</option>)}
+                </select>
+              </label>
+              {instanceModelsError && <small className="editor-instance-error">{instanceModelsError}</small>}
+              <button type="button" role="menuitem" onClick={() => { onSelectWorkspace?.('multi'); setShowInstanceMenu(false); }}>
+                {isZh ? '打开多机仿真配置' : 'Open multi-aircraft setup'}
+              </button>
+            </div>}
+          </div>}
           <div className="file-menu-anchor" ref={fileMenuRef}>
             <button
               className={`file-menu-trigger ${showFileMenu ? 'active' : ''}`}
@@ -1613,8 +1747,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             </button>
             {showDisplayMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" onClick={() => { onToggleHud?.(); setShowDisplayMenu(false); }}>🛩️ HUD {hudVisible ? (isZh ? '✓ 已显示' : '✓ Shown') : (isZh ? '已隐藏' : 'Hidden')}</button>
-              <button role="menuitem" onClick={() => { onToggleJsbsimLog(); setShowDisplayMenu(false); }}>🖥️ {isZh ? 'JSBSim 信息' : 'JSBSim Console'}{jsbsimLogs.length ? ` (${jsbsimLogs.length})` : ''}</button>
-              <button role="menuitem" onClick={() => { onShow3D(); setShowDisplayMenu(false); }}>🛩️ 3D</button>
+              <button role="menuitem" onClick={() => { onToggleJsbsimLog?.(); setShowDisplayMenu(false); }}>🖥️ {isZh ? 'JSBSim 信息' : 'JSBSim Console'}{jsbsimLogs.length ? ` (${jsbsimLogs.length})` : ''}</button>
+              <button role="menuitem" onClick={() => { onShow3D?.(); setShowDisplayMenu(false); }}>🛩️ 3D</button>
             </div>}
           </div>
           <div className="file-menu-anchor" ref={toolsMenuRef}>
@@ -1625,7 +1759,6 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
-              <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowToolsMenu(false); }}>📊 {isZh ? '日志中心' : 'Log Center'}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
               <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口助手（本机）' : 'Serial Assistant (Local)'}</button>
@@ -1634,9 +1767,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             </div>}
           </div>
           <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 {isZh ? '模型库' : 'Models'}</button>
-          <button onClick={() => setShowSimulationConfig(true)} disabled={loading}>⚙ {isZh ? '仿真配置' : 'Simulation'}</button>
+          <button onClick={() => setShowSimulationConfig(true)} disabled={loading || !instanceSlots[activeInstance]} title={!instanceSlots[activeInstance] ? (isZh ? '先给当前实例绑定模型' : 'Assign a model to this instance first') : undefined}>⚙ {isZh ? '仿真配置' : 'Simulation'}</button>
           <button onClick={() => setShowLocalSettings(true)} title={isZh ? '本地配置' : 'Local Settings'} aria-label={isZh ? '本地配置' : 'Local Settings'}>🔧 {isZh ? '本地' : 'Settings'}</button>
-          <SimMenu loading={loading} onLog={onLog}
+          {workspace === 'editor' && activeInstance === '01' ? <SimMenu loading={loading} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}
             // aircraft.name is the XML's display name (for example
@@ -1644,6 +1777,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             // ID ("OV10"). Keep the library selection as the authoritative
             // launch target when a model has been loaded.
             selectedModelFromLibrary={librarySimulationModel || remoteModelDirectory || loadedModelDirectory || (hasLoadedModel ? aircraft.name : '')} />
+            : workspace === 'multi' ? <SimMenu statusOnly onLog={onLog} fleetControls={fleetControls} />
+            : <button type="button" onClick={() => onSelectWorkspace?.('multi')}>{isZh ? '多机控制' : 'Fleet Controls'}</button>}
         </div>
         {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}
         {showUsbFiles && <UsbFileManager onClose={() => setShowUsbFiles(false)} />}
@@ -1659,7 +1794,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       </div>
 
       {showSerialAssistant && <SerialAssistantDialog onClose={() => setShowSerialAssistant(false)} />}
-      {showSimulationConfig && <SimulationConfigDialog model={aircraft.name || librarySimulationModel || 'default'} onClose={() => setShowSimulationConfig(false)} />}
+      {showSimulationConfig && <SimulationConfigDialog key={`${activeInstance}:${instanceSlots[activeInstance]}`}
+        instanceId={activeInstance} model={instanceSlots[activeInstance]} slots={instanceSlots}
+        onSelectInstance={id => workspace === 'multi' ? onSelectMultiInstance?.(id) : handleSelectInstance(id)}
+        onClose={() => setShowSimulationConfig(false)} />}
       {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} toolbarAppearance={toolbarAppearance} onToolbarAppearanceChange={updateToolbarAppearance} />}
       {showJ23Guide && <J23GuideDialog onClose={() => setShowJ23Guide(false)} />}
 
@@ -1789,6 +1927,16 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       {showLibrary && (
         <AircraftLibrary
           onClose={() => setShowLibrary(false)}
+          initialTab={workspace === 'multi' ? 'fleet' : 'models'}
+          currentFleetSlots={instanceSlots}
+          currentFleetInitialOverrides={initialOverrides}
+          currentFleetNetworkOverrides={networkOverrides}
+          onLoadFleetGroup={(group) => {
+            if (onLoadFleetGroup?.(group) === false) return false;
+            onSelectWorkspace?.('multi');
+            onLog?.(`[${new Date().toLocaleTimeString()}] 已从模型库载入多机模型组：${Object.values(group.slots).filter(Boolean).length} 架`);
+            return true;
+          }}
           onLoad={async (loaded) => {
             const modelName = String(loaded?.model || loaded?.aircraft?.name || '').trim();
             const data = modelName ? await withPwmCaptures(await withSerialSensors(loaded, modelName), modelName) : loaded;
@@ -1801,6 +1949,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             if (loadedModel) {
               setLibrarySimulationModel(loadedModel);
               localStorage.setItem('jsbsim-remote-model', loadedModel);
+              onAssignInstanceModel?.(activeInstance, loadedModel);
               if (data.sourceXml) localStorage.setItem(remoteBaselineKey(loadedModel), projectFingerprint(useFlowStore.getState()));
             }
             // Persist to localStorage

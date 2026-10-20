@@ -20,7 +20,19 @@ import { useSimSocket } from '../sim/useSimSocket';
 import { validateXmlSource, showXmlDiagnostic } from '../utils/xmlDiagnostics';
 import { MAX_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod } from '../utils/performanceSettings';
 
+export interface FleetControls {
+  connected: boolean;
+  configuredCount: number;
+  runningCount: number;
+  pausedCount: number;
+  busy: boolean;
+  error: string;
+  onCommand: (action: 'start' | 'pause' | 'resume' | 'stop') => void;
+}
+
 interface SimMenuProps {
+  fleetControls?: FleetControls;
+  statusOnly?: boolean;
   loading?: boolean;
   onLog?: (message: string) => void;
   onOpenRemoteModel?: (model: string) => Promise<void>;
@@ -60,6 +72,13 @@ function flightMode(status: FlightControllerStatus | null): string {
   }
   return status.base_mode & 1 ? `自定义(${status.custom_mode})` :
     status.base_mode & 4 ? '自动' : status.base_mode & 8 ? '引导' : '手动';
+}
+
+function confirmRunExistingModel(model: string, error: unknown, action: '启动' | '重新运行'): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return window.confirm(
+    `本地模型同步失败：\n${detail}\n\n是否${action}仿真机上现有的 ${model}？本地新增或修改的模块不会生效。\n\n确定 = 使用板上现有模型；取消 = 留在编辑器修正配置。`,
+  );
 }
 
 // These IDs are unique in the PX4 board configurations used by this project.
@@ -309,7 +328,7 @@ function formatNetworkRate(bytesPerSecond: number): string {
   return `${(bytesPerSecond / 1024).toFixed(1)} KiB/s`;
 }
 
-export default function SimMenu({ loading: parentLoading = false, onLog, onOpenRemoteModel, onSyncRemoteModel, selectedModelFromLibrary = '' }: SimMenuProps) {
+export default function SimMenu({ statusOnly = false, loading: parentLoading = false, onLog, fleetControls, onOpenRemoteModel, onSyncRemoteModel, selectedModelFromLibrary = '' }: SimMenuProps) {
   const { telemetry } = useSimSocket();
   const savedTargetRef = useRef(readSavedSimulationTarget());
   const [open, setOpen] = useState(false);
@@ -375,13 +394,14 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   ])));
 
   useEffect(() => {
+    if (statusOnly) return;
     if (selectedTest || selectedModel || preparedTarget.script || preparedTarget.model) {
       saveSimulationTarget(
         selectedTest || preparedTarget.script,
         selectedModel || preparedTarget.model,
       );
     }
-  }, [selectedTest, selectedModel, preparedTarget]);
+  }, [statusOnly, selectedTest, selectedModel, preparedTarget]);
 
   useEffect(() => {
     const updatePeriod = () => setPerformancePeriod(readPerformancePeriod());
@@ -411,6 +431,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   }, [onLog]);
 
   useEffect(() => {
+    if (statusOnly) return;
     const path = savedTargetRef.current.script;
     if (!path) return;
     let cancelled = false;
@@ -747,11 +768,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
           else appendLog(`未上传本地修改，直接运行 NuttX 现有模型: ${modelToSync}`);
         } catch (syncErr: any) {
-          if (syncErr?.name === 'ModelSyncCancelledError' || syncErr?.name === 'XmlPatchUnsafeError') throw syncErr;
-          // A failed optional upload must not prevent starting the model that
-          // is already present on NuttX. This is especially important after
-          // Stop: an FTP timeout used to leave the UI in "启动失败" forever.
-          appendLog(`模型同步失败，继续启动 NuttX 现有模型: ${syncErr?.message || syncErr}`);
+          if (!confirmRunExistingModel(modelToSync, syncErr, '启动')) {
+            appendLog(`模型同步失败，未启动 ${modelToSync}: ${syncErr?.message || syncErr}`);
+            throw syncErr;
+          }
+          appendLog(`模型未同步，按用户选择启动仿真机现有模型: ${modelToSync}`);
         }
       }
       localLifecycleControlUntilRef.current = Date.now() + 35000;
@@ -769,6 +790,8 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setError(message);
       appendLog(`启动失败: ${message}`);
       setPhase('idle');
+      setOpen(true);
+      setSubmenu(null);
       if (/xml|:\d+:\d+:/i.test(message)) showXmlDiagnostic(message, '仿真机加载诊断');
     }
     launchInProgressRef.current = false;
@@ -856,6 +879,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   }, [appendLog, loadLists]);
 
   useEffect(() => {
+    if (statusOnly) return;
     const selectScript = (event: Event) => {
       const detail = (event as CustomEvent<{ path?: string; openEditor?: boolean }>).detail;
       const path = String(typeof detail === 'string' ? detail : detail?.path || '').trim();
@@ -867,7 +891,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     };
     window.addEventListener('jsbsim-library-script-selected', selectScript);
     return () => window.removeEventListener('jsbsim-library-script-selected', selectScript);
-  }, [handleRunScript]);
+  }, [handleRunScript, statusOnly]);
 
   const handleSelectModel = useCallback(async (path: string) => {
     setSubmenu(null);
@@ -938,6 +962,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
     setPhase('restarting');
     appendLog(`重新运行当前模型: ${displayName || '当前模型'}`);
     setError('');
+    let syncFailed = false;
     try {
       const modelToSync = currentModel || preparedTarget.model || selectedModel || scriptEditor.aircraft.trim();
       if (modelToSync && onSyncRemoteModel) {
@@ -946,8 +971,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           if (synced) appendLog(`检测到本地修改，已同步模型到 NuttX: ${modelToSync}`);
           else appendLog(`未上传本地修改，重新运行 NuttX 现有模型: ${modelToSync}`);
         } catch (syncErr: any) {
-          if (syncErr?.name === 'ModelSyncCancelledError' || syncErr?.name === 'XmlPatchUnsafeError') throw syncErr;
-          appendLog(`模型同步失败，继续重新运行 NuttX 现有模型: ${syncErr?.message || syncErr}`);
+          if (!confirmRunExistingModel(modelToSync, syncErr, '重新运行')) {
+            syncFailed = true;
+            throw syncErr;
+          }
+          appendLog(`模型未同步，按用户选择重新运行仿真机现有模型: ${modelToSync}`);
         }
       }
       await simRestart();
@@ -957,10 +985,12 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       setPhase('running');
     } catch (err: any) {
       const message = err?.message || String(err);
-      if (err?.name === 'ModelSyncCancelledError' || err?.name === 'XmlPatchUnsafeError') {
+      if (syncFailed) {
         setPhase(paused ? 'paused' : 'running');
-        if (err?.name === 'XmlPatchUnsafeError') setError(message);
-        appendLog(message);
+        setError(message);
+        appendLog(`模型同步失败，未重新运行: ${message}`);
+        setOpen(true);
+        setSubmenu(null);
       } else {
         setError(message);
         setPhase('idle');
@@ -1037,6 +1067,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   // timing visible while the model is stopped so board health remains
   // observable between runs and reloads.
   const showRuntimeStatus = external || running || phase !== 'idle';
+  const showBoardStatus = statusOnly || (showRuntimeStatus && external);
   const fdmLoading = external && (launchInProgressRef.current || remoteState === 'loading');
   const chartNow = Date.now();
   const fdmVisibleHistory = fdmHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
@@ -1104,11 +1135,11 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
   };
 
   useEffect(() => {
-    if (showRuntimeStatus && external) return;
+    if (showBoardStatus) return;
     setPerformancePopupOpen(false);
     setFlightControllerPopupOpen(false);
     setMcapPopupOpen(false);
-  }, [showRuntimeStatus, external]);
+  }, [showBoardStatus]);
 
   const flightConnection = !flightController || flightController.status_stale
     ? '待更新' : flightController.usb_connected ? '已连接' : '未连接';
@@ -1127,9 +1158,23 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
       : mcapStatus.writing ? '写入 SD'
         : mcapStatus.recording ? '仅缓存' : mcapStatus.writtenBytes > 0 ? '已写入' : '未写入';
 
+  const fleetPrimary = fleetControls && (fleetControls.runningCount > 0 ? 'stop' :
+    fleetControls.pausedCount > 0 ? 'resume' : 'start');
+  const fleetActive = !!fleetControls && (fleetControls.runningCount > 0 || fleetControls.pausedCount > 0);
+  const fleetSection = fleetControls && <div className="sim-fleet-section" aria-label="编组控制">
+    <div className="sim-menu-section-title">编组控制</div>
+    {(['start', 'pause', 'resume', 'stop'] as const).map((action, index) =>
+      <button key={action} type="button" className="sim-menu-item"
+        disabled={!fleetControls.connected || fleetControls.busy || (action === 'start' && !fleetControls.configuredCount)}
+        onClick={() => fleetControls.onCommand(action)}>
+        {fleetControls.busy ? '⏳ ' : ''}{['全组启动', '全组暂停', '全组继续', '全组停止'][index]}
+      </button>)}
+    {fleetControls.error && <div className="sim-error" role="alert">{fleetControls.error}</div>}
+  </div>;
+
   return (
     <div className="sim-menu-wrap" ref={wrapRef}>
-      <div className={`sim-split-trigger ${running ? 'active' : ''}`}>
+      {!statusOnly && <div className={`sim-split-trigger ${running ? 'active' : ''}`}>
         <button
           className="sim-primary-action"
           onClick={handlePrimaryAction}
@@ -1147,8 +1192,19 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           title="仿真菜单"
           aria-label="打开仿真菜单"
         >▾</button>
-      </div>
-      {(activeName || showRuntimeStatus) && (
+      </div>}
+      {statusOnly && fleetControls && <div className={`sim-split-trigger ${fleetActive ? 'active' : ''}`}>
+        <button type="button" className="sim-primary-action"
+          disabled={!fleetControls.connected || fleetControls.busy || (fleetPrimary === 'start' && !fleetControls.configuredCount)}
+          title="控制全部仿真实例" onClick={() => { if (fleetPrimary) fleetControls.onCommand(fleetPrimary); }}>
+          {fleetControls.busy ? '⏳ 发送中' : fleetPrimary === 'stop' ? '⏹ 停止' :
+            fleetPrimary === 'resume' ? '▶ 继续' : '▶ 开始'}
+        </button>
+        <button type="button" className="sim-dropdown-toggle" title="编组操作" aria-label="打开编组操作菜单"
+          aria-expanded={open} onClick={() => setOpen(value => !value)}>▾</button>
+      </div>}
+      {statusOnly && open && fleetControls && <div className="sim-dropdown">{fleetSection}</div>}
+      {!statusOnly && (activeName || showRuntimeStatus) && (
         <span className={`sim-target-status ${connectionClass}`} title={`${activeName || '仿真机'} · ${connectionLabel}`}>
           {showRuntimeStatus && <span className="sim-connection-dot" role="status" aria-label={connectionLabel} />}
           {activeName && <span className="sim-selected-target" title={activeName}>
@@ -1157,7 +1213,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {showRuntimeStatus && (!activeName || !connected) && <span className="sim-connection-label">{connectionLabel}</span>}
         </span>
       )}
-      {showRuntimeStatus && external && (
+      {showBoardStatus && (
         <button type="button" className="sim-runtime-metrics"
           aria-label={metricsDescription} aria-expanded={performancePopupOpen} aria-controls="sim-performance-popup"
           title={metricsDescription}
@@ -1181,7 +1237,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           <span className="sim-metric-caret" aria-hidden="true">⌄</span>
         </button>
       )}
-      {showRuntimeStatus && external && (
+      {showBoardStatus && (
         <div className="sim-flight-controller-anchor" ref={flightControllerRef}>
           <button type="button" className={`sim-flight-controller ${flightConnectionClass}`}
             aria-label={`飞控 USB ${flightConnection}，点击查看详情`}
@@ -1226,7 +1282,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           )}
         </div>
       )}
-      {showRuntimeStatus && external && (
+      {showBoardStatus && (
         <div className="sim-mcap-anchor" ref={mcapRef}>
           <button type="button" className={`sim-mcap-status ${!healthFresh || !mcapStatus ? 'stale' : mcapStatus.writeFailed ? 'failed' : mcapStatus.recording ? 'recording' : ''}`}
             aria-label={`MCAP 日志${mcapState}，已录制${mcapStatus ? formatMcapBytes(mcapStatus.recordedBytes) : '待更新'}，录制速度${mcapRate == null ? '待更新' : formatNetworkRate(mcapRate)}，${mcapWriteState}，点击查看详情`}
@@ -1262,7 +1318,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           )}
         </div>
       )}
-      {showRuntimeStatus && external && performancePopupOpen && (
+      {showBoardStatus && performancePopupOpen && (
         <div id="sim-performance-popup" className="sim-performance-popup" role="region" aria-label="性能曲线">
           <div className="sim-performance-head">
             <b>性能曲线</b>
@@ -1362,7 +1418,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
         </div>
       )}
 
-      {open && (
+      {!statusOnly && open && (
         <div className="sim-dropdown">
           <div className="sim-dropdown-header">
             <span className={`sim-status-dot ${phase === 'paused' ? 'paused' : phase === 'idle' ? 'stopped' : 'running'}`} />
@@ -1470,7 +1526,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           {error && <div className="sim-error">{error}</div>}
         </div>
       )}
-      {scriptEditor.name && !scriptEditorExpanded && createPortal(
+      {!statusOnly && scriptEditor.name && !scriptEditorExpanded && createPortal(
         <button className="script-flow-mini" onClick={() => setScriptEditorExpanded(true)} title="点击查看完整脚本逻辑">
           <span className="script-flow-mini-head">📋 {scriptEditor.name}</span>
           <span className="script-flow-mini-meta">
@@ -1483,7 +1539,7 @@ export default function SimMenu({ loading: parentLoading = false, onLog, onOpenR
           <span className="script-flow-mini-hint">点击展开完整逻辑</span>
         </button>, document.body
       )}
-      {scriptEditor.name && scriptEditorExpanded && <ScriptEditorDialog value={scriptEditor} variables={globalVariables} onChange={setScriptEditor} onSave={handleSaveScript} onClose={() => setScriptEditorExpanded(false)} />}
+      {!statusOnly && scriptEditor.name && scriptEditorExpanded && <ScriptEditorDialog value={scriptEditor} variables={globalVariables} onChange={setScriptEditor} onSave={handleSaveScript} onClose={() => setScriptEditorExpanded(false)} />}
     </div>
   );
 }

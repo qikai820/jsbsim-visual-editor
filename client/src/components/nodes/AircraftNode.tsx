@@ -38,7 +38,9 @@ function AircraftNode({ data, selected }: NodeProps) {
   const hilInput = nodeData.componentType === 'input' && nodeData.params?.type === 'HIL_ACTUATOR_CONTROLS';
   const hilOutput = nodeData.componentType === 'output' && ['HIL_SENSOR', 'HIL_GPS'].includes(String(nodeData.params?.type));
   const paramEntries = hilInput || hilOutput
-    ? ['name', 'type', 'transport', nodeData.params?.transport === 'SERIAL' ? 'device' : 'port']
+    ? ['name', 'type', 'transport',
+        ...(hilOutput && nodeData.params?.transport !== 'SERIAL' ? ['host'] : []),
+        nodeData.params?.transport === 'SERIAL' ? 'device' : 'port']
         .map(key => [key, def.params[key]] as const)
     : Object.entries(def.params).slice(0, 4);
   let pwmChannels = [] as ReturnType<typeof getPwmCaptureChannels>;
@@ -67,7 +69,9 @@ function AircraftNode({ data, selected }: NodeProps) {
       {/* Header */}
       <div className="node-header" style={{ background: def.color }}>
         <span className="node-icon"><AviationIcon type={nodeData.componentType} size={14} /></span>
-        <span className="node-label">{nodeData.label}</span>
+        <span className="node-label">{nodeData.componentType === 'input' || nodeData.componentType === 'output'
+          ? `${nodeData.componentType === 'input' ? 'Input' : 'Output'}: ${String(nodeData.params?.name || '')}`
+          : nodeData.label}</span>
         {isModule && (
           <span className={`node-drill-badge ${hasContent ? '' : 'node-drill-badge-empty'}`} title="双击进入">
             ⤢
@@ -84,13 +88,14 @@ function AircraftNode({ data, selected }: NodeProps) {
           const raw = nodeData.params[key];
           const val = key === 'transport'
             ? (raw === 'SERIAL' ? '串口' : '网口 UDP')
+            : key === 'host' && !String(raw || '').trim() ? '板端默认'
             : displayVal(raw ?? paramDef.default);
           const unit = displayUnit(raw, paramDef.unit);
           // Skip non-displayable params (long strings, JSON arrays)
           if (val.length > 20 || val.startsWith('[')) return null;
           return (
             <div key={key} className="node-param">
-              <span className="param-label">{paramDef.label}:</span>
+              <span className="param-label">{key === 'name' && hilInput && nodeData.params?.transport !== 'SERIAL' ? '监听 IP' : paramDef.label}:</span>
               <span className="param-value">
                 {val}{unit ? ` ${unit}` : ''}
               </span>

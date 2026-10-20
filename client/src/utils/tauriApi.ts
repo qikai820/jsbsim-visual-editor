@@ -51,6 +51,10 @@ export async function setSimulatorTransportMode(mode: SimulatorTransportMode): P
   localStorage.setItem(SIMULATOR_TRANSPORT_KEY, mode);
 }
 
+export async function getSimulatorNetworkTarget(): Promise<string | null> {
+  return call('simulator_network_target_get');
+}
+
 export async function initializeSimulatorTransport(): Promise<void> {
   if (!isTauri) return;
   await call('simulator_transport_set', { mode: getSimulatorTransportMode() });
@@ -344,6 +348,41 @@ export interface McapStatus {
 
 export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null; mcap?: McapStatus | null }> {
   return call('sim_status');
+}
+
+export interface SimInstanceSummary {
+  instance_id: string;
+  age_ms?: number;
+  model?: string;
+  state?: string;
+  error?: string;
+  timestamp?: number;
+  altitude_m?: number;
+  latitude_deg?: number;
+  longitude_deg?: number;
+  roll_deg?: number;
+  pitch_deg?: number;
+  yaw_deg?: number;
+  airspeed_mps?: number;
+  groundspeed_mps?: number;
+  properties?: Record<string, number>;
+  property_count?: number;
+}
+
+export async function simInstanceSnapshot(instanceId: string): Promise<SimInstanceSummary | null> {
+  return call('sim_instance_snapshot', { instanceId });
+}
+
+export async function simInstanceControl(options: {
+  instanceId: string;
+  action: 'start' | 'stop' | 'pause' | 'resume';
+  model?: string;
+  host?: string;
+  port?: number;
+  initial?: import('./fleetModelGroups').FleetInitialPose;
+  network?: import('./fleetModelGroups').FleetNetworkOverrides[string];
+}): Promise<{ instance_id: string; action: string; sent: boolean }> {
+  return call('sim_instance_control', options);
 }
 
 export async function simListTests(): Promise<any[]> {
@@ -777,6 +816,16 @@ export async function listenTelemetry(callback: EventCallback): Promise<() => vo
   await ensureTauri();
   const unlisten = await tauriListen('telemetry', (event: any) => {
     callback(event.payload);
+  });
+  unlistenFns.push(unlisten);
+  return unlisten;
+}
+
+export async function listenSimInstances(callback: (items: SimInstanceSummary[]) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  await ensureTauri();
+  const unlisten = await tauriListen('sim-instances', (event: any) => {
+    if (Array.isArray(event.payload)) callback(event.payload as SimInstanceSummary[]);
   });
   unlistenFns.push(unlisten);
   return unlisten;

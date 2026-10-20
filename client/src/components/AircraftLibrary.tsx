@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getAircraftLibrary, loadAircraft, simListTests, ftpDownloadScript, ftpListEngineCatalog } from '../utils/tauriApi';
+import { FLEET_INSTANCE_IDS, normalizeFleetSlots, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, readFleetModelGroups, saveFleetModelGroups, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from '../utils/fleetModelGroups';
 
 interface AircraftEntry {
   id: string;
@@ -30,12 +31,17 @@ interface Props {
   onLoad: (data: any) => void | Promise<void>;
   onSelectForSimulation?: (aircraftId: string) => void;
   onSelectScriptForSimulation?: (scriptPath: string) => void;
+  currentFleetSlots?: Record<string, string>;
+  currentFleetInitialOverrides?: FleetInitialOverrides;
+  currentFleetNetworkOverrides?: FleetNetworkOverrides;
+  onLoadFleetGroup?: (group: FleetModelGroup) => boolean | void;
+  initialTab?: 'models' | 'fleet';
 }
 
 interface ScriptEntry { name: string; file: string; path: string; aircraft?: string; initialize?: string; start?: string; end?: string; dt?: string; events?: number; error?: string; sourcePath?: string }
 
-export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation, onSelectScriptForSimulation }: Props) {
-  const [tab, setTab] = useState<'models' | 'scripts' | 'engines' | 'propellers'>('models');
+export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation, onSelectScriptForSimulation, currentFleetSlots, currentFleetInitialOverrides, currentFleetNetworkOverrides, onLoadFleetGroup, initialTab = 'models' }: Props) {
+  const [tab, setTab] = useState<'models' | 'scripts' | 'engines' | 'propellers' | 'fleet'>(initialTab);
   const [library, setLibrary] = useState<AircraftEntry[]>([]);
   const [scripts, setScripts] = useState<ScriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +51,8 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const [loadingAircraft, setLoadingAircraft] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [selectedScript, setSelectedScript] = useState<ScriptEntry | null>(null);
+  const [fleetGroups, setFleetGroups] = useState(readFleetModelGroups);
+  const [selectedFleetGroup, setSelectedFleetGroup] = useState<FleetModelGroup | null>(null);
   const [userModels, setUserModels] = useState<AircraftEntry[]>(() => JSON.parse(localStorage.getItem('jsbsim-user-models') || '[]'));
   const [userScripts, setUserScripts] = useState<ScriptEntry[]>(() => JSON.parse(localStorage.getItem('jsbsim-user-scripts') || '[]'));
   const [group, setGroup] = useState<'nuttx' | 'user'>('nuttx');
@@ -61,9 +69,8 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
     (async () => {
       try {
         const data = await getAircraftLibrary();
-        const tests = await simListTests();
         if (!active) return;
-        setLibrary(data); setScripts(tests); setLoadError(''); setLoading(false);
+        setLibrary(data); setLoadError(''); setLoading(false);
       } catch (err: any) {
         if (!active) return;
         console.error(err);
@@ -72,6 +79,13 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
           ? `${message}。可在“本地配置 → 仿真机通讯”切换到“网络”，然后重新打开模型库。`
           : message);
         setLoading(false);
+        return;
+      }
+      try {
+        const tests = await simListTests();
+        if (active) setScripts(tests);
+      } catch (error) {
+        console.warn('NuttX 脚本库暂不可用：', error);
       }
     })();
     return () => { active = false; };
@@ -111,15 +125,70 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
     return true;
   });
   const visibleModels = group === 'user' ? userModels : filtered;
+  const visibleFleetGroups = fleetGroups.filter(item => !search ||
+    `${item.name} ${Object.values(item.slots).join(' ')}`.toLowerCase().includes(search.toLowerCase()));
   const visibleScripts = group === 'user' ? userScripts : scripts;
   const visibleComponents = tab === 'engines' ? engineFiles : propellerFiles;
   const activeModel = selected && (group === 'user' ? userModels : library).some(item => item.id === selected.id) ? selected : null;
   const activeScript = selectedScript && (group === 'user' ? userScripts : scripts).some(item => item.path === selectedScript.path) ? selectedScript : null;
+  const activeFleetGroup = fleetGroups.find(item => item.id === selectedFleetGroup?.id) || null;
   const selectResource = (nextTab: typeof tab, nextGroup: typeof group) => {
     setTab(nextTab);
     setGroup(nextGroup);
     setSelected(null);
     setSelectedScript(null);
+    setSelectedFleetGroup(null);
+    setSearch('');
+  };
+  const persistFleetGroups = (next: FleetModelGroup[]) => {
+    saveFleetModelGroups(next);
+    setFleetGroups(next);
+  };
+  const createFleetGroup = () => {
+    const slots = normalizeFleetSlots(currentFleetSlots);
+    if (!FLEET_INSTANCE_IDS.some(id => slots[id])) {
+      alert('请先在多机仿真页面为至少一个实例选择模型');
+      return;
+    }
+    const input = window.prompt('模型组名称', `模型组 ${fleetGroups.length + 1}`);
+    if (input === null) return;
+    const name = input.trim();
+    if (!name) { alert('模型组名称不能为空'); return; }
+    if (fleetGroups.some(item => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      alert('模型组名称已存在'); return;
+    }
+    const created = { id: `fleet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name, slots,
+      initialOverrides: normalizeFleetInitialOverrides(currentFleetInitialOverrides),
+      networkOverrides: normalizeFleetNetworkOverrides(currentFleetNetworkOverrides) };
+    persistFleetGroups([...fleetGroups, created]);
+    setSelectedFleetGroup(created);
+  };
+  const renameFleetGroup = (entry: FleetModelGroup) => {
+    const input = window.prompt('重命名模型组', entry.name);
+    if (input === null) return;
+    const name = input.trim();
+    if (!name) { alert('模型组名称不能为空'); return; }
+    if (fleetGroups.some(item => item.id !== entry.id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      alert('模型组名称已存在'); return;
+    }
+    persistFleetGroups(fleetGroups.map(item => item.id === entry.id ? { ...item, name } : item));
+  };
+  const updateFleetGroup = (entry: FleetModelGroup) => {
+    const slots = normalizeFleetSlots(currentFleetSlots);
+    if (!FLEET_INSTANCE_IDS.some(id => slots[id])) {
+      alert('当前编组没有已绑定模型的实例');
+      return;
+    }
+    const updated = { ...entry, slots,
+      initialOverrides: normalizeFleetInitialOverrides(currentFleetInitialOverrides),
+      networkOverrides: normalizeFleetNetworkOverrides(currentFleetNetworkOverrides) };
+    persistFleetGroups(fleetGroups.map(item => item.id === entry.id ? updated : item));
+    setSelectedFleetGroup(updated);
+  };
+  const deleteFleetGroup = (entry: FleetModelGroup) => {
+    if (!window.confirm(`从本机模型库删除「${entry.name}」？`)) return;
+    persistFleetGroups(fleetGroups.filter(item => item.id !== entry.id));
+    setSelectedFleetGroup(null);
   };
   const saveUserModels = (next: AircraftEntry[]) => {
     localStorage.setItem('jsbsim-user-models', JSON.stringify(next));
@@ -210,16 +279,16 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
       <div className="library-modal" onClick={e => e.stopPropagation()}>
         <div className="library-header">
           <h2>📚 模型与脚本库</h2>
-          <span className="library-count">{library.length} 个模型 · {scripts.length} 个脚本 · {engineFiles.length} 个发动机 · {propellerFiles.length} 个螺旋桨</span>
+          <span className="library-count">{library.length} 个模型 · {fleetGroups.length} 个多机模型组 · {scripts.length} 个脚本 · {engineFiles.length} 个发动机 · {propellerFiles.length} 个螺旋桨</span>
           <button className="wizard-close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('models', 'nuttx')}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('scripts', 'nuttx')}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'engines' ? 'active' : ''} onClick={() => selectResource('engines', 'nuttx')}>⚙️ 发动机/电机库 <b>{engineFiles.length}</b></button><button className={tab === 'propellers' ? 'active' : ''} onClick={() => selectResource('propellers', 'nuttx')}>🌀 螺旋桨库 <b>{propellerFiles.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => selectResource('models', 'user')}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => selectResource('scripts', 'user')}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
+        <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('models', 'nuttx')}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'fleet' ? 'active' : ''} onClick={() => selectResource('fleet', 'user')}>🛩️ 多机模型组 <b>{fleetGroups.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('scripts', 'nuttx')}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'engines' ? 'active' : ''} onClick={() => selectResource('engines', 'nuttx')}>⚙️ 发动机/电机库 <b>{engineFiles.length}</b></button><button className={tab === 'propellers' ? 'active' : ''} onClick={() => selectResource('propellers', 'nuttx')}>🌀 螺旋桨库 <b>{propellerFiles.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => selectResource('models', 'user')}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => selectResource('scripts', 'user')}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
         <div className="library-toolbar">
           <input
             type="text"
             className="library-search"
-            placeholder={tab === 'models' ? '🔍 搜索模型名称...' : tab === 'scripts' ? '🔍 搜索脚本名称...' : '🔍 搜索文件名称...'}
+            placeholder={tab === 'fleet' ? '🔍 搜索模型组名称...' : tab === 'models' ? '🔍 搜索模型名称...' : tab === 'scripts' ? '🔍 搜索脚本名称...' : '🔍 搜索文件名称...'}
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -234,11 +303,18 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
               </button>
             ))}
           </div>}
+          {tab === 'fleet' && <button className="library-fleet-create" onClick={createFleetGroup}>＋ 保存当前编组为模型组</button>}
         </div>
 
         <div className="library-body">
           <div className="library-list">
-            {loading ? (
+            {tab === 'fleet' ? (
+              visibleFleetGroups.length ?
+                visibleFleetGroups.map(item =>
+                  <div key={item.id} className={`library-item ${activeFleetGroup?.id === item.id ? 'selected' : ''}`} onClick={() => setSelectedFleetGroup(item)}>
+                    <span className="library-item-icon">🛩️</span><div className="library-item-info"><div className="library-item-name">{item.name}</div><div className="library-item-meta"><span>{FLEET_INSTANCE_IDS.filter(id => item.slots[id]).length} 架模型</span><span>· 本机保存</span></div></div>
+                  </div>) : <div className="library-loading">{search ? '没有找到匹配的模型组' : '暂无模型组，请先在多机仿真页配置槽位，再保存为模型组'}</div>
+            ) : loading ? (
               <div className="library-loading">加载中...</div>
             ) : tab === 'models' && visibleModels.length === 0 ? (
               <div className="library-loading">
@@ -269,6 +345,13 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
             ) : tab === 'scripts' ? visibleScripts.filter(script => !search || `${script.name} ${script.file} ${script.aircraft || ''}`.toLowerCase().includes(search.toLowerCase())).map(script => <div key={script.path} className={`library-item ${selectedScript?.path === script.path ? 'selected' : ''}`} onClick={() => void inspectScript(script)}><span className="library-item-icon">📋</span><div className="library-item-info"><div className="library-item-name">{(script.name || script.file).replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{group === 'user' ? '用户脚本' : '测试脚本'}</span>{script.aircraft && <span>· 模型 {script.aircraft}</span>}</div></div><span className="library-item-size">XML</span></div>) : catalogLoading ? <div className="library-loading">发动机/螺旋桨库加载中...</div> : visibleComponents.filter(file => !search || file.toLowerCase().includes(search.toLowerCase())).map(file => <div key={file} className="library-item"><span className="library-item-icon">{tab === 'engines' ? '⚙️' : '🌀'}</span><div className="library-item-info"><div className="library-item-name">{file.replace(/\.xml$/i, '')}</div><div className="library-item-meta"><span>{tab === 'engines' ? '发动机 / 电机' : '螺旋桨'}</span><span>· ROMFS → SD</span></div></div><span className="library-item-size">XML</span></div>)}
           </div>
 
+          {tab === 'fleet' && activeFleetGroup && <div className="library-detail">
+            <div className="library-detail-header"><span className="library-detail-icon">🛩️</span><div><h3>{activeFleetGroup.name}</h3><span className="library-detail-id">多机模型组 · 本机保存</span></div></div>
+            <p className="library-detail-desc">载入后将替换 01～08 的模型绑定、初始状态和网络覆盖；请在多机仿真页面启动实例。组参数不修改单模型配置。</p>
+            <div className="library-fleet-slots">{FLEET_INSTANCE_IDS.map(id => <div key={id}><strong>{id}</strong><span>{activeFleetGroup.slots[id] || '未配置'}{activeFleetGroup.initialOverrides[id] ? ' · 初始状态覆盖' : ''}{activeFleetGroup.networkOverrides[id] ? ' · 网口覆盖' : ''}</span></div>)}</div>
+            <button className="library-load-btn" onClick={() => { if (onLoadFleetGroup?.(activeFleetGroup) !== false) onClose(); }} disabled={!onLoadFleetGroup}>📥 加载此模型组</button>
+            <div className="library-user-actions"><button onClick={() => updateFleetGroup(activeFleetGroup)}>↻ 用当前编组更新</button><button onClick={() => renameFleetGroup(activeFleetGroup)}>✎ 重命名</button><button className="library-delete-btn" onClick={() => deleteFleetGroup(activeFleetGroup)}>删除</button></div>
+          </div>}
           {tab === 'models' && activeModel && (
             <div className="library-detail">
               <div className="library-detail-header">

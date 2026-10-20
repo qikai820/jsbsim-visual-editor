@@ -18,6 +18,8 @@ mod jsbsim_process;
 mod ftp_sync;
 mod usb_file;
 mod transport;
+mod network_discovery;
+mod romfs_network;
 mod sim_network;
 mod model_import;
 mod remote_model;
@@ -336,7 +338,7 @@ async fn get_aircraft_library() -> Result<serde_json::Value, String> {
                 "filePath": format!("aircraft/{0}/{0}.xml", name),
                 "version": "NuttX",
                 "release": "remote",
-                "description": "NuttX /mnt/sdcard/jsbsim 中的模型",
+                "description": "NuttX 内置 ROMFS 或 SD 卡中的模型",
                 "author": "",
                 "type": "fixed_wing",
                 "size": 0,
@@ -397,6 +399,33 @@ fn get_sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         "latest": client.latest(),
         "packets": client.packet_count()
     }))
+}
+
+#[tauri::command]
+fn sim_instance_snapshot(app: tauri::AppHandle, instance_id: String) -> Result<Option<serde_json::Value>, String> {
+    let id = instance_id.parse::<u8>().map_err(|_| "无效实例编号".to_string())?;
+    if !(1..=8).contains(&id) { return Err("实例编号必须为 01～08".into()); }
+    let state = app.state::<AppState>();
+    let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+    Ok(client.instance_snapshot(id))
+}
+
+#[tauri::command]
+fn sim_instance_control(app: tauri::AppHandle, instance_id: String, action: String,
+                        model: Option<String>, host: Option<String>, port: Option<u16>,
+                        initial: Option<sim_client::InstanceInitial>,
+                        network: Option<sim_client::InstanceNetwork>) -> Result<serde_json::Value, String> {
+    if !external_sim_mode() { return Err("多机控制需要连接网口半实物仿真机".into()); }
+    let id = instance_id.parse::<u8>().map_err(|_| "无效实例编号".to_string())?;
+    let command = match action.as_str() {
+        "start" => 1, "stop" => 2, "pause" => 3, "resume" => 4,
+        _ => return Err("无效实例动作".into()),
+    };
+    let state = app.state::<AppState>();
+    let client = state.sim_client.lock().map_err(|error| error.to_string())?.clone();
+    client.send_instance_command(id, command, model.as_deref(), host.as_deref(), port, initial.as_ref(), network.as_ref())
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"instance_id": format!("{id:02}"), "action": action, "sent": true}))
 }
 
 #[tauri::command]
@@ -616,10 +645,11 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 fn nsh_execute_tcp(command: &str) -> Result<String, String> {
+    let _guard = romfs_network::NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
     let log_info = command.starts_with("jsbsim --mcap-info ");
-    let host = transport::network_host_override().map(|address| address.to_string())
-        .unwrap_or_else(|| std::env::var("SIM_UDP_HOST")
-            .unwrap_or_else(|_| "192.168.101.81".to_owned()));
+    let host = transport::network_host()
+        .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?
+        .to_string();
     let port = std::env::var("NSH_TELNET_PORT")
         .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
     let address: SocketAddr = format!("{}:{}", host, port).parse()
@@ -1406,6 +1436,11 @@ fn simulator_transport_get() -> String {
 }
 
 #[tauri::command]
+fn simulator_network_target_get() -> Option<String> {
+    transport::network_host().map(|host| host.to_string())
+}
+
+#[tauri::command]
 fn simulator_transport_set(mode: String) -> Result<String, String> {
     Ok(transport::set_mode(&mode)?.as_str().to_string())
 }
@@ -1536,6 +1571,7 @@ fn main() {
                         std::time::Duration::from_millis(33),
                     );
                     let mut last_status: Option<bool> = None;
+                    let mut instance_ticks: u8 = 0;
                     loop {
                         interval.tick().await;
                         let client = {
@@ -1547,6 +1583,10 @@ fn main() {
                             if let Some(data) = client.latest() {
                                 let _ = app_handle.emit("telemetry", data);
                             }
+                        }
+                        instance_ticks = (instance_ticks + 1) % 8;
+                        if instance_ticks == 0 {
+                            let _ = app_handle.emit("sim-instances", client.instance_summaries());
                         }
                         let connected = client.is_connected();
                         if last_status != Some(connected) {
@@ -1584,6 +1624,8 @@ fn main() {
             load_aircraft,
             send_control,
             get_sim_status,
+            sim_instance_snapshot,
+            sim_instance_control,
             sim_sync_time,
             parse_dataflow,
             telemetry_record_start,
@@ -1650,6 +1692,7 @@ fn main() {
             firmware_stage,
             firmware_apply,
             simulator_transport_get,
+            simulator_network_target_get,
             simulator_transport_set,
             serial_assistant_list_ports,
             serial_assistant_open,

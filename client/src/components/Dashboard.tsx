@@ -26,7 +26,7 @@ export default function Dashboard({ telemetry, pinnedPaths, onUnpin, unitSystem 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
         {pinnedPaths.map(path => {
           const value = telemetry?.[path];
-          const { value: formattedValue, unit } = formatValueWithUnit(value, path, unitSystem);
+          const { value: formattedValue, unit } = formatValueWithUnit(typeof value === 'number' ? value : undefined, path, unitSystem);
           return (
             <div
               key={path}

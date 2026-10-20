@@ -7,16 +7,36 @@
 //!     to the simulation host.
 
 use serde_json::{json, Value};
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-/* The external bridge normally runs on the i.MX board, while this editor
- * runs on the development PC.  Keep it configurable, but make the board
- * address the useful default instead of silently sending commands to the PC. */
-const DEFAULT_CTRL_HOST: &str = "192.168.101.81";
+/* Until a board is discovered, keep the placeholder on loopback so commands
+ * cannot be sent to a stale address from a different network. */
+const DEFAULT_CTRL_HOST: &str = "127.0.0.1";
 const DEFAULT_CTRL_PORT: u16 = 5802;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceInitial {
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub altitude_m: f64,
+    pub roll_deg: f64,
+    pub pitch_deg: f64,
+    pub yaw_deg: f64,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct InstanceNetworkEndpoint { pub ip: String, pub port: String }
+#[derive(Clone, Debug, Deserialize)]
+pub struct InstanceNetwork {
+    pub input: Option<InstanceNetworkEndpoint>,
+    pub sensor: Option<InstanceNetworkEndpoint>,
+    pub gps: Option<InstanceNetworkEndpoint>,
+}
 #[cfg(not(test))]
 const DISCOVERY_PORT: u16 = 5803;
 #[cfg(test)]
@@ -28,6 +48,71 @@ fn model_basename(model: &str) -> &str {
 
 fn lifecycle_packet(command: u8) -> [u8; 5] {
     [b'V', b'C', b'M', b'D', command]
+}
+
+fn instance_command_packet(id: u8, action: u8, model: Option<&str>, host: Option<&str>,
+                           port: Option<u16>, initial: Option<&InstanceInitial>,
+                           network: Option<&InstanceNetwork>) -> std::io::Result<Vec<u8>> {
+    if !(1..=8).contains(&id) || !(1..=4).contains(&action) {
+        return Err(std::io::Error::other("invalid instance or action"));
+    }
+    let mut packet = vec![b'V', b'C', b'M', b'D', 10, id, action];
+    if action == 1 {
+        let model = model.ok_or_else(|| std::io::Error::other("model is required"))?;
+        if model.is_empty() || model.len() >= 64 || !model.bytes().all(|byte|
+            byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-') {
+            return Err(std::io::Error::other("invalid model name"));
+        }
+        let host = host.unwrap_or("");
+        if !host.is_empty() {
+            host.parse::<std::net::Ipv4Addr>()
+                .map_err(|_| std::io::Error::other("invalid PX4 IPv4 address"))?;
+        }
+        if port == Some(0) { return Err(std::io::Error::other("invalid PX4 UDP port")); }
+        let pose = if let Some(initial) = initial {
+            let values = [initial.latitude_deg, initial.longitude_deg, initial.altitude_m,
+                initial.roll_deg, initial.pitch_deg, initial.yaw_deg];
+            if !values.iter().all(|value| value.is_finite()) ||
+                initial.latitude_deg.abs() > 90.0 || initial.longitude_deg.abs() > 180.0 ||
+                !(-1000.0..=100000.0).contains(&initial.altitude_m) ||
+                [initial.roll_deg, initial.pitch_deg, initial.yaw_deg].iter().any(|value| value.abs() > 360.0) {
+                return Err(std::io::Error::other("invalid initial position or attitude"));
+            }
+            Some(values.map(|value| value.to_string()).join(","))
+        } else { None };
+        packet.extend_from_slice(model.as_bytes());
+        if let Some(network) = network {
+            let mut fields = Vec::with_capacity(6);
+            let mut any = false;
+            for (key, endpoint) in [("input", &network.input), ("sensor", &network.sensor), ("gps", &network.gps)] {
+                if let Some(endpoint) = endpoint {
+                    let ip = endpoint.ip.trim();
+                    if (!ip.is_empty() || key == "input") && ip.parse::<std::net::Ipv4Addr>().is_err() {
+                        return Err(std::io::Error::other(format!("invalid {key} IPv4 address")));
+                    }
+                    let parsed = endpoint.port.parse::<u16>().map_err(|_| std::io::Error::other(format!("invalid {key} port")))?;
+                    if parsed == 0 { return Err(std::io::Error::other(format!("invalid {key} port"))); }
+                    fields.push(ip.to_string()); fields.push(parsed.to_string()); any = true;
+                } else { fields.push(String::new()); fields.push("0".into()); }
+            }
+            if !any { return Err(std::io::Error::other("empty network override")); }
+            packet.extend_from_slice(format!("|{host}|{}|{}|{}", port.map(|value| value.to_string()).unwrap_or_default(),
+                pose.unwrap_or_default(), fields.join(",")).as_bytes());
+        } else {
+            if !host.is_empty() || port.is_some() {
+                packet.push(b'|'); packet.extend_from_slice(host.as_bytes());
+                if let Some(port) = port {
+                    packet.push(b'|'); packet.extend_from_slice(port.to_string().as_bytes());
+                }
+            }
+            if let Some(pose) = pose {
+                if host.is_empty() && port.is_none() { packet.extend_from_slice(b"||"); }
+                else if port.is_none() { packet.push(b'|'); }
+                packet.push(b'|'); packet.extend_from_slice(pose.as_bytes());
+            }
+        }
+    }
+    Ok(packet)
 }
 
 // ── public struct ──────────────────────────────────────────────────────────
@@ -49,6 +134,10 @@ struct SimClientInner {
     /// Most recent complete visual telemetry frame.  Only these packets carry
     /// the JSBSim lifecycle state; auxiliary packets must not overwrite it.
     latest_sim_status: Option<Value>,
+    /// Complete property snapshots per aircraft. The ordinary toolbar keeps
+    /// its single-aircraft status; the fleet page reads this separate store.
+    instance_frames: HashMap<u8, (Value, Instant)>,
+    last_visual_status_time: Option<Instant>,
     active_load_id: Option<u32>,
     latest_load_diagnostic: Option<Value>,
     diagnostic_protocol: bool,
@@ -129,6 +218,48 @@ fn resolve_lifecycle_state(requested: Option<&str>, latest: Option<&Value>) -> O
             .and_then(Value::as_str)
             .map(str::to_owned)
     })
+}
+
+fn frame_instance_id(frame: &Value) -> Option<u8> {
+    let value = frame.get("instance_id");
+    let number = match value {
+        None => 1, // Existing single-aircraft firmware.
+        Some(Value::String(text)) => text.parse::<u8>().ok()?,
+        Some(Value::Number(number)) => u8::try_from(number.as_u64()?).ok()?,
+        _ => return None,
+    };
+    (1..=8).contains(&number).then_some(number)
+}
+
+fn merge_instance_frame(instances: &mut HashMap<u8, (Value, Instant)>, frame: &Value) {
+    if frame.get("model").and_then(Value::as_str).is_none()
+        || frame.get("state").and_then(Value::as_str).is_none() {
+        return;
+    }
+    let Some(id) = frame_instance_id(frame) else { return };
+    let now = Instant::now();
+    let entry = instances.entry(id).or_insert_with(|| (json!({}), now));
+    let changed_model = entry.0.get("model") != frame.get("model");
+    let changed_tree = entry.0.get("tree_generation").is_some()
+        && frame.get("tree_generation").is_some()
+        && entry.0.get("tree_generation") != frame.get("tree_generation");
+    if changed_model || changed_tree || frame.get("state").and_then(Value::as_str) == Some("fault") {
+        entry.0 = json!({});
+    }
+    if let (Some(target), Some(source)) = (entry.0.as_object_mut(), frame.as_object()) {
+        for (key, value) in source {
+            if key == "properties" {
+                let properties = target.entry("properties").or_insert_with(|| json!({}));
+                if let (Some(existing), Some(incoming)) = (properties.as_object_mut(), value.as_object()) {
+                    for (path, sample) in incoming { existing.insert(path.clone(), sample.clone()); }
+                }
+            } else {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        target.insert("instance_id".into(), Value::String(format!("{id:02}")));
+    }
+    entry.1 = now;
 }
 
 fn jsbsim_task_alive(frame: Option<&Value>) -> Option<bool> {
@@ -281,8 +412,9 @@ impl SimClient {
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
             .unwrap_or(DEFAULT_CTRL_PORT);
-        let ctrl_host = std::env::var("SIM_UDP_HOST")
-            .unwrap_or_else(|_| DEFAULT_CTRL_HOST.to_string());
+        let ctrl_host = crate::transport::network_host()
+            .map(|host| host.to_string())
+            .unwrap_or_else(|| DEFAULT_CTRL_HOST.to_string());
         let initial_ctrl_addr: SocketAddr = format!("{}:{}", ctrl_host, ctrl_port)
             .parse()
             .expect("invalid ctrl address");
@@ -306,9 +438,12 @@ impl SimClient {
         );
 
         let ctrl_addr = Arc::new(Mutex::new(initial_ctrl_addr));
+        let configured_ctrl_addr = Arc::new(Mutex::new(initial_ctrl_addr));
         let inner = Arc::new(Mutex::new(SimClientInner {
                 latest: None,
                 latest_sim_status: None,
+                instance_frames: HashMap::new(),
+                last_visual_status_time: None,
                 active_load_id: None,
                 latest_load_diagnostic: None,
                 diagnostic_protocol: false,
@@ -330,6 +465,7 @@ impl SimClient {
         {
             let inner = Arc::clone(&inner);
             let telemetry_ctrl_addr = Arc::clone(&ctrl_addr);
+            let telemetry_configured_addr = Arc::clone(&configured_ctrl_addr);
             let sock = recv_socket;
             std::thread::Builder::new()
                 .name("sim-client-recv".into())
@@ -357,6 +493,9 @@ impl SimClient {
                                               if let Ok(mut address) = telemetry_ctrl_addr.lock() {
                                                 *address = SocketAddr::new(peer.ip(), ctrl_port);
                                               }
+                                              if let Ok(mut address) = telemetry_configured_addr.lock() {
+                                                *address = SocketAddr::new(peer.ip(), ctrl_port);
+                                              }
                                             }
                                             let mut state = inner.lock().unwrap();
                                             let xml_diagnostic = val.get("kind").and_then(Value::as_str) == Some("xml_diagnostic");
@@ -377,7 +516,11 @@ impl SimClient {
                                                 state.diagnostic_protocol = val.get("xml_diagnostics")
                                                     .and_then(Value::as_u64) == Some(1);
                                             }
-                                            if let Some(remote_state) = val.get("state").and_then(Value::as_str) {
+                                            // Existing single-aircraft controls continue to
+                                            // describe 01 when other instance frames arrive.
+                                            let primary_frame = val.get("model").is_none()
+                                                || frame_instance_id(&val) == Some(1);
+                                            if let Some(remote_state) = val.get("state").and_then(Value::as_str).filter(|_| primary_frame) {
                                                 let control_ack = val.get("kind")
                                                     .and_then(Value::as_str) == Some("control_ack");
                                                 if control_ack || heartbeat {
@@ -398,6 +541,12 @@ impl SimClient {
                                                     }
                                                 } else {
                                                     state.latest_sim_status = Some(val.clone());
+                                                    if val.get("latitude_deg").and_then(Value::as_f64).is_some()
+                                                        && val.get("longitude_deg").and_then(Value::as_f64).is_some()
+                                                        && val.get("altitude_m").and_then(Value::as_f64).is_some()
+                                                    {
+                                                        state.last_visual_status_time = Some(Instant::now());
+                                                    }
                                                 }
                                                 /* Only a matching board state acknowledges a
                                                  * lifecycle request.  During LOAD/restart the old
@@ -413,7 +562,7 @@ impl SimClient {
                                                     state.commanded_lifecycle_state = None;
                                                 }
                                             }
-                                            if let Some(timestamp) = val.get("timestamp").and_then(Value::as_f64) {
+                                            if let Some(timestamp) = val.get("timestamp").and_then(Value::as_f64).filter(|_| primary_frame) {
                                                 match state.last_simulation_timestamp {
                                                     Some(previous) if timestamp > previous + 1e-6 => {
                                                         state.last_simulation_progress = Some(Instant::now());
@@ -461,10 +610,11 @@ impl SimClient {
                                                         &mut state.latest_task_top, &val);
                                                 }
                                             }
+                                            merge_instance_frame(&mut state.instance_frames, &val);
                                             /* Heartbeat acknowledgements prove board reachability
                                              * but carry no model data and must not replace the
                                              * latest visual/task snapshot. */
-                                            if !heartbeat && !xml_diagnostic && !flight_controller {
+                                            if !heartbeat && !xml_diagnostic && !flight_controller && primary_frame {
                                                 state.latest = Some(val);
                                             }
                                             state.connected = true;
@@ -536,23 +686,49 @@ impl SimClient {
             discovery.set_broadcast(true).expect("enable discovery broadcast");
             discovery.set_nonblocking(true).expect("discovery nonblocking");
             let discovered_ctrl = Arc::clone(&ctrl_addr);
+            let discovered_configured = Arc::clone(&configured_ctrl_addr);
+            let discovery_inner = Arc::clone(&inner);
             let discover_send = discovery.try_clone().expect("clone discovery socket");
             std::thread::Builder::new()
                 .name("sim-client-discovery".into())
                 .spawn(move || {
                     let mut buf = [0u8; 128];
+                    let mut last_neighbor_probe = Instant::now() - Duration::from_secs(5);
                     loop {
                         if !crate::transport::allows_network() {
                             std::thread::sleep(Duration::from_secs(1));
                             continue;
                         }
                         let _ = discover_send.send_to(b"JSBSIM-DISCOVER", format!("255.255.255.255:{}", DISCOVERY_PORT));
+                        if std::env::var("SIM_UDP_HOST").is_err() &&
+                            last_neighbor_probe.elapsed() >= Duration::from_secs(5) &&
+                            discovery_inner.lock().is_ok_and(|state| !state.connected) {
+                            last_neighbor_probe = Instant::now();
+                            if let Some(host) = crate::network_discovery::discover(
+                                crate::transport::network_host_override()) {
+                                if let Ok(mut addr) = discovered_ctrl.lock() {
+                                    *addr = SocketAddr::new(host.into(), ctrl_port);
+                                }
+                                if let Ok(mut addr) = discovered_configured.lock() {
+                                    *addr = SocketAddr::new(host.into(), ctrl_port);
+                                }
+                                crate::transport::set_network_host_override(host);
+                            }
+                        }
                         let deadline = Instant::now() + Duration::from_millis(800);
                         while Instant::now() < deadline {
                             match discovery.recv_from(&mut buf) {
                                 Ok((n, peer)) if &buf[..n] == b"JSBSIM-HERE" => {
-                                    if let Ok(mut addr) = discovered_ctrl.lock() {
-                                        *addr = SocketAddr::new(peer.ip(), ctrl_port);
+                                    if let std::net::IpAddr::V4(host) = peer.ip() {
+                                      if crate::network_discovery::verify(host) {
+                                        if let Ok(mut addr) = discovered_ctrl.lock() {
+                                            *addr = SocketAddr::new(host.into(), ctrl_port);
+                                        }
+                                        if let Ok(mut addr) = discovered_configured.lock() {
+                                            *addr = SocketAddr::new(host.into(), ctrl_port);
+                                        }
+                                        crate::transport::set_network_host_override(host);
+                                      }
                                     }
                                 }
                                 Ok(_) => {}
@@ -597,7 +773,7 @@ impl SimClient {
             inner,
             send_socket,
             ctrl_addr,
-            configured_ctrl_addr: Arc::new(Mutex::new(initial_ctrl_addr)),
+            configured_ctrl_addr,
         }
     }
 
@@ -622,6 +798,45 @@ impl SimClient {
     /// other auxiliary UDP frames.
     pub fn latest_sim_status(&self) -> Option<Value> {
         self.inner.lock().unwrap().latest_sim_status.clone()
+    }
+
+    pub fn instance_summaries(&self) -> Vec<Value> {
+        let state = self.inner.lock().unwrap();
+        let mut result: Vec<Value> = state.instance_frames.iter().map(|(id, (frame, seen))| {
+            let mut fields = frame.as_object().map_or_else(serde_json::Map::new, |object| {
+                object.iter()
+                    .filter(|(key, _)| key.as_str() != "properties")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            });
+            let property_count = frame.get("properties")
+                .and_then(Value::as_object).map_or(0, |properties| properties.len());
+            fields.insert("property_count".into(), json!(property_count));
+            fields.insert("instance_id".into(), json!(format!("{id:02}")));
+            fields.insert("age_ms".into(), json!(seen.elapsed().as_millis().min(u128::from(u32::MAX))));
+            Value::Object(fields)
+        }).collect();
+        result.sort_by(|a, b| a["instance_id"].as_str().cmp(&b["instance_id"].as_str()));
+        result
+    }
+
+    pub fn instance_snapshot(&self, id: u8) -> Option<Value> {
+        if !(1..=8).contains(&id) { return None; }
+        let state = self.inner.lock().unwrap();
+        let (frame, seen) = state.instance_frames.get(&id)?;
+        let mut snapshot = frame.clone();
+        snapshot["age_ms"] = json!(seen.elapsed().as_millis().min(u128::from(u32::MAX)));
+        Some(snapshot)
+    }
+
+    pub fn latest_visual_status_fresh(&self, max_age: Duration) -> Option<Value> {
+        let state = self.inner.lock().unwrap();
+        state.last_visual_status_time.filter(|time| time.elapsed() <= max_age)?;
+        state.latest_sim_status.as_ref().filter(|status|
+            status.get("latitude_deg").and_then(Value::as_f64).is_some()
+            && status.get("longitude_deg").and_then(Value::as_f64).is_some()
+            && status.get("altitude_m").and_then(Value::as_f64).is_some()
+        ).cloned()
     }
 
     pub fn request_lifecycle_state(&self, requested: &str) {
@@ -801,6 +1016,15 @@ impl SimClient {
         self.send_to_control_addresses(&packet)
     }
 
+    /// VCMD 10 controls one Ethernet HIL instance. The board acknowledges
+    /// queueing separately; telemetry confirms whether the model loaded.
+    pub fn send_instance_command(&self, id: u8, action: u8, model: Option<&str>,
+                                 host: Option<&str>, port: Option<u16>, initial: Option<&InstanceInitial>,
+                                 network: Option<&InstanceNetwork>) -> std::io::Result<()> {
+        let packet = instance_command_packet(id, action, model, host, port, initial, network)?;
+        self.send_to_control_addresses(&packet)
+    }
+
     /// Send a lifecycle command using the bridge's state acknowledgement as a
     /// handshake.  Retransmit only when the acknowledgement has not arrived
     /// by the next polling deadline; never send a fixed burst of copies.
@@ -831,6 +1055,7 @@ impl SimClient {
             state.active_load_id = Some(request);
             state.latest_load_diagnostic = None;
             state.latest_sim_status = None;
+            state.last_visual_status_time = None;
         }
 
         self.send_to_control_addresses(&packet)?;
@@ -879,6 +1104,7 @@ impl SimClient {
             state.active_load_id = Some(request);
             state.latest_load_diagnostic = None;
             state.latest_sim_status = None;
+            state.last_visual_status_time = None;
         }
         self.send_to_control_addresses(&packet)?;
         Ok(request)
@@ -936,6 +1162,39 @@ impl SimClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_start_carries_independent_initial_override() {
+        let initial = InstanceInitial { latitude_deg: 47.0, longitude_deg: 8.0,
+            altitude_m: 0.0, roll_deg: -3.0, pitch_deg: 2.0, yaw_deg: 90.0 };
+        let packet = instance_command_packet(2, 1, Some("F450"), None, None, Some(&initial), None).unwrap();
+        assert_eq!(&packet[..7], b"VCMD\x0a\x02\x01");
+        assert_eq!(&packet[7..], b"F450|||47,8,0,-3,2,90");
+        assert_eq!(&instance_command_packet(2, 1, Some("F450"), None, None, None, None).unwrap()[7..], b"F450");
+        assert!(instance_command_packet(2, 1, Some("F450"), None, None,
+            Some(&InstanceInitial { latitude_deg: 91.0, ..initial }), None).is_err());
+        let network = InstanceNetwork {
+            input: Some(InstanceNetworkEndpoint { ip: "0.0.0.0".into(), port: "14561".into() }),
+            sensor: Some(InstanceNetworkEndpoint { ip: "192.168.3.101".into(), port: "14560".into() }),
+            gps: Some(InstanceNetworkEndpoint { ip: "192.168.3.102".into(), port: "14570".into() }),
+        };
+        let packet = instance_command_packet(2, 1, Some("F450"), None, None, Some(&initial), Some(&network)).unwrap();
+        assert_eq!(&packet[7..], b"F450|||47,8,0,-3,2,90|0.0.0.0,14561,192.168.3.101,14560,192.168.3.102,14570");
+    }
+
+    #[test]
+    fn instance_slices_remain_isolated_and_reset_on_model_change() {
+        let mut instances = HashMap::new();
+        merge_instance_frame(&mut instances, &json!({"instance_id":"01", "model":"H7", "state":"running", "tree_generation":1, "properties":{"/01/jsbsim/fcs/a":1}}));
+        merge_instance_frame(&mut instances, &json!({"instance_id":"02", "model":"F450", "state":"running", "tree_generation":1, "properties":{"/02/jsbsim/fcs/a":2}}));
+        merge_instance_frame(&mut instances, &json!({"instance_id":"01", "model":"H7", "state":"running", "tree_generation":1, "properties":{"/01/jsbsim/fcs/b":3}}));
+        assert_eq!(instances[&1].0["properties"].as_object().unwrap().len(), 2);
+        assert_eq!(instances[&2].0["properties"].as_object().unwrap().len(), 1);
+        merge_instance_frame(&mut instances, &json!({"instance_id":"01", "model":"C172", "state":"running", "tree_generation":2, "properties":{"/01/jsbsim/fcs/c":4}}));
+        assert_eq!(instances[&1].0["properties"].as_object().unwrap().len(), 1);
+        assert!(instances[&1].0["properties"].get("/01/jsbsim/fcs/a").is_none());
+        assert_eq!(instances[&2].0["model"], "F450");
+    }
 
     #[test]
     fn stop_command_uses_bridge_lifecycle_protocol() {

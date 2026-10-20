@@ -1408,6 +1408,19 @@ html, body, #root {
 }
 .library-user-actions button:hover { background: var(--bg-tertiary); }
 .library-user-actions .library-delete-btn { color: #c0392b; border-color: #e8b9b4; }
+.library-fleet-create {
+  padding: 8px 12px; border: 1px solid var(--accent, #0284c7); border-radius: 8px;
+  background: var(--accent-light, #e0f2fe); color: var(--accent, #0284c7);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.library-fleet-create:hover { filter: brightness(0.97); }
+.library-fleet-slots { display: grid; gap: 5px; margin-bottom: 12px; }
+.library-fleet-slots > div {
+  display: flex; gap: 10px; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-primary); font-size: 12px;
+}
+.library-fleet-slots strong { color: var(--accent, #0284c7); font-family: monospace; }
+.library-fleet-slots span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ========== 实时融合显示 (Live HMI) ========== */
 .btn-live {
@@ -2015,6 +2028,8 @@ html, body, #root {
   display: inline-flex;
   vertical-align: middle;
 }
+.sim-fleet-section .sim-menu-item { font-size: 12px; }
+
 
 .toolbar .sim-split-trigger button {
   display: inline-flex;
@@ -2484,7 +2499,7 @@ html, body, #root {
 .log-download-progress{width:min(360px,80%);height:8px;margin-top:8px;border-radius:8px;background:#d9e8ec;overflow:hidden}.log-download-progress i{display:block;height:100%;border-radius:8px;background:#0ea5a4;transition:width .2s ease}
 .log-open-error{max-width:min(520px,85%);margin-top:12px;padding:10px 12px;border:1px solid #f0b4b4;border-radius:7px;background:#fff3f3;color:#9f3030;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 .log-mcap-info{overflow:auto;flex:1;padding:22px 24px;background:#fafcfd;color:#40546b;font-size:12px}.log-mcap-name{display:block;font:600 15px ui-monospace,monospace;overflow-wrap:anywhere}.log-mcap-range{margin-top:8px;color:#71869a}.log-mcap-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:22px 0}.log-mcap-metrics>div{padding:14px;border:1px solid #e1e8ee;border-radius:7px;background:#fff}.log-mcap-metrics small{display:block;color:#8192a3}.log-mcap-metrics strong{display:block;margin-top:7px;color:#087f7b;font-size:19px}.log-mcap-info h3{margin:18px 0 8px;font-size:12px}.log-mcap-info table{width:100%;border-collapse:collapse;text-align:left}.log-mcap-info th,.log-mcap-info td{padding:10px 7px;border-bottom:1px solid #e7edf2;overflow-wrap:anywhere}.log-mcap-info th{color:#71869a;font-weight:500}.log-mcap-info th:last-child,.log-mcap-info td:last-child{text-align:right}.log-mcap-info p{color:#71869a;line-height:1.5}.log-mcap-info .log-open-error{max-width:none}.log-mcap-info .log-open-plotjuggler{margin-top:18px}
-.log-mcap-table{max-width:100%;overflow-x:auto}.log-mcap-table table{min-width:520px}.log-mcap-table th:nth-last-child(-n+2),.log-mcap-table td:nth-last-child(-n+2){text-align:right;white-space:nowrap}
+.log-mcap-channels-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.log-mcap-channels-head label{display:flex;align-items:center;gap:7px;color:#71869a}.log-mcap-channels-head select{padding:5px 8px;border:1px solid #d8e2e9;border-radius:5px;background:#fff;color:#40546b}.log-mcap-table{max-width:100%;overflow-x:auto}.log-mcap-table table{min-width:520px}.log-mcap-table th:nth-last-child(-n+2),.log-mcap-table td:nth-last-child(-n+2){text-align:right;white-space:nowrap}
 .log-day-group{border-bottom:1px solid #dfe7ed}.log-day-title{position:sticky;top:0;z-index:1;width:100%;display:flex;align-items:center;gap:7px;padding:7px 11px;border:0;background:#f1f6f8;color:#4e6979;font-size:11px;text-align:left;cursor:pointer}.log-day-title:hover{background:#e6f0f4}.log-day-title small{margin-left:auto;padding:1px 6px;border-radius:9px;background:#dce9ee;color:#66808e}.log-day-arrow{width:10px;color:#78909c;font-size:9px}.log-day-group>button:not(.log-day-title){width:100%;display:flex;align-items:flex-start;gap:9px;padding:10px 12px 10px 22px;border:0;border-top:1px solid #edf1f4;background:#fff;text-align:left;color:#415369;cursor:pointer}.log-day-group>button.selected{background:#e8f7f6;box-shadow:inset 3px 0 #0ea5a4}.log-day-group>button>div{min-width:0;display:flex;flex-direction:column;gap:3px}.log-day-group>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px ui-monospace,monospace}.log-day-group>button small{color:#91a0ae;font-size:10px}
 .log-field-category{border-bottom:1px solid #e7eef3}.log-field-category-head{display:flex;width:100%;align-items:center;justify-content:space-between;padding:7px 5px;border:0;background:#f8fafc;color:#466176;text-align:left;cursor:pointer}.log-field-category-head:hover{background:#edf7f8;color:#087f7b}.log-field-category-head span{font-size:11px;font-weight:700}.log-field-category-head small{padding:1px 6px;border-radius:10px;background:#e8f2f5;color:#71889a;font:10px ui-monospace,monospace}
 .log-plot-toolbar button,.topic-tools button{padding:4px 8px;border:1px solid #ced9e2;border-radius:5px;background:#fff;color:#52667a;font-size:10px;cursor:pointer}.topic-tools{display:flex;gap:5px;padding:7px 0}.topic-tools input{min-width:0;flex:1;padding:6px 7px;border:1px solid #d7e0e7;border-radius:5px;outline:none;font-size:10px}.topic-tools input:focus{border-color:#0ea5a4}

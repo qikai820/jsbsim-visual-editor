@@ -58,6 +58,7 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
     return [...byPath.values()];
   }, [downloadedLogs, pickedLogs]);
   const [selected, setSelected] = useState('');
+  const [channelInstance, setChannelInstance] = useState('all');
   const [remoteStatus, setRemoteStatus] = useState('正在读取仿真机日志…');
   const [localStatus, setLocalStatus] = useState('正在读取本地日志…');
   const [busy, setBusy] = useState(false);
@@ -258,6 +259,12 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
   }, [tab, remoteLogs, localLogs]);
   const current = items.find(item => item.key === selected);
   const mcapInfo = tab === 'remote' && infoResult?.file === selected ? infoResult.value : null;
+  const channelInstanceIds = [...new Set((mcapInfo?.channels || [])
+    .map(channel => channel.topic.match(/^\/(0[1-8])\/jsbsim(?:\/|$)/)?.[1])
+    .filter((id): id is string => !!id))].sort();
+  const visibleChannelInstance = channelInstanceIds.includes(channelInstance) ? channelInstance : 'all';
+  const visibleChannels = visibleChannelInstance === 'all' ? mcapInfo?.channels || []
+    : (mcapInfo?.channels || []).filter(channel => channel.topic.startsWith(`/${visibleChannelInstance}/jsbsim/`));
   const totalBytes = remoteLogs.find(log => log.name === downloadProgress?.name)?.size;
   const progressPercent = totalBytes && downloadProgress
     ? Math.min(100, Math.floor(downloadProgress.bytes / totalBytes * 100)) : null;
@@ -316,9 +323,17 @@ export default function LogCenter({ onClose }: { onClose: () => void }) {
                   <div><small>消息总数</small><strong>{formatCount(mcapInfo.messageCount)}</strong></div>
                   <div><small>通道</small><strong>{mcapInfo.channels.length}</strong></div>
                 </div>
-                <h3>通道详情</h3>
-                <div className="log-mcap-table"><table><thead><tr><th>Topic</th><th>编码</th><th>消息数</th><th>平均频率</th></tr></thead>
-                  <tbody>{mcapInfo.channels.map(channel => <tr key={channel.topic}><td>{channel.topic}</td><td>{channel.encoding}</td><td>{formatCount(channel.messageCount)}</td><td>{formatAverageFrequency(channel.messageCount, mcapInfo.startNs, mcapInfo.endNs)}</td></tr>)}</tbody>
+                <div className="log-mcap-channels-head"><h3>通道详情</h3><label>实例
+                  <select value={visibleChannelInstance} onChange={event => setChannelInstance(event.target.value)}>
+                    <option value="all">全部</option>
+                    {channelInstanceIds.map(id => <option key={id} value={id}>{id}</option>)}
+                  </select>
+                </label></div>
+                <div className="log-mcap-table"><table><thead><tr><th>实例</th><th>Topic</th><th>编码</th><th>消息数</th><th>平均频率</th></tr></thead>
+                  <tbody>{visibleChannels.map(channel => {
+                    const id = channel.topic.match(/^\/(0[1-8])\/jsbsim(?:\/|$)/)?.[1];
+                    return <tr key={channel.topic}><td>{id || '共享/旧版'}</td><td>{channel.topic}</td><td>{channel.encoding}</td><td>{formatCount(channel.messageCount)}</td><td>{formatAverageFrequency(channel.messageCount, mcapInfo.startNs, mcapInfo.endNs)}</td></tr>;
+                  })}</tbody>
                 </table></div>
                 <p>平均频率 = 通道消息数 ÷ 整段日志的仿真时长；间歇通道包含未发送的时间。</p>
                 {mcapInfo.statisticsSource === 'chunk-scan' && <p>此旧日志没有 Statistics；准确消息数需扫描并解压全部 Chunk。</p>}

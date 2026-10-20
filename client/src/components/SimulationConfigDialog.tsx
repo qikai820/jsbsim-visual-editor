@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
+import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 import { useSimSocket } from '../sim/useSimSocket';
 
@@ -63,7 +63,7 @@ const formatBuildTime = (value: string | undefined, isZh: boolean) => {
   return zone ? `${localTime} ${zone}` : localTime;
 };
 
-export default function SimulationConfigDialog({ model, onClose }: { model: string; onClose: () => void }) {
+export default function SimulationConfigDialog({ model, instanceId, slots, onSelectInstance, onClose }: { model: string; instanceId: string; slots: Record<string, string>; onSelectInstance: (id: string) => void | Promise<void>; onClose: () => void }) {
   const { isZh } = useLanguage();
   const { telemetry, connected } = useSimSocket();
   const tr = (zh: string, en: string) => isZh ? zh : en;
@@ -144,7 +144,7 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
   }, [variableCacheKey]);
 
   useEffect(() => {
-    if (telemetry?.model !== model) return;
+    if (instanceId !== '01' || telemetry?.model !== model) return;
     const paths = Object.entries(telemetry)
       .filter(([path, value]) => path.startsWith('/') && typeof value === 'number' && Number.isFinite(value))
       .map(([path]) => path)
@@ -155,7 +155,28 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
       localStorage.setItem(variableCacheKey, JSON.stringify(paths));
       return paths;
     });
-  }, [telemetry, model, variableCacheKey]);
+  }, [telemetry, model, instanceId, variableCacheKey]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let active = true;
+    const refresh = () => { void simInstanceSnapshot(instanceId).then(snapshot => {
+      if (!active || !snapshot || (snapshot.model && snapshot.model !== model)) return;
+      const paths = Object.entries(snapshot.properties || {})
+        .filter(([path, value]) => path.startsWith('/') && typeof value === 'number' && Number.isFinite(value))
+        .map(([path]) => path.replace(/^\/\d{2}\/jsbsim\//, '/').replace(/^\/jsbsim\[\d+\]\//, '/'))
+        .sort((a, b) => a.localeCompare(b));
+      if (!paths.length) return;
+      setAvailableVariables(previous => {
+        if (previous.length === paths.length && previous.every((path, index) => path === paths[index])) return previous;
+        localStorage.setItem(variableCacheKey, JSON.stringify(paths));
+        return paths;
+      });
+    }).catch(() => {}); };
+    refresh();
+    const timer = window.setInterval(refresh, 1500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [instanceId, model, variableCacheKey]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -324,9 +345,16 @@ export default function SimulationConfigDialog({ model, onClose }: { model: stri
     }
   };
 
+  const switchInstance = (id: string) => {
+    if (id === instanceId || !slots[id] || saving || firmwareUpdating) return;
+    const original = baseline || JSON.stringify(defaults, null, 2);
+    if (serialized !== original && !window.confirm(tr('当前实例的配置尚未保存，切换后将丢失修改。继续吗？', 'Unsaved configuration changes will be lost when switching instances. Continue?'))) return;
+    void onSelectInstance(id);
+  };
+
   return <div className="sim-config-overlay" onMouseDown={e => { if (e.target === e.currentTarget && !firmwareUpdating) onClose(); }}>
     <div className="sim-config-dialog">
-      <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><span>{tr('模型', 'Model')}: {safeModel}</span></div><button disabled={firmwareUpdating} onClick={onClose}>×</button></header>
+      <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><label className="sim-config-instance-picker"><span>{tr('实例', 'Instance')}</span><select aria-label={tr('切换配置实例', 'Switch configuration instance')} value={instanceId} disabled={saving || firmwareUpdating} onChange={event => switchInstance(event.target.value)}>{Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0')).map(id => <option key={id} value={id} disabled={!slots[id]}>{id} · {slots[id] || tr('未绑定', 'Unassigned')}</option>)}</select></label><span>{tr('模型', 'Model')}: {safeModel}</span></div><button disabled={firmwareUpdating} onClick={onClose}>×</button></header>
       <div className="simulator-version-card">
         <div><strong>{tr('仿真机版本', 'Simulator Version')}</strong><small>{versionStatus}</small></div>
         {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span><span title={simulatorVersion.build_time}>{tr('编译时间', 'Built')} {formatBuildTime(simulatorVersion.build_time, isZh)} · Git {simulatorVersion.git_short_hash || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}
