@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::hash::{BuildHasher, Hasher};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io::{Read, Seek, SeekFrom, Write}, path::Path};
 
 const VID: u16 = 0x1209;
@@ -1010,21 +1010,37 @@ fn take_sim_frame(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(frame[8..].to_vec()))
 }
 
+fn read_sim_frame_with(
+    buffer: &mut Vec<u8>, timeout: Duration,
+    mut read_packet: impl FnMut(&mut [u8], Duration) -> Result<usize, rusb::Error>,
+) -> Result<Option<Vec<u8>>, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(frame) = take_sim_frame(buffer)? {
+            return Ok(Some(frame));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        /* Complete one SIM1 record under the same interface claim.  The
+         * caller sleeps after Ok(None), so yielding for each 512-byte chunk
+         * throttled an eight-instance stream even while USB data was ready. */
+        let mut packet = [0u8; 512];
+        match read_packet(&mut packet, remaining) {
+            Ok(0) => return Ok(None),
+            Ok(count) => buffer.extend_from_slice(&packet[..count]),
+            Err(rusb::Error::Timeout) => return Ok(None),
+            Err(error) => return Err(format!("simulation USB read failed: {error}")),
+        }
+    }
+}
+
 fn read_sim_frame(handle: &DeviceHandle<Context>, buffer: &mut Vec<u8>,
                   timeout: Duration) -> Result<Option<Vec<u8>>, String> {
-    if let Some(frame) = take_sim_frame(buffer)? {
-        return Ok(Some(frame));
-    }
-
-    /* Read one USB packet at a time.  The NuttX endpoint emits larger SIM1
-     * records as consecutive 512-byte packets followed by a short packet. */
-    let mut packet = [0u8; 512];
-    match handle.read_bulk(SIM_IN, &mut packet, timeout) {
-        Ok(count) => buffer.extend_from_slice(&packet[..count]),
-        Err(rusb::Error::Timeout) => return Ok(None),
-        Err(error) => return Err(format!("simulation USB read failed: {error}")),
-    }
-    take_sim_frame(buffer)
+    read_sim_frame_with(buffer, timeout, |packet, remaining| {
+        handle.read_bulk(SIM_IN, packet, remaining)
+    })
 }
 
 pub fn sim_read() -> Result<Option<Vec<u8>>, String> {
@@ -1108,6 +1124,27 @@ pub fn simulation_self_test() -> Result<String, String> {
 #[cfg(test)]
 mod response_tests {
     use super::*;
+
+    #[test]
+    fn simulation_usb_reads_a_complete_frame_without_pausing_between_chunks() {
+        for payload_length in [1016, 1392] {
+            let payload = vec![b'x'; payload_length];
+            let mut wire = b"SIM1".to_vec();
+            wire.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            wire.extend_from_slice(&payload);
+            let mut chunks = wire.chunks(512);
+            let mut reads = 0;
+            let frame = read_sim_frame_with(&mut Vec::new(), Duration::from_secs(1),
+                |packet, _| {
+                    let chunk = chunks.next().expect("read past the complete frame");
+                    packet[..chunk.len()].copy_from_slice(chunk);
+                    reads += 1;
+                    Ok(chunk.len())
+                }).unwrap().unwrap();
+            assert_eq!(frame, payload);
+            assert_eq!(reads, wire.len().div_ceil(512));
+        }
+    }
 
     #[test]
     fn startup_controls_and_heartbeat_do_not_take_the_file_response_lock() {
