@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ftpDownloadModel, ftpDownloadSimConfig, isTauri, listenSimInstances, simInstanceControl, simInstanceSnapshot, simListModels, type SimInstanceSummary } from '../utils/tauriApi';
 import { buildFleetInitialGrid, modelGeocentricToGpsLatitude, normalizeFleetNetworkOverrides, type FleetInitialOverrides, type FleetInitialPose, type FleetNetworkOverrides } from '../utils/fleetModelGroups';
 import { readHilEndpoints, readHilEndpointsFromNodes, type HilEndpointKey, type HilEndpoints } from '../utils/hilEndpoints';
 import { useFlowStore } from '../store/flowStore';
 import type { Telemetry } from '../sim/useSimSocket';
 import MultiSimMap from './MultiSimMap';
+import FleetInstanceList from './FleetInstanceList';
 import './MultiSimPanel.css';
 
 const IDS = Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0'));
@@ -70,8 +71,12 @@ function number(value: unknown, digits = 1, unit = ''): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(digits)}${unit}` : '—';
 }
 
-function stateLabel(state: string | undefined, fresh: boolean): string {
-  if (!fresh) return '未连接';
+const INSTANCE_FRESH_MS = 2000;
+const INSTANCE_DISCONNECTED_MS = 10000;
+
+function stateLabel(state: string | undefined, ageMs: number | undefined, connected: boolean): string {
+  if (!connected || ageMs === undefined || ageMs >= INSTANCE_DISCONNECTED_MS) return '未连接';
+  if (ageMs >= INSTANCE_FRESH_MS) return '遥测延迟';
   switch (state) {
     case 'running': return '运行中';
     case 'paused': return '已暂停';
@@ -124,6 +129,7 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
   const [filter, setFilter] = useState('');
   const [modelsError, setModelsError] = useState('');
   const [view, setView] = useState<'map' | 'detail'>('map');
+  const gridDialogRef = useRef<HTMLDialogElement>(null);
 
   const selectedModel = slots[selected] || '';
   useEffect(() => { setGridValues(gridDraft(initialOverrides['01'])); }, [initialOverrides['01']]);
@@ -310,7 +316,7 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
   const selectedSummary = byId.get(selected) || (selected === '01' ? fallback : null);
   const selectedSnapshot = snapshot?.instance_id === selected ? snapshot :
     (selected === '01' ? fallback : null);
-  const fresh = !!selectedSummary && connected && (selectedSummary.age_ms ?? 0) < 2000;
+  const fresh = !!selectedSummary && connected && (selectedSummary.age_ms ?? Infinity) < INSTANCE_FRESH_MS;
   const live = fresh ? selectedSummary : null;
   const propertyRows = useMemo(() => {
     const properties = fresh ? selectedSnapshot?.properties : null;
@@ -324,15 +330,15 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
   }, [selectedSnapshot, selected, filter, fresh]);
   const connectedCount = IDS.filter(id => {
     const item = byId.get(id) || (id === '01' ? fallback : null);
-    return !!item && connected && (item.age_ms ?? 0) < 2000;
+    return !!item && connected && (item.age_ms ?? Infinity) < INSTANCE_FRESH_MS;
   }).length;
   const activeCount = IDS.filter(id => {
     const item = byId.get(id) || (id === '01' ? fallback : null);
-    return !!item && connected && (item.age_ms ?? 0) < 2000 && item.state === 'running';
+    return !!item && connected && (item.age_ms ?? Infinity) < INSTANCE_FRESH_MS && item.state === 'running';
   }).length;
   const pausedCount = IDS.filter(id => {
     const item = byId.get(id) || (id === '01' ? fallback : null);
-    return !!item && connected && (item.age_ms ?? 0) < 2000 && item.state === 'paused';
+    return !!item && connected && (item.age_ms ?? Infinity) < INSTANCE_FRESH_MS && item.state === 'paused';
   }).length;
   useEffect(() => { onFleetStateChange({ running: activeCount, paused: pausedCount }); },
     [activeCount, pausedCount, onFleetStateChange]);
@@ -364,6 +370,7 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
     <header className="multi-sim-header">
       <div><span className="multi-sim-eyebrow">SIMULATION FLEET</span><h1>多机仿真</h1><p>8 个实例槽位 · 当前已连接 {connectedCount} 架 · {connected ? '仿真机在线' : '等待仿真机连接'}</p></div>
       <div className="multi-sim-header-actions">
+        <button type="button" aria-haspopup="dialog" onClick={() => gridDialogRef.current?.showModal()}>编组初始位置</button>
         <div className="multi-sim-view-tabs" role="group" aria-label="视图切换">
           <button type="button" aria-pressed={view === 'map'} onClick={() => setView('map')}>地图</button>
           <button type="button" aria-pressed={view === 'detail'} onClick={() => setView('detail')}>实例详情</button>
@@ -373,8 +380,11 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
         <button onClick={() => { if (discardDraft()) onOpenEditor(); }}>模型编辑</button>
       </div>
     </header>
-    <details className="multi-sim-grid" aria-label="仿真组初始位置编组">
-      <summary>编组初始位置 <span>以实例 01 为起点 · 2 行 × 4 列 · 间距 0.5 m</span></summary>
+    <dialog ref={gridDialogRef} className="multi-sim-grid" aria-labelledby="multi-sim-grid-title">
+      <div className="multi-sim-grid-head">
+        <div><h2 id="multi-sim-grid-title">编组初始位置</h2><p>以实例 01 为起点 · 2 行 × 4 列 · 间距 0.5 m</p></div>
+        <button type="button" onClick={() => gridDialogRef.current?.close()} aria-label="关闭编组初始位置弹窗">关闭</button>
+      </div>
       <div className="multi-sim-grid-body">
         <div className="multi-sim-grid-fields">
           {([['latitudeDeg', '起点纬度', '° N'], ['longitudeDeg', '起点经度', '° E'], ['altitudeM', '地面海拔', 'm']] as const).map(([key, label, unit]) =>
@@ -389,27 +399,20 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
         {gridError && <p className="multi-sim-error" role="alert">{gridError}</p>}
         {gridMessage && <p className="multi-sim-hil-success" role="status">{gridMessage}</p>}
       </div>
-    </details>
+    </dialog>
     <div className="multi-sim-layout">
       <section className="multi-sim-slots" aria-label="实例列表">
-        <div className="multi-sim-section-title"><h2>实例</h2><span>{activeCount} / 8 运行中</span></div>
-        {IDS.map(id => {
-          const item = byId.get(id) || (id === '01' ? fallback : null);
-          const online = !!item && connected && (item.age_ms ?? 0) < 2000;
-          const state = item ? stateLabel(item.state, online) : '待接入';
-          return <button key={id} type="button" className={`multi-sim-slot${selected === id ? ' selected' : ''}`} onClick={() => { if (discardDraft()) onSelect(id); }} aria-pressed={selected === id}>
-            <strong>{id}</strong><span className="multi-sim-slot-main"><b>{online ? item?.model || slots[id] || '未命名模型' : slots[id] || '未配置模型'}</b><small>{state}{initialOverrides[id] ? ' · 初始状态覆盖' : ''}{networkOverrides[id] ? ' · 网口覆盖' : ''}{online && typeof item?.timestamp === 'number' ? ` · ${item.timestamp.toFixed(1)} s` : ''}</small></span><i className={online ? item?.state || 'online' : 'offline'} aria-hidden="true" />
-          </button>;
-        })}
+        <FleetInstanceList summaries={summaries} fallback={fallback} connected={connected}
+          selected={selected} onSelect={id => { if (discardDraft()) onSelect(id); }} />
       </section>
       <div className="multi-sim-view">
         {view === 'map' ? <MultiSimMap connected={connected} instances={IDS.map(id => byId.get(id) || (id === '01' ? fallback : null)).filter((item): item is SimInstanceSummary => !!item)} selected={selected} slots={slots} initialOverrides={initialOverrides} onSelect={id => { if (discardDraft()) onSelect(id); }} /> :
       <section className="multi-sim-detail" aria-label={`实例 ${selected} 详情`}>
-        <div className="multi-sim-detail-head"><div><span className="multi-sim-eyebrow">INSTANCE {selected} / 08</span><h2>{selectedSummary?.model || slots[selected] || '未配置模型'}</h2></div><span className={`multi-sim-state ${fresh ? selectedSummary?.state || 'online' : 'offline'}`}>{selectedSummary ? stateLabel(selectedSummary.state, fresh) : '待接入'}</span></div>
+        <div className="multi-sim-detail-head"><div><span className="multi-sim-eyebrow">INSTANCE {selected} / 08</span><h2>{selectedSummary?.model || slots[selected] || '未配置模型'}</h2></div><span className={`multi-sim-state ${fresh ? selectedSummary?.state || 'online' : connected && (selectedSummary?.age_ms ?? Infinity) < INSTANCE_DISCONNECTED_MS ? 'delayed' : 'offline'}`}>{selectedSummary ? stateLabel(selectedSummary.state, selectedSummary.age_ms, connected) : '待接入'}</span></div>
         <div className="multi-sim-config"><label htmlFor="multi-sim-model">预设模型</label><select id="multi-sim-model" value={slots[selected]} onChange={event => { if (discardDraft()) onSlotsChange(current => ({ ...current, [selected]: event.target.value })); }}><option value="">未选择</option>{slots[selected] && !models.includes(slots[selected]) && <option value={slots[selected]}>{slots[selected]}</option>}{models.map(model => <option key={model} value={model}>{model}</option>)}</select><small>选择板端已安装的网口 HIL 模型。</small>{modelsError && <small className="multi-sim-error">模型列表：{modelsError}</small>}</div>
         <div className="multi-sim-instance-actions"><button disabled={!connected || busy || !slots[selected] || hilEdited || initialEdited} title={hilEdited || initialEdited ? '先保存配置再启动' : undefined} onClick={() => void runCommands([selected], 'start')}>启动实例</button><button disabled={!connected || busy} onClick={() => void runCommands([selected], 'pause')}>暂停</button><button disabled={!connected || busy} onClick={() => void runCommands([selected], 'resume')}>继续</button><button disabled={!connected || busy} onClick={() => void runCommands([selected], 'stop')}>停止</button>{selectedSummary?.state === 'fault' && <span role="alert">{selectedSummary.error || '模型加载失败'}</span>}</div>
         {commandMessage && <p className="multi-sim-command-error" role="alert">{commandMessage}</p>}
-        <div className="multi-sim-metrics"><div><span>仿真时间</span><strong>{number(live?.timestamp, 1, ' s')}</strong></div><div><span>高度</span><strong>{number(live?.altitude_m, 1, ' m')}</strong></div><div><span>空速</span><strong>{number(live?.airspeed_mps, 1, ' m/s')}</strong></div><div><span>地速</span><strong>{number(live?.groundspeed_mps, 1, ' m/s')}</strong></div><div><span>纬度</span><strong>{number(live?.latitude_deg, 6)}</strong></div><div><span>经度</span><strong>{number(live?.longitude_deg, 6)}</strong></div><div><span>Roll</span><strong>{number(live?.roll_deg, 1, '°')}</strong></div><div><span>Pitch</span><strong>{number(live?.pitch_deg, 1, '°')}</strong></div><div><span>Yaw</span><strong>{number(live?.yaw_deg, 1, '°')}</strong></div></div>
+        <div className="multi-sim-metrics"><div><span>仿真时间</span><strong>{number(live?.timestamp, 1, ' s')}</strong></div><div><span>实时倍率</span><strong>{number(live?.realtime_factor, 2, '×')}</strong></div><div><span>高度</span><strong>{number(live?.altitude_m, 1, ' m')}</strong></div><div><span>空速</span><strong>{number(live?.airspeed_mps, 1, ' m/s')}</strong></div><div><span>地速</span><strong>{number(live?.groundspeed_mps, 1, ' m/s')}</strong></div><div><span>纬度</span><strong>{number(live?.latitude_deg, 6)}</strong></div><div><span>经度</span><strong>{number(live?.longitude_deg, 6)}</strong></div><div><span>Roll</span><strong>{number(live?.roll_deg, 1, '°')}</strong></div><div><span>Pitch</span><strong>{number(live?.pitch_deg, 1, '°')}</strong></div><div><span>Yaw</span><strong>{number(live?.yaw_deg, 1, '°')}</strong></div></div>
         <div className="multi-sim-setup-head"><h3>实例配置</h3><span>展开需要调整的项目</span></div>
         <details className="multi-sim-initial" aria-label="初始位置和初始姿态配置">
           <summary><span><strong>初始位置与姿态</strong><small>仿真组覆盖 · {initialEdited ? '有未保存修改' : initialError ? '读取失败' : initialOverrides[selected] ? '已启用' : '使用模型基础值'}</small></span><span className="multi-sim-expand-label" aria-hidden="true">配置</span></summary>

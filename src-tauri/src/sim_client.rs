@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -137,6 +137,9 @@ struct SimClientInner {
     /// Complete property snapshots per aircraft. The ordinary toolbar keeps
     /// its single-aircraft status; the fleet page reads this separate store.
     instance_frames: HashMap<u8, (Value, Instant)>,
+    /// Per-aircraft samples of simulation time against the board's monotonic
+    /// capture clock. This measures actual speed, not the configured factor.
+    instance_rtf: HashMap<u8, InstanceRtf>,
     last_visual_status_time: Option<Instant>,
     active_load_id: Option<u32>,
     latest_load_diagnostic: Option<Value>,
@@ -231,12 +234,67 @@ fn frame_instance_id(frame: &Value) -> Option<u8> {
     (1..=8).contains(&number).then_some(number)
 }
 
-fn merge_instance_frame(instances: &mut HashMap<u8, (Value, Instant)>, frame: &Value) {
+#[derive(Default)]
+struct InstanceRtf {
+    model: String,
+    tree_generation: Option<u64>,
+    samples: VecDeque<(f64, u64)>,
+}
+
+fn measured_instance_rtf(trackers: &mut HashMap<u8, InstanceRtf>, id: u8, frame: &Value) -> Option<f64> {
+    if frame.get("state").and_then(Value::as_str) != Some("running") {
+        trackers.remove(&id);
+        return None;
+    }
+    let (Some(model), Some(sim_time), Some(capture_us)) = (
+        frame.get("model").and_then(Value::as_str),
+        frame.get("timestamp").and_then(Value::as_f64).filter(|time| time.is_finite()),
+        frame.get("capture_monotonic_us").and_then(Value::as_u64),
+    ) else {
+        trackers.remove(&id);
+        return None;
+    };
+    let generation = frame.get("tree_generation").and_then(Value::as_u64);
+    let tracker = trackers.entry(id).or_default();
+    if tracker.model != model || tracker.tree_generation != generation {
+        tracker.model = model.to_owned();
+        tracker.tree_generation = generation;
+        tracker.samples.clear();
+    }
+    if let Some(&(last_time, last_capture)) = tracker.samples.back() {
+        if capture_us < last_capture || sim_time + 1e-6 < last_time
+            || capture_us.saturating_sub(last_capture) > 2_000_000 {
+            tracker.samples.clear();
+        } else if sim_time <= last_time + 1e-6 {
+            // Property slices can repeat a simulation timestamp. If it stops
+            // advancing while state still says running, retire the old rate.
+            if capture_us.saturating_sub(last_capture) > 1_000_000 {
+                tracker.samples.clear();
+            }
+        }
+    }
+    if tracker.samples.back().map_or(true, |&(last_time, _)| sim_time > last_time + 1e-6) {
+        tracker.samples.push_back((sim_time, capture_us));
+    }
+    while tracker.samples.len() > 2
+        && capture_us.saturating_sub(tracker.samples.front().unwrap().1) > 3_000_000 {
+        tracker.samples.pop_front();
+    }
+    let (first_time, first_capture) = *tracker.samples.front()?;
+    let (last_time, last_capture) = *tracker.samples.back()?;
+    let elapsed_us = last_capture.saturating_sub(first_capture);
+    (elapsed_us >= 1_000_000).then(|| (last_time - first_time) * 1_000_000.0 / elapsed_us as f64)
+        .filter(|factor| factor.is_finite() && *factor >= 0.0)
+}
+
+fn merge_instance_frame(instances: &mut HashMap<u8, (Value, Instant)>,
+                        trackers: &mut HashMap<u8, InstanceRtf>, frame: &Value) {
     if frame.get("model").and_then(Value::as_str).is_none()
         || frame.get("state").and_then(Value::as_str).is_none() {
         return;
     }
     let Some(id) = frame_instance_id(frame) else { return };
+    let realtime_factor = measured_instance_rtf(trackers, id, frame);
     let now = Instant::now();
     let entry = instances.entry(id).or_insert_with(|| (json!({}), now));
     let changed_model = entry.0.get("model") != frame.get("model");
@@ -258,6 +316,11 @@ fn merge_instance_frame(instances: &mut HashMap<u8, (Value, Instant)>, frame: &V
             }
         }
         target.insert("instance_id".into(), Value::String(format!("{id:02}")));
+        if let Some(factor) = realtime_factor {
+            target.insert("realtime_factor".into(), json!(factor));
+        } else {
+            target.remove("realtime_factor");
+        }
     }
     entry.1 = now;
 }
@@ -443,6 +506,7 @@ impl SimClient {
                 latest: None,
                 latest_sim_status: None,
                 instance_frames: HashMap::new(),
+                instance_rtf: HashMap::new(),
                 last_visual_status_time: None,
                 active_load_id: None,
                 latest_load_diagnostic: None,
@@ -610,7 +674,9 @@ impl SimClient {
                                                         &mut state.latest_task_top, &val);
                                                 }
                                             }
-                                            merge_instance_frame(&mut state.instance_frames, &val);
+                                            let instance_state = &mut *state;
+                                            merge_instance_frame(&mut instance_state.instance_frames,
+                                                &mut instance_state.instance_rtf, &val);
                                             /* Heartbeat acknowledgements prove board reachability
                                              * but carry no model data and must not replace the
                                              * latest visual/task snapshot. */
@@ -827,6 +893,28 @@ impl SimClient {
         let mut snapshot = frame.clone();
         snapshot["age_ms"] = json!(seen.elapsed().as_millis().min(u128::from(u32::MAX)));
         Some(snapshot)
+    }
+
+    /// Read only the numeric property paths selected for fleet list cards.
+    /// Sending the complete tree for all eight instances every second would
+    /// copy substantially more data than the list needs.
+    pub fn instance_field_values(&self, paths: &[String]) -> Vec<Value> {
+        let state = self.inner.lock().unwrap();
+        let mut result: Vec<Value> = state.instance_frames.iter().map(|(id, (frame, _))| {
+            let mut values = serde_json::Map::new();
+            if let Some(properties) = frame.get("properties").and_then(Value::as_object) {
+                for path in paths {
+                    let prefixed = format!("/{id:02}{path}");
+                    let sample = properties.get(&prefixed).or_else(|| properties.get(path));
+                    if let Some(value) = sample.and_then(Value::as_f64).filter(|value| value.is_finite()) {
+                        values.insert(path.clone(), json!(value));
+                    }
+                }
+            }
+            json!({ "instance_id": format!("{id:02}"), "values": values })
+        }).collect();
+        result.sort_by(|a, b| a["instance_id"].as_str().cmp(&b["instance_id"].as_str()));
+        result
     }
 
     pub fn latest_visual_status_fresh(&self, max_age: Duration) -> Option<Value> {
@@ -1185,15 +1273,70 @@ mod tests {
     #[test]
     fn instance_slices_remain_isolated_and_reset_on_model_change() {
         let mut instances = HashMap::new();
-        merge_instance_frame(&mut instances, &json!({"instance_id":"01", "model":"H7", "state":"running", "tree_generation":1, "properties":{"/01/jsbsim/fcs/a":1}}));
-        merge_instance_frame(&mut instances, &json!({"instance_id":"02", "model":"F450", "state":"running", "tree_generation":1, "properties":{"/02/jsbsim/fcs/a":2}}));
-        merge_instance_frame(&mut instances, &json!({"instance_id":"01", "model":"H7", "state":"running", "tree_generation":1, "properties":{"/01/jsbsim/fcs/b":3}}));
+        let mut trackers = HashMap::new();
+        merge_instance_frame(&mut instances, &mut trackers, &json!({"instance_id":"01", "model":"H7", "state":"running", "tree_generation":1, "properties":{"/01/jsbsim/fcs/a":1}}));
+        merge_instance_frame(&mut instances, &mut trackers, &json!({"instance_id":"02", "model":"F450", "state":"running", "tree_generation":1, "properties":{"/02/jsbsim/fcs/a":2}}));
+        merge_instance_frame(&mut instances, &mut trackers, &json!({"instance_id":"01", "model":"H7", "state":"running", "tree_generation":1, "properties":{"/01/jsbsim/fcs/b":3}}));
         assert_eq!(instances[&1].0["properties"].as_object().unwrap().len(), 2);
         assert_eq!(instances[&2].0["properties"].as_object().unwrap().len(), 1);
-        merge_instance_frame(&mut instances, &json!({"instance_id":"01", "model":"C172", "state":"running", "tree_generation":2, "properties":{"/01/jsbsim/fcs/c":4}}));
+        merge_instance_frame(&mut instances, &mut trackers, &json!({"instance_id":"01", "model":"C172", "state":"running", "tree_generation":2, "properties":{"/01/jsbsim/fcs/c":4}}));
         assert_eq!(instances[&1].0["properties"].as_object().unwrap().len(), 1);
         assert!(instances[&1].0["properties"].get("/01/jsbsim/fcs/a").is_none());
         assert_eq!(instances[&2].0["model"], "F450");
+    }
+
+    #[test]
+    fn realtime_factor_uses_each_aircrafts_sim_and_monotonic_clock() {
+        let mut instances = HashMap::new();
+        let mut trackers = HashMap::new();
+        for index in 0..=15_u64 {
+            let capture = 100_000_000 + index * 100_000;
+            for (id, rate) in [("01", 1.0), ("02", 0.96)] {
+                let frame = json!({ "instance_id": id, "model": "F450", "state": "running",
+                    "tree_generation": 1, "timestamp": index as f64 * 0.1 * rate,
+                    "capture_monotonic_us": capture, "properties": {} });
+                merge_instance_frame(&mut instances, &mut trackers, &frame);
+            }
+        }
+        let first = instances[&1].0["realtime_factor"].as_f64().unwrap();
+        let second = instances[&2].0["realtime_factor"].as_f64().unwrap();
+        assert!((first - 1.0).abs() < 1e-6);
+        assert!((second - 0.96).abs() < 1e-6);
+
+        // A paused plane loses its rate without affecting the other plane.
+        merge_instance_frame(&mut instances, &mut trackers, &json!({
+            "instance_id": "02", "model": "F450", "state": "paused",
+            "timestamp": 1.44, "capture_monotonic_us": 101_600_000,
+        }));
+        assert!(instances[&2].0.get("realtime_factor").is_none());
+        assert!(instances[&1].0.get("realtime_factor").is_some());
+
+        // Restarted simulation time must warm up a new measurement window.
+        merge_instance_frame(&mut instances, &mut trackers, &json!({
+            "instance_id": "01", "model": "F450", "state": "running",
+            "tree_generation": 2, "timestamp": 0.0,
+            "capture_monotonic_us": 101_700_000,
+        }));
+        assert!(instances[&1].0.get("realtime_factor").is_none());
+    }
+
+    #[test]
+    fn realtime_factor_expires_when_sim_clock_stops_advancing() {
+        let mut instances = HashMap::new();
+        let mut trackers = HashMap::new();
+        for index in 0..=12_u64 {
+            merge_instance_frame(&mut instances, &mut trackers, &json!({
+                "instance_id": "01", "model": "F450", "state": "running",
+                "timestamp": index as f64 * 0.1,
+                "capture_monotonic_us": 100_000_000 + index * 100_000,
+            }));
+        }
+        assert!(instances[&1].0.get("realtime_factor").is_some());
+        merge_instance_frame(&mut instances, &mut trackers, &json!({
+            "instance_id": "01", "model": "F450", "state": "running",
+            "timestamp": 1.2, "capture_monotonic_us": 102_400_000,
+        }));
+        assert!(instances[&1].0.get("realtime_factor").is_none());
     }
 
     #[test]

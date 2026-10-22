@@ -9,10 +9,14 @@
 .multi-sim-header-actions { display: flex; gap: 8px; }
 .multi-sim-header-actions button { padding: 8px 12px; border: 1px solid #cbd9e2; border-radius: 7px; background: #fff; color: #35576c; cursor: pointer; }
 .multi-sim-header-actions button:hover { background: #eaf3f8; }
-.multi-sim-grid { margin: 0 0 12px; border: 1px solid #d9e3ea; border-radius: 9px; background: #fff; color: #29485a; }
-.multi-sim-grid > summary { padding: 10px 13px; cursor: pointer; font-size: 12px; font-weight: 700; }
-.multi-sim-grid > summary span { margin-left: 8px; color: #6b8595; font-size: 11px; font-weight: 400; }
-.multi-sim-grid-body { display: grid; gap: 8px; padding: 0 13px 12px; }
+.multi-sim-grid { box-sizing: border-box; width: min(840px, calc(100vw - 32px)); max-height: min(80dvh, 680px); margin: auto; padding: 0; overflow: auto; border: 1px solid #d9e3ea; border-radius: 10px; background: #fff; box-shadow: 0 18px 48px rgba(22, 49, 67, .25); color: #29485a; }
+.multi-sim-grid::backdrop { background: rgba(19, 40, 55, .42); }
+.multi-sim-grid-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 16px 18px 12px; border-bottom: 1px solid #e8eff3; }
+.multi-sim-grid-head h2 { font-size: 16px; }
+.multi-sim-grid-head p { margin-top: 4px; color: #6b8595; font-size: 11px; }
+.multi-sim-grid-head button { padding: 6px 10px; border: 1px solid #cbd9e2; border-radius: 6px; background: #fff; color: #35576c; cursor: pointer; }
+.multi-sim-grid-head button:hover { background: #eaf3f8; }
+.multi-sim-grid-body { display: grid; gap: 8px; padding: 15px 18px 18px; }
 .multi-sim-grid-fields { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .multi-sim-grid-fields label { display: grid; gap: 4px; flex: 1 1 170px; color: #647d8b; font-size: 10px; }
 .multi-sim-grid-fields label span { display: flex; align-items: center; border: 1px solid #cbd9e2; border-radius: 6px; }
@@ -43,12 +47,14 @@
 .multi-sim-slot i.running, .multi-sim-state.running { background: #daf5e6; color: #087a48; }
 .multi-sim-slot i.running { background: #19a76a; }
 .multi-sim-slot i.paused { background: #e7a941; }
+.multi-sim-slot i.delayed { background: #e7a941; }
 .multi-sim-slot i.fault { background: #df6969; }
 .multi-sim-detail { min-width: 0; padding: 18px 20px; }
 .multi-sim-detail-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; margin-bottom: 17px; }
 .multi-sim-detail-head h2 { margin-top: 4px; font-size: 21px; }
 .multi-sim-state { padding: 6px 9px; border-radius: 6px; background: #edf1f4; color: #6f8391; font-size: 11px; white-space: nowrap; }
 .multi-sim-state.paused { background: #fff0d2; color: #99631d; }
+.multi-sim-state.delayed { background: #fff0d2; color: #99631d; }
 .multi-sim-state.fault { background: #ffe5e5; color: #a84646; }
 .multi-sim-config { display: grid; grid-template-columns: 70px minmax(150px, 270px) minmax(0, 1fr); align-items: center; gap: 8px; padding: 11px 0; border-top: 1px solid #edf1f4; border-bottom: 1px solid #edf1f4; }
 .multi-sim-config label { color: #5b7081; font-size: 11px; }
@@ -236,17 +242,28 @@
 
 /* Let the map fill the space below the fleet controls. */
 .multi-sim-header-actions { align-items: center; justify-content: flex-end; flex-wrap: wrap; }
-.multi-sim-page.map-view { display: flex; flex-direction: column; }
+.multi-sim-page.map-view { display: flex; flex-direction: column; padding-top: 8px; padding-bottom: 12px; }
+.multi-sim-page.map-view .multi-sim-header { gap: 10px; margin-bottom: 6px; }
+.multi-sim-page.map-view .multi-sim-header > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.multi-sim-page.map-view .multi-sim-eyebrow { display: none; }
+.multi-sim-page.map-view .multi-sim-header h1 { font-size: 18px; line-height: 1.25; white-space: nowrap; }
+.multi-sim-page.map-view .multi-sim-header p { margin: 0; font-size: 11px; }
+.multi-sim-page.map-view .multi-sim-header-actions { gap: 6px; }
+.multi-sim-page.map-view .multi-sim-header-actions > button { padding: 6px 10px; font-size: 12px; }
+.multi-sim-page.map-view .multi-sim-view-tabs { padding: 2px; }
+.multi-sim-page.map-view .multi-sim-view-tabs button { padding: 5px 12px; }
 .multi-sim-page.map-view .multi-sim-layout { flex: 1; align-items: stretch; }
 .multi-sim-page.map-view .multi-sim-view { min-height: 0; }
 .multi-sim-page.map-view .multi-sim-map { box-sizing: border-box; height: 100%; }
 .multi-sim-page.map-view .multi-sim-map-canvas { height: 100%; }
 @media (max-width: 900px) {
-  .multi-sim-page.map-view { display: block; }
-  .multi-sim-page.map-view .multi-sim-map { height: auto; }
-  .multi-sim-page.map-view .multi-sim-map-canvas { height: max(360px, calc(100dvh - 430px)); }
+  .multi-sim-page.map-view .multi-sim-layout { grid-template-rows: auto minmax(360px, 1fr); }
 }
 @media (max-width: 600px) {
-  .multi-sim-page.map-view .multi-sim-map-canvas { height: max(300px, calc(100dvh - 520px)); }
+  .multi-sim-page.map-view .multi-sim-layout { grid-template-rows: auto minmax(300px, 1fr); }
 }
 .multi-sim-command-error { margin-top: 8px; color: #a84646; font-size: 11px; }
+
+/* Keep the three telemetry columns legible beside the 52 px Mini HUD. */
+.multi-sim-layout { grid-template-columns: minmax(385px, 440px) minmax(0, 1fr); }
+@media (max-width: 900px) { .multi-sim-layout { grid-template-columns: 1fr; } }

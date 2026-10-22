@@ -411,6 +411,17 @@ fn sim_instance_snapshot(app: tauri::AppHandle, instance_id: String) -> Result<O
 }
 
 #[tauri::command]
+fn sim_instance_fields(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<serde_json::Value>, String> {
+    if paths.len() > 12 || paths.iter().any(|path| !path.starts_with("/jsbsim/")
+        || path.len() > 256 || path.chars().any(|ch| ch.is_control() || ch.is_whitespace())) {
+        return Err("无效实例属性路径".into());
+    }
+    let state = app.state::<AppState>();
+    let client = state.sim_client.lock().map_err(|e| e.to_string())?;
+    Ok(client.instance_field_values(&paths))
+}
+
+#[tauri::command]
 fn sim_instance_control(app: tauri::AppHandle, instance_id: String, action: String,
                         model: Option<String>, host: Option<String>, port: Option<u16>,
                         initial: Option<sim_client::InstanceInitial>,
@@ -1625,6 +1636,7 @@ fn main() {
             send_control,
             get_sim_status,
             sim_instance_snapshot,
+            sim_instance_fields,
             sim_instance_control,
             sim_sync_time,
             parse_dataflow,

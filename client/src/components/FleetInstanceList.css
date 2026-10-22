@@ -1,0 +1,69 @@
+.fleet-list-title { align-items: center; gap: 8px; }
+.fleet-list-title > div { display: flex; align-items: baseline; gap: 7px; }
+.fleet-list-title small { color: #8a9baa; font-size: 10px; }
+.fleet-list-edit-trigger { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid #bad2df; border-radius: 6px; background: #eaf5fb; color: #245a76; cursor: pointer; font-size: 10px; white-space: nowrap; }
+.fleet-icon { display: block; flex: none; width: 11px; height: 11px; fill: currentColor; }
+.fleet-list-edit-trigger .fleet-icon { width: 13px; height: 13px; }
+.fleet-list-cards { display: grid; gap: 5px; grid-column: 1 / -1; }
+.fleet-list-card { position: relative; display: flex; align-items: center; gap: 7px; width: 100%; min-height: 61px; margin: 0; padding: 4px 19px 4px 5px; border: 1px solid #e4ecf1; border-radius: 7px; background: #fff; color: #23384b; text-align: left; cursor: pointer; }
+.fleet-list-card:hover, .fleet-list-card.selected { border-color: #8ab9d4; background: #edf6fb; }
+.fleet-list-card.selected { box-shadow: inset 3px 0 #70afd1; }
+.fleet-list-card:focus-visible, .fleet-list-edit-trigger:focus-visible { outline: 2px solid #328bb5; outline-offset: 2px; }
+.fleet-mini-hud { display: block; flex: none; width: 52px; height: 52px; border-radius: 7px; }
+.fleet-mini-hud.offline { filter: grayscale(1); opacity: .55; }
+.fleet-list-metrics { display: grid; flex: 1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 2px; min-width: 0; }
+.fleet-list-metric { display: flex; align-items: baseline; gap: 3px; min-width: 0; overflow: hidden; white-space: nowrap; line-height: 1.1; }
+.fleet-list-metric .fleet-icon { align-self: center; color: #417c9c; }
+.fleet-list-metric small { flex: none; color: #718b9c; font-size: 9px; }
+.fleet-list-metric b { min-width: 0; overflow: hidden; color: #28495e; font: 700 10.5px ui-monospace, "Noto Sans CJK SC", monospace; text-overflow: ellipsis; }
+.fleet-list-dot { position: absolute; top: 11px; right: 7px; width: 8px; height: 8px; border-radius: 50%; background: #b9c7d1; }
+.fleet-list-dot.running { background: #19a76a; }
+.fleet-list-dot.paused, .fleet-list-dot.delayed { background: #e7a941; }
+.fleet-list-dot.fault { background: #df6969; }
+.fleet-list-dialog { box-sizing: border-box; width: min(760px, calc(100vw - 32px)); max-height: min(85dvh, 780px); margin: auto; padding: 0; overflow: auto; border: 1px solid #d9e3ea; border-radius: 10px; background: #fff; box-shadow: 0 18px 48px rgba(22, 49, 67, .25); color: #203244; }
+.fleet-list-dialog::backdrop { background: rgba(19, 40, 55, .42); }
+.fleet-list-dialog-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 16px 18px 12px; border-bottom: 1px solid #e8eff3; }
+.fleet-list-dialog-head h2 { margin: 0; font-size: 16px; }
+.fleet-list-dialog-head p { margin: 4px 0 0; color: #758798; font-size: 11px; }
+.fleet-list-dialog-head > button { border: 0; background: transparent; color: #8299a8; cursor: pointer; font-size: 22px; line-height: 1; }
+.fleet-list-dialog-body { display: grid; gap: 10px; padding: 15px 18px 18px; }
+.fleet-list-dialog-body h3, .fleet-list-edit-head h3 { margin: 4px 0 0; color: #29495e; font-size: 12px; }
+.fleet-list-preview { max-width: 440px; cursor: default; }
+.fleet-list-preview:hover { border-color: #e4ecf1; background: #fff; }
+.fleet-list-edit-head { display: flex; align-items: baseline; justify-content: space-between; }
+.fleet-list-edit-head small { color: #8a9baa; font-size: 10px; }
+.fleet-list-edit-fields { box-sizing: border-box; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 2px; width: min(100%, 440px); max-height: 260px; padding: 0 19px 0 64px; overflow: auto; }
+.fleet-list-edit-field { display: flex; align-items: center; gap: 4px; min-width: 0; min-height: 31px; padding: 3px 4px; border: 1px solid #e2eaf0; border-radius: 6px; background: #f9fbfc; color: #365c70; cursor: grab; font-size: 11px; }
+.fleet-list-edit-field:active { cursor: grabbing; }
+.fleet-list-edit-field:focus-visible { outline: 2px solid #328bb5; outline-offset: 1px; }
+.fleet-list-edit-field.dragging { opacity: .45; }
+.fleet-list-edit-field.drop-target { border-color: #328bb5; background: #e5f3fa; box-shadow: inset 0 0 0 1px #328bb5; }
+.fleet-list-drag-handle { flex: none; color: #8ba3b1; font-size: 13px; line-height: 1; }
+.fleet-list-edit-field > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-list-edit-field small { margin-left: 4px; color: #92a3af; font: 9px ui-monospace, monospace; }
+.fleet-list-edit-field button { flex: none; width: 21px; height: 22px; padding: 0; border: 1px solid #d0dce4; border-radius: 4px; background: #fff; color: #365c70; cursor: pointer; }
+.fleet-list-edit-field button:disabled { opacity: .4; cursor: default; }
+.fleet-list-row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.fleet-list-row-actions button { min-height: 30px; border: 1px solid #cbd9e2; border-radius: 5px; background: #e8eff4; color: #35576c; cursor: pointer; font-size: 11px; }
+.fleet-list-row-actions button:disabled { opacity: .45; cursor: default; }
+.fleet-list-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.fleet-list-options button { min-height: 30px; border: 1px solid #d9e3ea; border-radius: 5px; background: #fff; color: #35576c; cursor: pointer; font-size: 11px; }
+.fleet-list-options button:hover:not(:disabled) { background: #edf6fb; }
+.fleet-list-options button:disabled { color: #8199a8; background: #f4f8fa; cursor: default; }
+.fleet-list-custom-fields { display: grid; grid-template-columns: minmax(150px, 2fr) minmax(105px, 1fr) 70px 60px auto; align-items: end; gap: 7px; }
+.fleet-list-custom-fields label { display: grid; gap: 4px; min-width: 0; color: #728797; font-size: 10px; }
+.fleet-list-custom-fields input, .fleet-list-custom-fields select { width: 100%; min-width: 0; height: 30px; padding: 0 7px; border: 1px solid #cbd9e2; border-radius: 5px; background: #fff; color: #28445a; font-size: 11px; }
+.fleet-list-custom-fields > button { height: 30px; padding: 0 10px; border: 1px solid #167da8; border-radius: 5px; background: #1885b0; color: #fff; cursor: pointer; font-size: 11px; }
+.fleet-list-hint { margin: 0; color: #879ba9; font-size: 10px; }
+.fleet-list-error { margin: 0; color: #a84646; font-size: 11px; }
+.fleet-list-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 18px; border-top: 1px solid #e8eff3; }
+.fleet-list-dialog-foot > div { display: flex; gap: 7px; }
+.fleet-list-dialog-foot button { min-height: 31px; padding: 0 12px; border: 1px solid #cbd9e2; border-radius: 5px; background: #fff; color: #35576c; cursor: pointer; font-size: 11px; }
+.fleet-list-dialog-foot button.primary { border-color: #167da8; background: #1885b0; color: #fff; font-weight: 700; }
+@media (max-width: 900px) { .fleet-list-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 660px) {
+  .fleet-list-cards { grid-template-columns: 1fr; }
+  .fleet-list-custom-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fleet-list-custom-fields > button { grid-column: 1 / -1; }
+  .fleet-list-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

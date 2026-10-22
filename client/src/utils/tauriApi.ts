@@ -357,6 +357,7 @@ export interface SimInstanceSummary {
   state?: string;
   error?: string;
   timestamp?: number;
+  realtime_factor?: number;
   altitude_m?: number;
   latitude_deg?: number;
   longitude_deg?: number;
@@ -371,6 +372,15 @@ export interface SimInstanceSummary {
 
 export async function simInstanceSnapshot(instanceId: string): Promise<SimInstanceSummary | null> {
   return call('sim_instance_snapshot', { instanceId });
+}
+
+export interface SimInstanceFieldValues {
+  instance_id: string;
+  values: Record<string, number>;
+}
+
+export async function simInstanceFields(paths: string[]): Promise<SimInstanceFieldValues[]> {
+  return call('sim_instance_fields', { paths });
 }
 
 export async function simInstanceControl(options: {
