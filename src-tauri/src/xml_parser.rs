@@ -1326,7 +1326,7 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
                     ] {
                         params[key] = json!(property);
                     }
-                } else if get_attr(out, "type") == Some("VIZTRA_UDP_JSON") && prop_names.len() == 3 {
+                } else if matches!(get_attr(out, "type"), Some("VIZTRA_UDP_JSON") | Some("VIZTRA_UDP_QGC")) && prop_names.len() == 3 {
                     for (key, property) in ["viztra_north", "viztra_east", "viztra_down"]
                         .iter().zip(&prop_names) {
                         params[*key] = json!(property);

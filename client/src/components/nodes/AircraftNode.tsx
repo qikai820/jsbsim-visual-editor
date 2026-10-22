@@ -30,7 +30,7 @@ function AircraftNode({ data, selected }: NodeProps) {
       ? [{ id: 'gps', label: 'GPS' }]
       : nodeData.params?.type === 'HIL_SENSOR'
         ? [{ id: 'imu', label: 'IMU' }, { id: 'mag', label: '磁罗盘' }, { id: 'barometer', label: '气压传感器' }]
-        : nodeData.params?.type === 'VIZTRA_UDP_JSON'
+        : (nodeData.params?.type === 'VIZTRA_UDP_JSON' || nodeData.params?.type === 'VIZTRA_UDP_QGC')
           ? [{ id: 'viztra', label: 'Viztra 系统' }]
         : [])
     : def.inputs;

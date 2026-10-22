@@ -95,15 +95,16 @@ export function serializeSerialSensors(
     const params = { ...(sensor.data.params || {}) };
     const protocol = String(params.protocol || 'CUSTOM');
     const device = String(params.device || '');
+    const sensorLabel = `${params.name || '串口传感器'}（${protocol} ${device}）`;
     if (usedDevices.has(device)) throw new Error(`${device} 被多个串口传感器占用`);
     usedDevices.add(device);
     const connection = edges.find(edge => edge.target === sensor.id);
     const source = nodes.find(node => node.id === connection?.source);
     if (source?.data.componentType !== 'system') {
-      throw new Error(`${params.name || '串口传感器'}：请连接一个系统节点，并在其逻辑画布中生成传感器信号`);
+      throw new Error(`${sensorLabel}：请连接一个系统节点，并在其逻辑画布中生成传感器信号`);
     }
     const outputs = logicOutputs(source);
-    if (!outputs.length) throw new Error(`${params.name || '串口传感器'}：系统逻辑画布还没有输出信号`);
+    if (!outputs.length) throw new Error(`${sensorLabel}：系统逻辑画布还没有输出信号`);
     params.logic_name = String(source.data.params?.file || source.data.params?.name || '')
       .replace(/\.xml$/i, '').split('/').pop();
     if (protocol === 'VIZTRA_HYM1') {

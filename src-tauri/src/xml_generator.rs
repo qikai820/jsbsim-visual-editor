@@ -1828,7 +1828,7 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                     .unwrap_or("")
             })
             .collect();
-        if output_type == "VIZTRA_UDP_JSON" {
+        if matches!(output_type, "VIZTRA_UDP_JSON" | "VIZTRA_UDP_QGC") {
             for (index, key) in viztra_keys.iter().enumerate() {
                 let property = p.get(*key).and_then(Value::as_str).map(str::trim)
                     .filter(|value| !value.is_empty())
@@ -1912,7 +1912,7 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                 attrs.push(("rate".to_string(), s));
             }
         }
-        if output_type == "VIZTRA_UDP_JSON" {
+        if matches!(output_type, "VIZTRA_UDP_JSON" | "VIZTRA_UDP_QGC") {
             if let Some(host) = p.get("host").and_then(Value::as_str) {
                 if !host.trim().is_empty() { attrs.push(("host".to_string(), host.trim().to_string())); }
             }

@@ -80,7 +80,7 @@ function getUnitStr(p: any, fallback: string): string {
 }
 
 export default function PropertyPanel() {
-  const { nodes, selectedNodeId, updateNodeParams, removeNode, setSelectedNode, setFocusedNodeId, editingSubFileId } = useFlowStore();
+  const { nodes, edges, onConnect, selectedNodeId, updateNodeParams, removeNode, setSelectedNode, setFocusedNodeId, editingSubFileId } = useFlowStore();
   const [sysEditingExpr, setSysEditingExpr] = useState<{ chIdx: number; itemIdx: number } | null>(null);
   const [editingCompProp, setEditingCompProp] = useState<{ chIdx: number; itemIdx: number; field: string } | null>(null);
   const [canvasView, setCanvasView] = useState<
@@ -332,14 +332,15 @@ export default function PropertyPanel() {
       updateNodeParams(node.id, params);
       return;
     }
-    if (node.data.componentType === 'output' && key === 'type' && value === 'VIZTRA_UDP_JSON') {
+    if (node.data.componentType === 'output' && key === 'type' && (value === 'VIZTRA_UDP_JSON' || value === 'VIZTRA_UDP_QGC')) {
+      const qgc = value === 'VIZTRA_UDP_QGC';
       updateNodeParams(node.id, {
         type: value,
-        name: node.data.params?.name === 'localhost' ? 'Viztra UDP JSON' : node.data.params?.name,
+        name: node.data.params?.name === 'localhost' ? (qgc ? 'Viztra QGC 64B' : 'Viztra UDP JSON') : node.data.params?.name,
         transport: 'UDP',
-        host: '192.168.3.100',
-        port: 9870,
-        rate: 20,
+        host: qgc ? '192.168.3.109' : '192.168.3.100',
+        port: qgc ? 1480 : 9870,
+        rate: qgc ? 3 : 20,
         viztra_north: 'px4/viztra/relative-n-m',
         viztra_east: 'px4/viztra/relative-e-m',
         viztra_down: 'px4/viztra/relative-d-m',
@@ -450,6 +451,7 @@ export default function PropertyPanel() {
           electric: '⚡ 电动 Electric',
           brushless_dc: '⚡ 无刷直流 BLDC',
           VIZTRA_UDP_JSON: 'Viztra 目标相对位置 UDP JSON',
+          VIZTRA_UDP_QGC: 'Viztra QGC 64字节目标帧',
         };
         return (
           <div key={key} className="field-row">
@@ -547,7 +549,7 @@ export default function PropertyPanel() {
           const selectedType = node.data.params?.type;
           const hilInput = node.data.componentType === 'input' && selectedType === 'HIL_ACTUATOR_CONTROLS';
           const hilOutput = node.data.componentType === 'output' && (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS');
-          const viztraOutput = node.data.componentType === 'output' && selectedType === 'VIZTRA_UDP_JSON';
+          const viztraOutput = node.data.componentType === 'output' && (selectedType === 'VIZTRA_UDP_JSON' || selectedType === 'VIZTRA_UDP_QGC');
           if (node.data.componentType === 'input' || node.data.componentType === 'output') {
             if (['transport', 'device', 'baud', 'host'].includes(key) && !hilInput && !hilOutput && !(viztraOutput && key === 'host')) return false;
             const serial = node.data.params?.transport === 'SERIAL';
@@ -555,7 +557,7 @@ export default function PropertyPanel() {
             if (!serial && ['device', 'baud'].includes(key)) return false;
           }
           if (node.data.componentType === 'output') {
-            if (selectedType === 'VIZTRA_UDP_JSON') {
+            if (selectedType === 'VIZTRA_UDP_JSON' || selectedType === 'VIZTRA_UDP_QGC') {
               return ['name', 'type', 'host', 'port', 'rate',
                 'viztra_north', 'viztra_east', 'viztra_down'].includes(key);
             }
@@ -586,6 +588,34 @@ export default function PropertyPanel() {
           if (node.data.componentType === 'pwm_capture' && key === 'channels') {
             return <PwmCaptureChannels key={key} nodeId={node.id} params={node.data.params}
               nodes={nodes} onChange={channels => updateNodeParams(node.id, { channels })} />;
+          }
+          if (node.data.componentType === 'serial_sensor' && key === 'logic_name') {
+            const systems = nodes.filter(candidate => candidate.data.componentType === 'system');
+            const sourceId = edges.find(edge => edge.target === node.id &&
+              systems.some(system => system.id === edge.source))?.source || '';
+            return <div className="field-row" key={key}>
+              <label>{paramDef.label}</label>
+              <select value={sourceId} onChange={event => {
+                const systemId = event.target.value;
+                if (systemId) {
+                  onConnect({ source: systemId, sourceHandle: 'system', target: node.id, targetHandle: 'sensor' });
+                } else {
+                  useFlowStore.setState(state => ({
+                    edges: state.edges.filter(edge => edge.target !== node.id),
+                    nodes: state.nodes.map(candidate => candidate.id === node.id
+                      ? { ...candidate, data: { ...candidate.data, params: { ...candidate.data.params, logic_name: '' } } }
+                      : candidate),
+                  }));
+                }
+              }}>
+                <option value="">请选择系统逻辑</option>
+                {systems.map(system => {
+                  const identity = String(system.data.params?.file || system.data.params?.name || system.data.label || '').replace(/\.xml$/i, '');
+                  return <option key={system.id} value={system.id}>{identity}</option>;
+                })}
+              </select>
+              <small>选择后会自动连接系统节点。VIZTRA_HYM1 请选择 H7_Viztra；未连接的串口传感器无法同步到仿真机。</small>
+            </div>;
           }
           if (node.data.componentType === 'serial_sensor' && key === 'fields_xml') {
             return <div className="field-row" key={key}>

@@ -367,10 +367,10 @@ export const componentDefs: ComponentDef[] = [
     category: '系统',
     color: '#D35400',
     icon: '📡',
-    description: '数据输出配置（Socket/File、PX4 HIL、Viztra UDP JSON）',
+    description: '数据输出配置（Socket/File、PX4 HIL、Viztra UDP JSON/QGC 64字节帧）',
     params: {
       name: { label: '名称', type: 'string', default: 'localhost' },
-      type: { label: '类型', type: 'select', default: 'SOCKET', options: ['SOCKET', 'FILE', 'HIL_SENSOR', 'HIL_GPS', 'VIZTRA_UDP_JSON', 'QTJSBSIM', 'NONE'] },
+      type: { label: '类型', type: 'select', default: 'SOCKET', options: ['SOCKET', 'FILE', 'HIL_SENSOR', 'HIL_GPS', 'VIZTRA_UDP_JSON', 'VIZTRA_UDP_QGC', 'QTJSBSIM', 'NONE'] },
       transport: { label: '连接方式', type: 'select', default: 'UDP', options: ['UDP', 'SERIAL'] },
       port: { label: '端口', type: 'integer', default: 1138 },
       host: { label: '目标 IP（留空使用板端默认值）', type: 'string', default: '' },

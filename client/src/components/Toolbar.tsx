@@ -298,16 +298,20 @@ function importCategoryLabel(category: ImportFileCategory | 'main', isZh: boolea
  * so using it for an imported model serializes referenced engine/system files
  * into the main aircraft XML.
  */
+function isViztraUdpType(type: unknown): boolean {
+  return type === 'VIZTRA_UDP_JSON' || type === 'VIZTRA_UDP_QGC';
+}
+
 function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
   const ioNodes = nodes.filter(node => ['input', 'output', 'uavcan'].includes(node?.data?.componentType) &&
-    node?.data?.params?.type !== 'VIZTRA_UDP_JSON');
+    !isViztraUdpType(node?.data?.params?.type));
   const used = new Set<number>();
 
   // Top-level JSBSim transport declarations have both name and type
   // attributes. Nested FCS expression tags such as <input>property</input>
   // do not; excluding them prevents an I/O edit from touching control logic.
   return sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>/gi, (tag, tagName: string) => {
-    if (getXmlAttribute(tag, 'type') === 'VIZTRA_UDP_JSON') return tag;
+    if (isViztraUdpType(getXmlAttribute(tag, 'type'))) return tag;
     if (getXmlAttribute(tag, 'transport') === 'SERIAL' && !getXmlAttribute(tag, 'editor_module') &&
         ['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].includes(getXmlAttribute(tag, 'type'))) return tag;
     const expectedTypes = tagName.toLowerCase() === 'input' ? new Set(['input']) : new Set(['output', 'uavcan']);
@@ -368,9 +372,9 @@ function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
 function patchMainViztraUdpOutputs(sourceXml: string, nodes: any[], previousNodes: any[] = []): string {
   const unsafe = (message: string) => Object.assign(new Error(message), { name: 'XmlPatchUnsafeError' });
   const outputs = nodes.filter(node => node?.data?.componentType === 'output' &&
-    node?.data?.params?.type === 'VIZTRA_UDP_JSON');
+    isViztraUdpType(node?.data?.params?.type));
   const otherOutputNames = new Set(nodes.filter(node => node?.data?.componentType === 'output' &&
-    node?.data?.params?.type !== 'VIZTRA_UDP_JSON')
+    !isViztraUdpType(node?.data?.params?.type))
     .map(node => String(node.data.params?.name || '').trim()));
   const names = new Set<string>();
   for (const node of outputs) {
@@ -380,7 +384,7 @@ function patchMainViztraUdpOutputs(sourceXml: string, nodes: any[], previousNode
     const port = Number(p.port);
     const rate = Number(p.rate);
     if (!name || names.has(name) || otherOutputNames.has(name)) {
-      throw unsafe('Viztra UDP JSON 输出名称须与其他输出不同且不能为空。');
+      throw unsafe('Viztra UDP 输出名称须与其他输出不同且不能为空。');
     }
     names.add(name);
     if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.split('.').some(part => Number(part) > 255)) {
@@ -399,7 +403,7 @@ function patchMainViztraUdpOutputs(sourceXml: string, nodes: any[], previousNode
   const previousById = new Map(previousNodes.map(node => [node.id, node]));
   const blockFor = (node: any, indent: string) => {
     const p = node.data.params;
-    const attributes = `name="${escaped(String(p.name))}" type="VIZTRA_UDP_JSON" host="${escaped(String(p.host).trim())}" port="${Number(p.port)}" rate="${Number(p.rate)}" editor_module="output"`;
+    const attributes = `name="${escaped(String(p.name))}" type="${escaped(String(p.type))}" host="${escaped(String(p.host).trim())}" port="${Number(p.port)}" rate="${Number(p.rate)}" editor_module="output"`;
     const properties = ['viztra_north', 'viztra_east', 'viztra_down']
       .map(key => `${indent}  <property>${escaped(String(p[key]).trim())}</property>`).join('\n');
     return `${indent}<output ${attributes}>\n${properties}\n${indent}</output>`;
@@ -452,20 +456,20 @@ function patchMainViztraUdpOutputs(sourceXml: string, nodes: any[], previousNode
       }) || outputs.find(node =>
         String(node.data.params?.name || '').trim() === oldName &&
         (!previousNodes.length || previousById.has(node.id)));
-      if (!candidate && oldType === 'VIZTRA_UDP_JSON') {
+      if (!candidate && isViztraUdpType(oldType)) {
         const replacement = nodes.find(node => {
           const previous = previousById.get(node.id) as any;
-          return node.data?.componentType === 'output' && node.data?.params?.type !== 'VIZTRA_UDP_JSON' &&
-            (previous?.data?.params?.type === 'VIZTRA_UDP_JSON' &&
+          return node.data?.componentType === 'output' && !isViztraUdpType(node.data?.params?.type) &&
+            (isViztraUdpType(previous?.data?.params?.type) &&
              String(previous.data.params?.name || '').trim() === oldName ||
              !previousNodes.length && String(node.data?.params?.name || '').trim() === oldName);
         });
         return replacement ? otherBlockFor(replacement, indent) : '';
       }
       if (!candidate) return block;
-      if (oldType !== 'VIZTRA_UDP_JSON' &&
+      if (!isViztraUdpType(oldType) &&
           outputs.some(node => node !== candidate && String(node.data.params?.name || '').trim() === oldName)) {
-        throw unsafe(`Viztra UDP JSON 输出名称 ${oldName} 与现有输出冲突。`);
+        throw unsafe(`Viztra UDP 输出名称 ${oldName} 与现有输出冲突。`);
       }
       if (used.has(oldName)) throw unsafe(`主模型中有多个名为 ${oldName} 的输出，无法安全写入 Viztra UDP JSON。`);
       used.add(oldName);
@@ -1401,6 +1405,13 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         } catch { /* Existing XML dirty flags remain available for the warning. */ }
       } else {
         dirtyFiles.push(...modifiedXmlFiles);
+        if (current.nodes.some(node => node.data?.componentType === 'serial_sensor')) {
+          dirtyFiles.push(serialSensorPath(model));
+        }
+        if (current.nodes.some(node => node.data?.componentType === 'output' &&
+          isViztraUdpType(node.data?.params?.type))) {
+          dirtyFiles.push(mainPath);
+        }
       }
       const changedPaths = Array.from(new Set(dirtyFiles));
       if (changedPaths.length && !force) {
