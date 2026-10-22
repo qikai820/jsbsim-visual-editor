@@ -97,7 +97,7 @@ existing destination is never intentionally replaced by copy or move.
 ## Linux
 
 No kernel driver needs to be installed; the host application uses libusb.
-Install `packaging/99-lmx93-usb.rules` into `/etc/udev/rules.d/`, reload the
+Install `packaging/69-lmx93-usb.rules` into `/etc/udev/rules.d/`, reload the
 udev rules, and reconnect the board so a desktop user can open the interface.
 
 ## Windows

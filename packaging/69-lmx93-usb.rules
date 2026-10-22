@@ -1,3 +1,4 @@
 # MYIR LMX93 private JSBSim/file bulk interface (VID:PID 1209:93a1)
-# Install as /etc/udev/rules.d/99-lmx93-usb.rules, then reload udev rules.
+# Install as /etc/udev/rules.d/69-lmx93-usb.rules, then reload udev rules.
+# Keep this filename before 73-seat-late.rules so uaccess grants the desktop ACL.
 SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="93a1", MODE="0660", TAG+="uaccess"

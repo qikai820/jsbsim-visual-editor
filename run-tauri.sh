@@ -19,7 +19,8 @@ export JSBSIM_BIN="${JSBSIM_BIN:-${JSBSIM_ROOT}/build/src/JSBSim}"
 export SIM_EXTERNAL="${SIM_EXTERNAL:-1}"
 export SIM_UDP_PORT="${SIM_UDP_PORT:-5801}"
 export SIM_UDP_CTRL_PORT="${SIM_UDP_CTRL_PORT:-5802}"
-export NUTTX_FTP_URL="${NUTTX_FTP_URL:-ftp://192.168.101.81}"
+# SIM_UDP_HOST and NUTTX_FTP_URL may be set explicitly. Without them the
+# editor discovers the board on the Ethernet interface at runtime.
 export NUTTX_FTP_USER="${NUTTX_FTP_USER:-root}"
 export NUTTX_FTP_PASSWORD="${NUTTX_FTP_PASSWORD:-abc123}"
 
