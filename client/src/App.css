@@ -35,7 +35,11 @@ html, body, #root {
 }
 
 /* ========== App Layout ========== */
-.app { display: flex; flex-direction: column; width: 100%; height: 100vh; }
+/* CSS zoom is the browser-preview fallback. Compensate its scaled viewport so
+   the editor still fills the window; native Tauri zoom leaves this at 1. */
+.app { display: flex; flex-direction: column;
+  width: var(--display-viewport-width, 100vw);
+  height: var(--display-viewport-height, 100vh); }
 .main-content { display: flex; flex: 1; overflow: hidden; }
 
 /* ========== Toolbar ========== */

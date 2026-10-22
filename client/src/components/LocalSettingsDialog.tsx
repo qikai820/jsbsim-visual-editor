@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { type Language, useLanguage } from '../i18n';
 import type { ToolbarAppearance } from '../utils/toolbarAppearance';
 import { MAX_PERFORMANCE_PERIOD_SECONDS, MIN_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod, savePerformancePeriod } from '../utils/performanceSettings';
+import { readDisplayScale, saveDisplayScale, type DisplayScaleSetting } from '../utils/displayScale';
 import {
   getSimulatorTransportMode,
   getSimulatorNetworkTarget,
@@ -19,6 +20,7 @@ interface LocalSettingsDialogProps {
 
 export default function LocalSettingsDialog({ onClose, toolbarAppearance, onToolbarAppearanceChange }: LocalSettingsDialogProps) {
   const { language, setLanguage, isZh } = useLanguage();
+  const [displayScale, setDisplayScale] = useState<DisplayScaleSetting>(readDisplayScale);
   const [remoteUpload, setRemoteUpload] = useState(() => isRemoteUploadEnabled());
   const [transportMode, setTransportMode] = useState<SimulatorTransportMode>(() => getSimulatorTransportMode());
   const [transportError, setTransportError] = useState('');
@@ -77,6 +79,17 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
           <select value={language} onChange={event => setLanguage(event.target.value as Language)}>
             <option value="zh-CN">中文</option>
             <option value="en-US">English</option>
+          </select>
+        </div>
+        <div className="local-settings-row">
+          <div><b>{isZh ? '界面大小' : 'Interface Size'}</b><small>{isZh ? '自动适应窗口和屏幕缩放；Ctrl+0 恢复自动' : 'Auto fits the window and display; Ctrl+0 restores Auto'}</small></div>
+          <select value={displayScale} aria-label={isZh ? '界面大小' : 'Interface Size'} onChange={event => {
+            const setting = event.target.value === 'auto' ? 'auto' : Number(event.target.value);
+            setDisplayScale(setting); saveDisplayScale(setting);
+          }}>
+            <option value="auto">{isZh ? '自动适应' : 'Auto'}</option>
+            {[75, 80, 90, 100, 110, 125, 150, 175, 200].map(percent =>
+              <option key={percent} value={percent / 100}>{percent}%</option>)}
           </select>
         </div>
         <div className="local-settings-row">
