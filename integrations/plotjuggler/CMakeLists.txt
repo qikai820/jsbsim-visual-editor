@@ -3,6 +3,10 @@ project(JSBSimPlotJuggler LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 find_package(Qt5 REQUIRED COMPONENTS Widgets Network Xml)
+# This integration does not use PlotJuggler's WebAssembly parser. The pinned
+# upstream build treats an existing target as an opt-out for downloading the
+# 130 MB Wasmer runtime; wasmer_FOUND stays false, so no Wasmer code is built.
+add_library(wasmer::wasmer INTERFACE IMPORTED GLOBAL)
 add_subdirectory("${PLOTJUGGLER_SOURCE}" upstream)
 # Upstream CSV assumes it is the top-level project for this include path.
 target_include_directories(csv_parser_lib PUBLIC "${PLOTJUGGLER_SOURCE}/3rdparty/date-3.0.4/include")

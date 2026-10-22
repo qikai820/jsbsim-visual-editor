@@ -35,7 +35,7 @@ npm run build
 cargo build --manifest-path src-tauri/Cargo.toml
 ```
 
-本机缺少的 Qt X11Extras 已解压到 `.toolchains/plotjuggler-deps`；脚本优先使用该目录，否则使用系统安装。运行文件在 `.toolchains/plotjuggler-build/bin/`，插件和程序必须一起保留。工具缓存不提交 Git。
+本机缺少的 Qt X11Extras 已解压到 `.toolchains/plotjuggler-deps`；脚本优先使用该目录，否则使用系统安装。运行文件在 `.toolchains/plotjuggler-build/bin/`，插件和程序必须一起保留。工具缓存不提交 Git。 此集成不使用 WebAssembly 解析器，构建时跳过上游的 Wasmer 运行库下载；JSBSim Live、MCAP、CSV、FFT、Lua 和 Quaternion 功能照常构建。
 
 程序依次查找 `JSBSIM_PLOTJUGGLER_BIN` 指定的路径、桌面程序旁 `plotjuggler/bin/plotjuggler`、当前源码目录的构建产物。实时窗口必须带有同版本构建的 JSBSim Live、CSV Publisher、FFT、Lua Editor 和 Quaternion 插件；日志窗口还需要 JSBSimMcap 插件和 JSBSimMcapCheck 校验程序。QtAV 存在时也会构建并启用原生 VideoViewer。当前改动没有将 Qt 和 PlotJuggler 打进 AppImage；交付其他电脑时需单独部署运行组件及依赖。当前构建环境未安装 QtAV，VideoViewer 未构建。
 
