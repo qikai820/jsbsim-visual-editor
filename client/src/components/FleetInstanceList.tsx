@@ -1,15 +1,17 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { SimInstanceSummary } from '../utils/tauriApi';
 import { isTauri, simInstanceFields } from '../utils/tauriApi';
+import { fleetSlotIds, MAX_FLEET_SLOTS } from '../utils/fleetModelGroups';
 import {
-  BUILTIN_FLEET_FIELDS, DEFAULT_FLEET_LIST_FIELDS, FLEET_LIST_DISPLAY_KEY,
+  BUILTIN_FLEET_FIELDS, DEFAULT_FLEET_COLUMN_GAP, DEFAULT_FLEET_LIST_FIELDS,
+  FLEET_LIST_DISPLAY_KEY, MAX_FLEET_COLUMN_GAP,
   MAX_FLEET_LIST_FIELDS, canonicalFleetPropertyPath, fleetFieldIcon, fleetFieldLabel,
-  fleetFieldValue, normalizeFleetListFields, readFleetListFields, type FleetListField,
+  fleetFieldValue, normalizeFleetColumnGap, normalizeFleetListFields,
+  readFleetListDisplay, type FleetListField,
 } from '../utils/fleetListDisplay';
 import './FleetInstanceList.css';
 
-const IDS = Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0'));
 const FRESH_MS = 2000;
 const DISCONNECTED_MS = 10000;
 
@@ -25,6 +27,17 @@ const ICON_PATHS: Record<IconName, string> = {
 
 function FleetIcon({ name }: { name: IconName }) {
   return <svg className="fleet-icon" viewBox="0 0 20 20" aria-hidden="true"><path d={ICON_PATHS[name]} /></svg>;
+}
+
+type SlotActionIconName = 'add' | 'remove' | 'copy' | 'paste';
+function SlotActionIcon({ name }: { name: SlotActionIconName }) {
+  return <svg className="fleet-slot-action-icon" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === 'add' && <path d="M12 5v14M5 12h14" />}
+    {name === 'remove' && <><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /><path d="M10 10v6M14 10v6" /></>}
+    {name === 'copy' && <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>}
+    {name === 'paste' && <><path d="M8 4h8M9 3h6v3H9zM8 6H6a2 2 0 0 0-2 2v12h12" /><path d="M16 6h2a2 2 0 0 1 2 2v5M12 17h8m-3-3 3 3-3 3" /></>}
+  </svg>;
 }
 
 function MiniHud({ id, item, fresh }: { id: string; item: SimInstanceSummary | null; fresh: boolean }) {
@@ -88,16 +101,28 @@ function Metric({ field, item, values, fresh }: {
 }
 
 interface Props {
+  slots: Record<string, string>;
   summaries: SimInstanceSummary[];
   fallback: SimInstanceSummary | null;
   connected: boolean;
   selected: string;
   onSelect: (id: string) => void;
+  onAddSlot: () => void;
+  onRemoveSlot: () => void;
+  onCopySlot: () => void;
+  onPasteSlot: () => void;
+  copiedFrom: string | null;
+  canRemove: boolean;
+  canPaste: boolean;
+  actionMessage: string;
 }
 
-export default function FleetInstanceList({ summaries, fallback, connected, selected, onSelect }: Props) {
-  const [savedFields, setSavedFields] = useState(readFleetListFields);
-  const [draftFields, setDraftFields] = useState<FleetListField[]>(savedFields);
+export default function FleetInstanceList({ slots, summaries, fallback, connected, selected, onSelect,
+  onAddSlot, onRemoveSlot, onCopySlot, onPasteSlot, copiedFrom, canRemove, canPaste, actionMessage }: Props) {
+  const ids = fleetSlotIds(slots);
+  const [savedDisplay, setSavedDisplay] = useState(readFleetListDisplay);
+  const [draftFields, setDraftFields] = useState<FleetListField[]>(savedDisplay.fields);
+  const [draftColumnGap, setDraftColumnGap] = useState(savedDisplay.columnGap);
   const [editing, setEditing] = useState(false);
   const [customPath, setCustomPath] = useState('');
   const [customLabel, setCustomLabel] = useState('');
@@ -107,9 +132,13 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
   const [customValues, setCustomValues] = useState<Record<string, Record<string, number>>>({});
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [previewColumns, setPreviewColumns] = useState<string | null>(null);
   const draggedFieldRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const previewMetricsRef = useRef<HTMLSpanElement>(null);
+  const savedFields = savedDisplay.fields;
   const visibleFields = editing ? draftFields : savedFields;
+  const columnGap = editing ? draftColumnGap : savedDisplay.columnGap;
   const byId = useMemo(() => new Map(summaries.map(item => [item.instance_id, item])), [summaries]);
   const propertyPaths = useMemo(() => [...new Set(visibleFields.flatMap(field =>
     field.kind === 'property' ? [field.path] : []))].sort(), [visibleFields]);
@@ -144,6 +173,7 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
   };
   const openEditor = () => {
     setDraftFields(savedFields.map(field => ({ ...field })));
+    setDraftColumnGap(savedDisplay.columnGap);
     setCustomPath(''); setCustomLabel(''); setCustomUnit(''); setCustomDigits(1); setError('');
     draggedFieldRef.current = null; setDraggingIndex(null); setDropIndex(null);
     setEditing(true);
@@ -201,17 +231,19 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
   };
   const saveEditor = () => {
     const next = normalizeFleetListFields(draftFields);
-    try { localStorage.setItem(FLEET_LIST_DISPLAY_KEY, JSON.stringify(next)); }
+    const display = { fields: next, columnGap: normalizeFleetColumnGap(draftColumnGap) };
+    try { localStorage.setItem(FLEET_LIST_DISPLAY_KEY, JSON.stringify(display)); }
     catch { setError('本机无法保存显示设置，请检查本地存储权限。'); return; }
-    setSavedFields(next);
+    setSavedDisplay(display);
     closeEditor();
   };
-  const renderCardContents = (id: string, item: SimInstanceSummary | null) => {
+  const renderCardContents = (id: string, item: SimInstanceSummary | null, preview = false) => {
     const state = instanceState(item, connected);
     const values = valuesFor(id, item);
     return <>
       <MiniHud id={id} item={item} fresh={state.fresh} />
-      <span className="fleet-list-metrics">{visibleFields.map(field =>
+      <span ref={preview ? previewMetricsRef : undefined} className="fleet-list-metrics"
+        style={{ columnGap: `${columnGap}px` }}>{visibleFields.map(field =>
         <Metric key={field.kind === 'builtin' ? field.key : field.path} field={field}
           item={item} values={values} fresh={state.fresh} />)}</span>
       <i className={`fleet-list-dot ${state.dot}`} aria-hidden="true" />
@@ -219,13 +251,40 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
   };
   const selectedItem = itemFor(selected);
 
+  useLayoutEffect(() => {
+    if (!editing || !previewMetricsRef.current) return;
+    const metrics = previewMetricsRef.current;
+    const syncColumns = () => {
+      if (metrics.clientWidth === 0) return;
+      const columns = getComputedStyle(metrics).gridTemplateColumns;
+      setPreviewColumns(current => current === columns ? current : columns);
+    };
+    syncColumns();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(syncColumns);
+    observer.observe(metrics);
+    return () => observer.disconnect();
+  }, [editing, draftFields, draftColumnGap, selectedItem]);
+
   return <>
     <div className="multi-sim-section-title fleet-list-title">
-      <div><h2>实例</h2><small>8 个槽位</small></div>
-      <button type="button" className="fleet-list-edit-trigger" onClick={openEditor}
-        aria-haspopup="dialog" title="自定义列表显示项"><FleetIcon name="unlock" />编辑显示项</button>
+      <div><h2>实例</h2><small>{ids.length}/{MAX_FLEET_SLOTS} 槽位</small></div>
+      <div className="fleet-list-actions" role="group" aria-label="槽位操作">
+        <button type="button" className="fleet-list-action add" onClick={onAddSlot}
+          disabled={ids.length >= MAX_FLEET_SLOTS} aria-label="添加槽位" title={ids.length >= MAX_FLEET_SLOTS ? '最多 32 个槽位' : '添加槽位'}><SlotActionIcon name="add" /></button>
+        <button type="button" className="fleet-list-action remove" onClick={onRemoveSlot}
+          disabled={!canRemove} aria-label={`删除所选槽位 ${selected}`} title={canRemove ? `删除所选槽位 ${selected}` : '至少保留一个槽位，运行中的实例请先停止'}><SlotActionIcon name="remove" /></button>
+        <button type="button" className="fleet-list-action" onClick={onCopySlot}
+          aria-label={`复制槽位 ${selected}`} title={`复制槽位 ${selected}`}><SlotActionIcon name="copy" /></button>
+        <button type="button" className="fleet-list-action" onClick={onPasteSlot}
+          disabled={!canPaste} aria-label={`粘贴到槽位 ${selected}`}
+          title={!copiedFrom ? '请先复制槽位' : copiedFrom === selected ? '请选择其他目标槽位' : `将槽位 ${copiedFrom} 的配置粘贴到 ${selected}`}><SlotActionIcon name="paste" /></button>
+        <button type="button" className="fleet-list-edit-trigger" onClick={openEditor}
+          aria-haspopup="dialog" aria-label="编辑显示项" title="编辑显示项"><FleetIcon name="unlock" /></button>
+      </div>
     </div>
-    <div className="fleet-list-cards">{IDS.map(id => {
+    {actionMessage && <p className="fleet-list-action-message" role="status">{actionMessage}</p>}
+    <div className="fleet-list-cards">{ids.map(id => {
       const item = itemFor(id);
       const state = instanceState(item, connected);
       return <button key={id} type="button"
@@ -236,7 +295,7 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
       </button>;
     })}</div>
     <dialog ref={dialogRef} className="fleet-list-dialog" aria-labelledby="fleet-list-dialog-title"
-      onClose={() => { setEditing(false); setDraftFields(savedFields); setError(''); }}>
+      onClose={() => { setEditing(false); setDraftFields(savedFields); setDraftColumnGap(savedDisplay.columnGap); setError(''); }}>
       <div className="fleet-list-dialog-head">
         <div><h2 id="fleet-list-dialog-title">自定义实例信息带</h2>
           <p>拖动字段交换位置；左、中、右三列与实例卡片一致，也可用方向键调整。</p></div>
@@ -244,11 +303,18 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
       </div>
       <div className="fleet-list-dialog-body">
         <h3>实例 {selected} 预览</h3>
-        <div className="fleet-list-card fleet-list-preview">{renderCardContents(selected, selectedItem)}</div>
+        <div className="fleet-list-card fleet-list-preview">{renderCardContents(selected, selectedItem, true)}</div>
+        <label className="fleet-list-spacing">
+          <span>列间距 <strong>{draftColumnGap} px</strong></span>
+          <input type="range" min={0} max={MAX_FLEET_COLUMN_GAP} step={1} value={draftColumnGap}
+            onChange={event => setDraftColumnGap(normalizeFleetColumnGap(Number(event.target.value)))} />
+        </label>
         <div className="fleet-list-edit-head"><h3>当前显示</h3><small>{draftFields.length} / {MAX_FLEET_LIST_FIELDS} 项</small></div>
-        <div className="fleet-list-edit-fields" role="list" aria-label="实例卡片字段位置">{draftFields.map((field, index) =>
+        <div className="fleet-list-edit-fields" style={{ columnGap: `${draftColumnGap}px`, gridTemplateColumns: previewColumns ?? undefined }}
+          role="list" aria-label="实例卡片字段位置">{draftFields.map((field, index) =>
           <div className={`fleet-list-edit-field${draggingIndex === index ? ' dragging' : ''}${dropIndex === index && draggingIndex !== index ? ' drop-target' : ''}`}
             key={field.kind === 'builtin' ? field.key : field.path} role="listitem" tabIndex={0} draggable
+            title={field.kind === 'property' ? `${fleetFieldLabel(field)} · ${field.path}` : fleetFieldLabel(field)}
             aria-label={`${fleetFieldLabel(field)}，第 ${Math.floor(index / 3) + 1} 行${['左', '中', '右'][index % 3]}列；拖动或用方向键交换位置`}
             onKeyDown={event => handleFieldKey(event, index)}
             onDragStart={event => { if ((event.target as HTMLElement).closest('button')) { event.preventDefault(); return; }
@@ -289,11 +355,11 @@ export default function FleetInstanceList({ summaries, fallback, connected, sele
           </select></label>
           <button type="button" onClick={addCustom}>添加</button>
         </div>
-        <p className="fleet-list-hint">可从实例详情的“属性变量”复制路径。设置用于全部 8 个实例；无新鲜数据时显示 —。</p>
+        <p className="fleet-list-hint">可从实例详情的“属性变量”复制路径。设置用于全部 {ids.length} 个实例；无新鲜数据时显示 —。</p>
         {error && <p className="fleet-list-error" role="alert">{error}</p>}
       </div>
       <div className="fleet-list-dialog-foot">
-        <button type="button" onClick={() => { setDraftFields([...DEFAULT_FLEET_LIST_FIELDS]); setError(''); }}>恢复默认</button>
+        <button type="button" onClick={() => { setDraftFields([...DEFAULT_FLEET_LIST_FIELDS]); setDraftColumnGap(DEFAULT_FLEET_COLUMN_GAP); setError(''); }}>恢复默认</button>
         <div><button type="button" onClick={closeEditor}>取消</button><button type="button" className="primary" onClick={saveEditor}>保存设置</button></div>
       </div>
     </dialog>

@@ -264,6 +264,28 @@
 }
 .multi-sim-command-error { margin-top: 8px; color: #a84646; font-size: 11px; }
 
-/* Keep the three telemetry columns legible beside the 52 px Mini HUD. */
-.multi-sim-layout { grid-template-columns: minmax(385px, 440px) minmax(0, 1fr); }
-@media (max-width: 900px) { .multi-sim-layout { grid-template-columns: 1fr; } }
+/* Share the available panel width; stack when the panel itself gets too narrow. */
+.multi-sim-page { container: fleet-page / inline-size; }
+.multi-sim-layout { grid-template-columns: clamp(300px, var(--fleet-list-width, clamp(340px, 34%, 480px)), calc(100% - 372px)) 12px minmax(0, 1fr); grid-template-areas: "slots divider view"; gap: 12px 0; }
+.multi-sim-slots { display: block; min-width: 0; }
+.multi-sim-slots .fleet-list-cards { grid-template-columns: minmax(0, 1fr); }
+.multi-sim-resize-handle { position: relative; grid-area: divider; align-self: stretch; min-width: 0; border-radius: 6px; cursor: col-resize; touch-action: none; user-select: none; }
+.multi-sim-resize-handle::before { position: absolute; top: 0; bottom: 0; left: calc(50% - .5px); width: 1px; background: #cbd9e2; content: ""; }
+.multi-sim-resize-handle::after { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; width: 12px; height: 42px; transform: translate(-50%, -50%); border: 1px solid #bad2df; border-radius: 6px; background: #eaf5fb; color: #527e95; content: "⋮"; font-size: 17px; }
+.multi-sim-resize-handle:hover, .multi-sim-resize-handle:focus-visible { background: rgba(24, 133, 176, .08); outline: 2px solid #328bb5; outline-offset: -2px; }
+.multi-sim-resize-handle:hover::after, .multi-sim-resize-handle:focus-visible::after { border-color: #328bb5; color: #176e9b; }
+.multi-sim-page.map-view .multi-sim-layout { grid-template-rows: auto; }
+@container fleet-page (max-width: 840px) {
+  .multi-sim-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "slots" "view"; }
+  .multi-sim-resize-handle { display: none; }
+  .multi-sim-slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .multi-sim-section-title, .fleet-list-cards { grid-column: 1 / -1; }
+  .multi-sim-slots .fleet-list-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .multi-sim-page.map-view .multi-sim-layout { grid-template-rows: auto minmax(360px, 1fr); }
+}
+@container fleet-page (max-width: 700px) {
+  .multi-sim-header { align-items: flex-start; flex-direction: column; }
+  .multi-sim-header-actions { justify-content: flex-start; }
+  .multi-sim-slots, .multi-sim-slots .fleet-list-cards { grid-template-columns: minmax(0, 1fr); }
+  .multi-sim-page.map-view .multi-sim-layout { grid-template-rows: auto minmax(300px, 1fr); }
+}

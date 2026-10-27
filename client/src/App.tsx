@@ -19,7 +19,7 @@ import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simInstanceCont
 import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
 import { extractOutputSignal, type ChannelItem } from './utils/signalGraph';
 import { installDialogDragging } from './utils/dialogDragging';
-import { normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from './utils/fleetModelGroups';
+import { defaultFleetSlots, fleetSlotIds, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, normalizeFleetSlots, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from './utils/fleetModelGroups';
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -177,7 +177,6 @@ class Viewer3DSafety extends Component<{ children: ReactNode; onClose: () => voi
   }
 }
 
-const INSTANCE_IDS = Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0'));
 const SLOT_KEY = 'jsbsim-multi-model-slots-v1';
 const INITIAL_OVERRIDE_KEY = 'jsbsim-multi-initial-overrides-v1';
 const NETWORK_OVERRIDE_KEY = 'jsbsim-multi-network-overrides-v1';
@@ -192,12 +191,12 @@ function savedNetworkOverrides(): FleetNetworkOverrides {
 function savedInstanceSlots(): Record<string, string> {
   try {
     const stored = localStorage.getItem(SLOT_KEY);
-    const value = JSON.parse(stored || '{}');
-    const slots = Object.fromEntries(INSTANCE_IDS.map(id => [id, typeof value?.[id] === 'string' ? value[id] : '']));
+    const slots = stored ? normalizeFleetSlots(JSON.parse(stored)) : defaultFleetSlots();
+    if (!fleetSlotIds(slots).length) return defaultFleetSlots();
     if (!stored && !slots['01']) slots['01'] = localStorage.getItem('jsbsim-remote-model') || '';
     return slots;
   } catch {
-    return Object.fromEntries(INSTANCE_IDS.map(id => [id, '']));
+    return defaultFleetSlots();
   }
 }
 
@@ -225,9 +224,10 @@ function AppContent() {
   const [fleetBusy, setFleetBusy] = useState(false);
   const [fleetError, setFleetError] = useState('');
   const [fleetState, setFleetState] = useState({ running: 0, paused: 0 });
-  const [activeInstance, setActiveInstance] = useState('01');
-  const [multiSelectedInstance, setMultiSelectedInstance] = useState('01');
   const [instanceSlots, setInstanceSlots] = useState(savedInstanceSlots);
+  const instanceIds = fleetSlotIds(instanceSlots);
+  const [activeInstance, setActiveInstance] = useState(() => instanceIds[0]);
+  const [multiSelectedInstance, setMultiSelectedInstance] = useState(() => instanceIds[0]);
   const [initialOverrides, setInitialOverrides] = useState(savedInitialOverrides);
   const [networkOverrides, setNetworkOverrides] = useState(savedNetworkOverrides);
   const [editorSwitchRequest, setEditorSwitchRequest] = useState<string | null>(null);
@@ -665,7 +665,7 @@ function AppContent() {
 
   async function runFleetCommand(action: 'start' | 'pause' | 'resume' | 'stop') {
     if (fleetBusy || !connected) return;
-    const ids = action === 'start' ? INSTANCE_IDS.filter(id => !!instanceSlots[id]) : INSTANCE_IDS;
+    const ids = action === 'start' ? instanceIds.filter(id => !!instanceSlots[id]) : instanceIds;
     if (action === 'start' && multiConfigEdited) {
       setFleetError('请先保存当前多机配置，再启动编组。');
       return;
@@ -714,7 +714,7 @@ function AppContent() {
           if (workspace === 'multi' && next === 'editor') setEditorSwitchRequest(multiSelectedInstance);
           setWorkspace(next);
         }}
-        fleetControls={{ connected, configuredCount: INSTANCE_IDS.filter(id => !!instanceSlots[id]).length,
+        fleetControls={{ connected, configuredCount: instanceIds.filter(id => !!instanceSlots[id]).length,
           runningCount: fleetState.running, pausedCount: fleetState.paused,
           busy: fleetBusy, error: fleetError, onCommand: action => void runFleetCommand(action) }}
         activeInstance={workspace === 'multi' ? multiSelectedInstance : activeInstance} instanceSlots={instanceSlots}
@@ -738,7 +738,11 @@ function AppContent() {
         onLoadFleetGroup={(group: FleetModelGroup) => {
           if (workspace === 'multi' && multiConfigEdited &&
               !window.confirm('当前模型配置尚未保存，加载模型组会丢失本页修改。继续吗？')) return false;
-          setInstanceSlots(group.slots);
+          const next = normalizeFleetSlots(group.slots);
+          const first = fleetSlotIds(next)[0] || '01';
+          setInstanceSlots(fleetSlotIds(next).length ? next : defaultFleetSlots());
+          if (!next[multiSelectedInstance] && !Object.prototype.hasOwnProperty.call(next, multiSelectedInstance)) setMultiSelectedInstance(first);
+          if (!next[activeInstance] && !Object.prototype.hasOwnProperty.call(next, activeInstance)) setActiveInstance(first);
           setInitialOverrides(group.initialOverrides);
           setNetworkOverrides(group.networkOverrides);
           return true;
@@ -762,17 +766,21 @@ function AppContent() {
           <MultiSimPanel connected={connected} singleTelemetry={telemetry} onFleetStateChange={setFleetState}
             selected={multiSelectedInstance} onSelect={setMultiSelectedInstance}
             slots={instanceSlots} onSlotsChange={change => {
-              const next = typeof change === 'function' ? change(instanceSlots) : change;
+              const next = normalizeFleetSlots(typeof change === 'function' ? change(instanceSlots) : change);
+              if (!fleetSlotIds(next).length) return;
               setInitialOverrides(current => {
                 const updated = { ...current };
-                for (const id of Object.keys(next)) if (next[id] !== instanceSlots[id]) delete updated[id];
+                for (const id of instanceIds) if (!Object.prototype.hasOwnProperty.call(next, id) || next[id] !== instanceSlots[id]) delete updated[id];
                 return updated;
               });
               setNetworkOverrides(current => {
                 const updated = { ...current };
-                for (const id of Object.keys(next)) if (next[id] !== instanceSlots[id]) delete updated[id];
+                for (const id of instanceIds) if (!Object.prototype.hasOwnProperty.call(next, id) || next[id] !== instanceSlots[id]) delete updated[id];
                 return updated;
               });
+              const first = fleetSlotIds(next)[0];
+              if (!Object.prototype.hasOwnProperty.call(next, activeInstance)) setActiveInstance(first);
+              if (!Object.prototype.hasOwnProperty.call(next, multiSelectedInstance)) setMultiSelectedInstance(first);
               setInstanceSlots(next);
             }}
             initialOverrides={initialOverrides} onInitialOverridesChange={setInitialOverrides}

@@ -404,7 +404,7 @@ fn get_sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn sim_instance_snapshot(app: tauri::AppHandle, instance_id: String) -> Result<Option<serde_json::Value>, String> {
     let id = instance_id.parse::<u8>().map_err(|_| "无效实例编号".to_string())?;
-    if !(1..=8).contains(&id) { return Err("实例编号必须为 01～08".into()); }
+    if !(1..=sim_client::MAX_SIM_INSTANCES).contains(&id) { return Err("实例编号必须为 01～32".into()); }
     let state = app.state::<AppState>();
     let client = state.sim_client.lock().map_err(|e| e.to_string())?;
     Ok(client.instance_snapshot(id))

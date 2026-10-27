@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { ftpDownloadModel, ftpDownloadSimConfig, isTauri, listenSimInstances, simInstanceControl, simInstanceSnapshot, simListModels, type SimInstanceSummary } from '../utils/tauriApi';
-import { buildFleetInitialGrid, modelGeocentricToGpsLatitude, normalizeFleetNetworkOverrides, type FleetInitialOverrides, type FleetInitialPose, type FleetNetworkOverrides } from '../utils/fleetModelGroups';
+import { buildFleetInitialGrid, fleetSlotIds, modelGeocentricToGpsLatitude, nextFleetSlotId, normalizeFleetNetworkOverrides, type FleetInitialOverrides, type FleetInitialPose, type FleetNetworkOverrides } from '../utils/fleetModelGroups';
 import { readHilEndpoints, readHilEndpointsFromNodes, type HilEndpointKey, type HilEndpoints } from '../utils/hilEndpoints';
 import { useFlowStore } from '../store/flowStore';
 import type { Telemetry } from '../sim/useSimSocket';
@@ -8,8 +8,31 @@ import MultiSimMap from './MultiSimMap';
 import FleetInstanceList from './FleetInstanceList';
 import './MultiSimPanel.css';
 
-const IDS = Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0'));
+const FLEET_SPLIT_RATIO_KEY = 'jsbsim-fleet-split-ratio-v1';
+const MIN_LIST_WIDTH = 300;
+const MIN_VIEW_WIDTH = 360;
+const SPLIT_HANDLE_WIDTH = 12;
 type Action = 'start' | 'stop' | 'pause' | 'resume';
+
+function readFleetSplitRatio(): number | null {
+  try {
+    const saved = localStorage.getItem(FLEET_SPLIT_RATIO_KEY);
+    const value = saved === null ? NaN : Number(saved);
+    return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
+  } catch { return null; }
+}
+
+function saveFleetSplitRatio(value: number | null) {
+  try {
+    if (value === null) localStorage.removeItem(FLEET_SPLIT_RATIO_KEY);
+    else localStorage.setItem(FLEET_SPLIT_RATIO_KEY, value.toFixed(4));
+  } catch { /* The divider remains adjustable for this session. */ }
+}
+
+function boundedFleetSplitRatio(totalWidth: number, listWidth: number): number {
+  const maxListWidth = Math.max(MIN_LIST_WIDTH, totalWidth - MIN_VIEW_WIDTH - SPLIT_HANDLE_WIDTH);
+  return Math.min(maxListWidth, Math.max(MIN_LIST_WIDTH, listWidth)) / totalWidth;
+}
 const INITIAL_FIELDS = [
   ['latitudeDeg', '纬度', '°'], ['longitudeDeg', '经度', '°'], ['altitudeM', '海拔', 'm'],
   ['rollDeg', 'Roll', '°'], ['pitchDeg', 'Pitch', '°'], ['yawDeg', 'Yaw', '°'],
@@ -104,6 +127,11 @@ interface Props {
 }
 
 export default function MultiSimPanel({ connected, singleTelemetry, onFleetStateChange, selected, onSelect, slots, onSlotsChange, initialOverrides, onInitialOverridesChange, networkOverrides, onNetworkOverridesChange, onOpenLogCenter, onOpenEditor, onPendingChange }: Props) {
+  const ids = fleetSlotIds(slots);
+  const firstId = ids[0] || '01';
+  const [copiedSlot, setCopiedSlot] = useState<{ sourceId: string; model: string;
+    initial?: FleetInitialPose; network?: FleetNetworkOverrides[string] } | null>(null);
+  const [slotActionMessage, setSlotActionMessage] = useState('');
   const [hilDraft, setHilDraft] = useState<HilEndpoints | null>(null);
   const [hilSource, setHilSource] = useState<{ model: string; display: HilEndpoints; editorDirty: boolean } | null>(null);
   const [hilEnabled, setHilEnabled] = useState(false);
@@ -118,7 +146,7 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
   const [initialError, setInitialError] = useState('');
   const [initialMessage, setInitialMessage] = useState('');
   const [initialRevision, setInitialRevision] = useState(0);
-  const [gridValues, setGridValues] = useState<GridDraft>(() => gridDraft(initialOverrides['01']));
+  const [gridValues, setGridValues] = useState<GridDraft>(() => gridDraft(initialOverrides[firstId]));
   const [gridError, setGridError] = useState('');
   const [gridMessage, setGridMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -129,10 +157,94 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
   const [filter, setFilter] = useState('');
   const [modelsError, setModelsError] = useState('');
   const [view, setView] = useState<'map' | 'detail'>('map');
+  const [listRatio, setListRatio] = useState(readFleetSplitRatio);
   const gridDialogRef = useRef<HTMLDialogElement>(null);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const slotsRef = useRef<HTMLElement>(null);
+  const splitHandleRef = useRef<HTMLDivElement>(null);
+  const splitDragRef = useRef<{ pointerId: number; left: number; width: number; value: number } | null>(null);
+
+  useEffect(() => {
+    const layout = layoutRef.current;
+    const slots = slotsRef.current;
+    const handle = splitHandleRef.current;
+    if (!layout || !slots || !handle) return;
+    const syncValue = () => {
+      if (getComputedStyle(handle).display === 'none') return;
+      const width = layout.getBoundingClientRect().width;
+      if (!width) return;
+      const listWidth = slots.getBoundingClientRect().width;
+      handle.setAttribute('aria-valuemin', String(Math.ceil(MIN_LIST_WIDTH / width * 100)));
+      handle.setAttribute('aria-valuemax', String(Math.floor((width - MIN_VIEW_WIDTH - SPLIT_HANDLE_WIDTH) / width * 100)));
+      handle.setAttribute('aria-valuenow', String(Math.round(listWidth / width * 100)));
+      handle.setAttribute('aria-valuetext', `实例列表宽 ${Math.round(listWidth)} 像素`);
+    };
+    const observer = new ResizeObserver(syncValue);
+    observer.observe(layout);
+    observer.observe(slots);
+    syncValue();
+    return () => observer.disconnect();
+  }, []);
+
+  function beginSplitDrag(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !layoutRef.current || !slotsRef.current) return;
+    const rect = layoutRef.current.getBoundingClientRect();
+    splitDragRef.current = { pointerId: event.pointerId, left: rect.left, width: rect.width,
+      value: slotsRef.current.getBoundingClientRect().width / rect.width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
+
+  function updateSplitDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = splitDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.value = boundedFleetSplitRatio(drag.width, event.clientX - drag.left);
+    layoutRef.current?.style.setProperty('--fleet-list-width', `${drag.value * 100}%`);
+  }
+
+  function endSplitDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = splitDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    splitDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setListRatio(drag.value);
+    saveFleetSplitRatio(drag.value);
+  }
+
+  function cancelSplitDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = splitDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    splitDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (listRatio === null) layoutRef.current?.style.removeProperty('--fleet-list-width');
+    else layoutRef.current?.style.setProperty('--fleet-list-width', `${listRatio * 100}%`);
+  }
+
+  function adjustSplitByKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (!layoutRef.current || !slotsRef.current) return;
+    const width = layoutRef.current.getBoundingClientRect().width;
+    const current = slotsRef.current.getBoundingClientRect().width;
+    const step = event.shiftKey ? 48 : 16;
+    const target = event.key === 'ArrowLeft' ? current - step
+      : event.key === 'ArrowRight' ? current + step
+      : event.key === 'Home' ? MIN_LIST_WIDTH
+      : event.key === 'End' ? width - MIN_VIEW_WIDTH - SPLIT_HANDLE_WIDTH : null;
+    if (target === null) return;
+    event.preventDefault();
+    const ratio = boundedFleetSplitRatio(width, target);
+    setListRatio(ratio);
+    saveFleetSplitRatio(ratio);
+  }
+
+  function resetSplit() {
+    splitDragRef.current = null;
+    layoutRef.current?.style.removeProperty('--fleet-list-width');
+    setListRatio(null);
+    saveFleetSplitRatio(null);
+  }
 
   const selectedModel = slots[selected] || '';
-  useEffect(() => { setGridValues(gridDraft(initialOverrides['01'])); }, [initialOverrides['01']]);
+  useEffect(() => { setGridValues(gridDraft(initialOverrides[firstId])); }, [firstId, initialOverrides[firstId]]);
   const selectedOverride = initialOverrides[selected];
   const selectedNetworkOverride = networkOverrides[selected];
   const initialPath = `config/models/${selectedModel.replace(/[^a-zA-Z0-9_.-]/g, '_')}.json`;
@@ -244,14 +356,14 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
     setGridError('');
     setGridMessage('');
     try {
-      const currentOrigin = initialOverrides['01'];
+      const currentOrigin = initialOverrides[firstId];
       const origin = parseInitialDraft({ ...gridValues,
         rollDeg: String(currentOrigin?.rollDeg ?? 0),
         pitchDeg: String(currentOrigin?.pitchDeg ?? 0),
         yawDeg: String(currentOrigin?.yawDeg ?? 0) });
-      const grid = buildFleetInitialGrid(origin, 0.5, initialOverrides);
+      const grid = buildFleetInitialGrid(origin, 0.5, initialOverrides, ids);
       onInitialOverridesChange(grid);
-      setGridMessage('已将 01～08 的初始位置设为 2 行 × 4 列、相邻 0.5 m。重新启动后生效；如需保存在模型库，请更新当前模型组。');
+      setGridMessage(`已将 ${ids.length} 个槽位的初始位置按每行 4 列、相邻 0.5 m 排列。重新启动后生效；如需保存在模型库，请更新当前模型组。`);
     } catch (error) {
       setGridError(String(error instanceof Error ? error.message : error));
     }
@@ -308,6 +420,71 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
   }, [selected]);
 
   const byId = useMemo(() => new Map(summaries.map(item => [item.instance_id, item])), [summaries]);
+  const selectedRuntime = byId.get(selected);
+  const selectedRunning = connected && !!selectedRuntime &&
+    (selectedRuntime.age_ms ?? Infinity) < INSTANCE_DISCONNECTED_MS &&
+    (selectedRuntime.state === 'running' || selectedRuntime.state === 'paused');
+  const canRemoveSlot = ids.length > 1 && !selectedRunning;
+  const canPasteSlot = !!copiedSlot && copiedSlot.sourceId !== selected && !selectedRunning;
+
+  function addSlot() {
+    const id = nextFleetSlotId(slots);
+    if (!id || !discardDraft()) return;
+    onSlotsChange(current => ({ ...current, [id]: '' }));
+    onSelect(id);
+    setSlotActionMessage(`已添加槽位 ${id}。`);
+  }
+
+  function removeSlot() {
+    if (!canRemoveSlot || !discardDraft() ||
+        !window.confirm(`删除槽位 ${selected}？该槽位的模型绑定、初始状态和网络配置将被移除；其他槽位编号不变。`)) return;
+    const remaining = ids.filter(id => id !== selected);
+    const nextSelected = remaining[Math.min(ids.indexOf(selected), remaining.length - 1)];
+    onSlotsChange(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== selected)));
+    onSelect(nextSelected);
+    setSlotActionMessage(`已删除槽位 ${selected}。`);
+  }
+
+  function copySlot() {
+    if (hilEdited || initialEdited) {
+      setSlotActionMessage('请先保存当前槽位的初始状态和网口配置，再复制。');
+      return;
+    }
+    const network = networkOverrides[selected];
+    setCopiedSlot({ sourceId: selected, model: slots[selected] || '',
+      initial: initialOverrides[selected] ? { ...initialOverrides[selected] } : undefined,
+      network: network ? {
+        input: network.input ? { ...network.input } : null,
+        sensor: network.sensor ? { ...network.sensor } : null,
+        gps: network.gps ? { ...network.gps } : null,
+      } : undefined });
+    setSlotActionMessage(`已复制槽位 ${selected} 的配置；选择目标槽位后可粘贴。`);
+  }
+
+  function pasteSlot() {
+    if (!copiedSlot || !canPasteSlot || !discardDraft()) return;
+    if ((slots[selected] || initialOverrides[selected] || networkOverrides[selected]) &&
+        !window.confirm(`将槽位 ${copiedSlot.sourceId} 的配置粘贴到 ${selected}？目标槽位现有配置会被覆盖。`)) return;
+    onSlotsChange(current => ({ ...current, [selected]: copiedSlot.model }));
+    onInitialOverridesChange(current => {
+      const next = { ...current };
+      if (copiedSlot.initial) next[selected] = { ...copiedSlot.initial };
+      else delete next[selected];
+      return next;
+    });
+    onNetworkOverridesChange(current => {
+      const next = { ...current };
+      if (copiedSlot.network) next[selected] = {
+        input: copiedSlot.network.input ? { ...copiedSlot.network.input } : null,
+        sensor: copiedSlot.network.sensor ? { ...copiedSlot.network.sensor } : null,
+        gps: copiedSlot.network.gps ? { ...copiedSlot.network.gps } : null,
+      };
+      else delete next[selected];
+      return next;
+    });
+    setSlotActionMessage(`已将槽位 ${copiedSlot.sourceId} 的配置粘贴到 ${selected}；重新启动实例后生效。${copiedSlot.initial || copiedSlot.network ? '初始位置和网口参数按原值复制，请在同时运行前检查。' : ''}`);
+  }
+
   const fallback = connected && singleTelemetry && summaries.length === 0
     ? { ...singleTelemetry, instance_id: '01', age_ms: 0,
         properties: Object.fromEntries(Object.entries(singleTelemetry)
@@ -328,15 +505,15 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
       .map(([path, value]) => [normalizedPath(selected, path), value as number] as const)
       .sort(([a], [b]) => a.localeCompare(b));
   }, [selectedSnapshot, selected, filter, fresh]);
-  const connectedCount = IDS.filter(id => {
+  const connectedCount = ids.filter(id => {
     const item = byId.get(id) || (id === '01' ? fallback : null);
     return !!item && connected && (item.age_ms ?? Infinity) < INSTANCE_FRESH_MS;
   }).length;
-  const activeCount = IDS.filter(id => {
+  const activeCount = ids.filter(id => {
     const item = byId.get(id) || (id === '01' ? fallback : null);
     return !!item && connected && (item.age_ms ?? Infinity) < INSTANCE_FRESH_MS && item.state === 'running';
   }).length;
-  const pausedCount = IDS.filter(id => {
+  const pausedCount = ids.filter(id => {
     const item = byId.get(id) || (id === '01' ? fallback : null);
     return !!item && connected && (item.age_ms ?? Infinity) < INSTANCE_FRESH_MS && item.state === 'paused';
   }).length;
@@ -368,7 +545,7 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
 
   return <main className={`multi-sim-page${view === 'map' ? ' map-view' : ''}`} aria-label="多机仿真">
     <header className="multi-sim-header">
-      <div><span className="multi-sim-eyebrow">SIMULATION FLEET</span><h1>多机仿真</h1><p>8 个实例槽位 · 当前已连接 {connectedCount} 架 · {connected ? '仿真机在线' : '等待仿真机连接'}</p></div>
+      <div><span className="multi-sim-eyebrow">SIMULATION FLEET</span><h1>多机仿真</h1><p>{ids.length} 个实例槽位 · 当前已连接 {connectedCount} 架 · {connected ? '仿真机在线' : '等待仿真机连接'}</p></div>
       <div className="multi-sim-header-actions">
         <button type="button" aria-haspopup="dialog" onClick={() => gridDialogRef.current?.showModal()}>编组初始位置</button>
         <div className="multi-sim-view-tabs" role="group" aria-label="视图切换">
@@ -382,7 +559,7 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
     </header>
     <dialog ref={gridDialogRef} className="multi-sim-grid" aria-labelledby="multi-sim-grid-title">
       <div className="multi-sim-grid-head">
-        <div><h2 id="multi-sim-grid-title">编组初始位置</h2><p>以实例 01 为起点 · 2 行 × 4 列 · 间距 0.5 m</p></div>
+        <div><h2 id="multi-sim-grid-title">编组初始位置</h2><p>以实例 {firstId} 为起点 · 每行 4 列 · 间距 0.5 m</p></div>
         <button type="button" onClick={() => gridDialogRef.current?.close()} aria-label="关闭编组初始位置弹窗">关闭</button>
       </div>
       <div className="multi-sim-grid-body">
@@ -390,25 +567,37 @@ export default function MultiSimPanel({ connected, singleTelemetry, onFleetState
           {([['latitudeDeg', '起点纬度', '° N'], ['longitudeDeg', '起点经度', '° E'], ['altitudeM', '地面海拔', 'm']] as const).map(([key, label, unit]) =>
             <label key={key}>{label}<span><input type="number" step="any" value={gridValues[key]}
               onChange={event => { setGridValues(current => ({ ...current, [key]: event.target.value })); setGridError(''); setGridMessage(''); }} /><em>{unit}</em></span></label>)}
-          <button type="button" onClick={applyInitialGrid}>应用到 01～08</button>
+          <button type="button" onClick={applyInitialGrid}>应用到当前 {ids.length} 个槽位</button>
         </div>
-        <small>01～04 向东排列，05～08 在其南侧一行；只设置仿真组实例初始位置，沿用各实例现有姿态。</small>
-        {Object.keys(initialOverrides).length >= 8 && <div className="multi-sim-grid-positions" aria-label="当前编组初始坐标">
-          {IDS.map(id => <span key={id}><b>{id}</b> {initialOverrides[id]?.latitudeDeg}°，{initialOverrides[id]?.longitudeDeg}° · {initialOverrides[id]?.altitudeM} m</span>)}
+        <small>从槽位 {firstId} 开始，每行 4 列向东、逐行向南排列；只设置仿真组实例初始位置，沿用各实例现有姿态。</small>
+        {ids.every(id => !!initialOverrides[id]) && <div className="multi-sim-grid-positions" aria-label="当前编组初始坐标">
+          {ids.map(id => <span key={id}><b>{id}</b> {initialOverrides[id]?.latitudeDeg}°，{initialOverrides[id]?.longitudeDeg}° · {initialOverrides[id]?.altitudeM} m</span>)}
         </div>}
         {gridError && <p className="multi-sim-error" role="alert">{gridError}</p>}
         {gridMessage && <p className="multi-sim-hil-success" role="status">{gridMessage}</p>}
       </div>
     </dialog>
-    <div className="multi-sim-layout">
-      <section className="multi-sim-slots" aria-label="实例列表">
-        <FleetInstanceList summaries={summaries} fallback={fallback} connected={connected}
-          selected={selected} onSelect={id => { if (discardDraft()) onSelect(id); }} />
+    <div ref={layoutRef} className="multi-sim-layout"
+      style={{ '--fleet-list-width': listRatio === null ? undefined : `${listRatio * 100}%` } as CSSProperties}>
+      <section ref={slotsRef} className="multi-sim-slots" aria-label="实例列表">
+        <FleetInstanceList slots={slots} summaries={summaries} fallback={fallback} connected={connected}
+          selected={selected} onSelect={id => { if (discardDraft()) onSelect(id); }}
+          onAddSlot={addSlot} onRemoveSlot={removeSlot} onCopySlot={copySlot} onPasteSlot={pasteSlot}
+          copiedFrom={copiedSlot?.sourceId || null} canRemove={canRemoveSlot} canPaste={canPasteSlot}
+          actionMessage={slotActionMessage} />
       </section>
+      <div ref={splitHandleRef} className="multi-sim-resize-handle" role="separator"
+        tabIndex={0} aria-orientation="vertical" aria-label="调整实例列表和右侧区域宽度"
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={34}
+        title="拖动调整宽度；方向键微调；双击恢复自适应"
+        onPointerDown={beginSplitDrag} onPointerMove={updateSplitDrag}
+        onPointerUp={endSplitDrag} onPointerCancel={cancelSplitDrag}
+        onLostPointerCapture={cancelSplitDrag} onKeyDown={adjustSplitByKeyboard}
+        onDoubleClick={resetSplit} />
       <div className="multi-sim-view">
-        {view === 'map' ? <MultiSimMap connected={connected} instances={IDS.map(id => byId.get(id) || (id === '01' ? fallback : null)).filter((item): item is SimInstanceSummary => !!item)} selected={selected} slots={slots} initialOverrides={initialOverrides} onSelect={id => { if (discardDraft()) onSelect(id); }} /> :
+        {view === 'map' ? <MultiSimMap connected={connected} instances={ids.map(id => byId.get(id) || (id === '01' ? fallback : null)).filter((item): item is SimInstanceSummary => !!item)} selected={selected} slots={slots} initialOverrides={initialOverrides} onSelect={id => { if (discardDraft()) onSelect(id); }} /> :
       <section className="multi-sim-detail" aria-label={`实例 ${selected} 详情`}>
-        <div className="multi-sim-detail-head"><div><span className="multi-sim-eyebrow">INSTANCE {selected} / 08</span><h2>{selectedSummary?.model || slots[selected] || '未配置模型'}</h2></div><span className={`multi-sim-state ${fresh ? selectedSummary?.state || 'online' : connected && (selectedSummary?.age_ms ?? Infinity) < INSTANCE_DISCONNECTED_MS ? 'delayed' : 'offline'}`}>{selectedSummary ? stateLabel(selectedSummary.state, selectedSummary.age_ms, connected) : '待接入'}</span></div>
+        <div className="multi-sim-detail-head"><div><span className="multi-sim-eyebrow">INSTANCE {selected} / {String(ids.length).padStart(2, '0')}</span><h2>{selectedSummary?.model || slots[selected] || '未配置模型'}</h2></div><span className={`multi-sim-state ${fresh ? selectedSummary?.state || 'online' : connected && (selectedSummary?.age_ms ?? Infinity) < INSTANCE_DISCONNECTED_MS ? 'delayed' : 'offline'}`}>{selectedSummary ? stateLabel(selectedSummary.state, selectedSummary.age_ms, connected) : '待接入'}</span></div>
         <div className="multi-sim-config"><label htmlFor="multi-sim-model">预设模型</label><select id="multi-sim-model" value={slots[selected]} onChange={event => { if (discardDraft()) onSlotsChange(current => ({ ...current, [selected]: event.target.value })); }}><option value="">未选择</option>{slots[selected] && !models.includes(slots[selected]) && <option value={slots[selected]}>{slots[selected]}</option>}{models.map(model => <option key={model} value={model}>{model}</option>)}</select><small>选择板端已安装的网口 HIL 模型。</small>{modelsError && <small className="multi-sim-error">模型列表：{modelsError}</small>}</div>
         <div className="multi-sim-instance-actions"><button disabled={!connected || busy || !slots[selected] || hilEdited || initialEdited} title={hilEdited || initialEdited ? '先保存配置再启动' : undefined} onClick={() => void runCommands([selected], 'start')}>启动实例</button><button disabled={!connected || busy} onClick={() => void runCommands([selected], 'pause')}>暂停</button><button disabled={!connected || busy} onClick={() => void runCommands([selected], 'resume')}>继续</button><button disabled={!connected || busy} onClick={() => void runCommands([selected], 'stop')}>停止</button>{selectedSummary?.state === 'fault' && <span role="alert">{selectedSummary.error || '模型加载失败'}</span>}</div>
         {commandMessage && <p className="multi-sim-command-error" role="alert">{commandMessage}</p>}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getAircraftLibrary, loadAircraft, simListTests, ftpDownloadScript, ftpListEngineCatalog } from '../utils/tauriApi';
-import { FLEET_INSTANCE_IDS, normalizeFleetSlots, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, readFleetModelGroups, saveFleetModelGroups, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from '../utils/fleetModelGroups';
+import { fleetSlotIds, normalizeFleetSlots, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, readFleetModelGroups, saveFleetModelGroups, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from '../utils/fleetModelGroups';
 
 interface AircraftEntry {
   id: string;
@@ -146,7 +146,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   };
   const createFleetGroup = () => {
     const slots = normalizeFleetSlots(currentFleetSlots);
-    if (!FLEET_INSTANCE_IDS.some(id => slots[id])) {
+    if (!fleetSlotIds(slots).some(id => slots[id])) {
       alert('请先在多机仿真页面为至少一个实例选择模型');
       return;
     }
@@ -175,7 +175,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   };
   const updateFleetGroup = (entry: FleetModelGroup) => {
     const slots = normalizeFleetSlots(currentFleetSlots);
-    if (!FLEET_INSTANCE_IDS.some(id => slots[id])) {
+    if (!fleetSlotIds(slots).some(id => slots[id])) {
       alert('当前编组没有已绑定模型的实例');
       return;
     }
@@ -312,7 +312,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
               visibleFleetGroups.length ?
                 visibleFleetGroups.map(item =>
                   <div key={item.id} className={`library-item ${activeFleetGroup?.id === item.id ? 'selected' : ''}`} onClick={() => setSelectedFleetGroup(item)}>
-                    <span className="library-item-icon">🛩️</span><div className="library-item-info"><div className="library-item-name">{item.name}</div><div className="library-item-meta"><span>{FLEET_INSTANCE_IDS.filter(id => item.slots[id]).length} 架模型</span><span>· 本机保存</span></div></div>
+                    <span className="library-item-icon">🛩️</span><div className="library-item-info"><div className="library-item-name">{item.name}</div><div className="library-item-meta"><span>{fleetSlotIds(item.slots).filter(id => item.slots[id]).length} 架模型</span><span>· 本机保存</span></div></div>
                   </div>) : <div className="library-loading">{search ? '没有找到匹配的模型组' : '暂无模型组，请先在多机仿真页配置槽位，再保存为模型组'}</div>
             ) : loading ? (
               <div className="library-loading">加载中...</div>
@@ -347,8 +347,8 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
 
           {tab === 'fleet' && activeFleetGroup && <div className="library-detail">
             <div className="library-detail-header"><span className="library-detail-icon">🛩️</span><div><h3>{activeFleetGroup.name}</h3><span className="library-detail-id">多机模型组 · 本机保存</span></div></div>
-            <p className="library-detail-desc">载入后将替换 01～08 的模型绑定、初始状态和网络覆盖；请在多机仿真页面启动实例。组参数不修改单模型配置。</p>
-            <div className="library-fleet-slots">{FLEET_INSTANCE_IDS.map(id => <div key={id}><strong>{id}</strong><span>{activeFleetGroup.slots[id] || '未配置'}{activeFleetGroup.initialOverrides[id] ? ' · 初始状态覆盖' : ''}{activeFleetGroup.networkOverrides[id] ? ' · 网口覆盖' : ''}</span></div>)}</div>
+            <p className="library-detail-desc">载入后将替换当前槽位的模型绑定、初始状态和网络覆盖；请在多机仿真页面启动实例。组参数不修改单模型配置。</p>
+            <div className="library-fleet-slots">{fleetSlotIds(activeFleetGroup.slots).map(id => <div key={id}><strong>{id}</strong><span>{activeFleetGroup.slots[id] || '未配置'}{activeFleetGroup.initialOverrides[id] ? ' · 初始状态覆盖' : ''}{activeFleetGroup.networkOverrides[id] ? ' · 网口覆盖' : ''}</span></div>)}</div>
             <button className="library-load-btn" onClick={() => { if (onLoadFleetGroup?.(activeFleetGroup) !== false) onClose(); }} disabled={!onLoadFleetGroup}>📥 加载此模型组</button>
             <div className="library-user-actions"><button onClick={() => updateFleetGroup(activeFleetGroup)}>↻ 用当前编组更新</button><button onClick={() => renameFleetGroup(activeFleetGroup)}>✎ 重命名</button><button className="library-delete-btn" onClick={() => deleteFleetGroup(activeFleetGroup)}>删除</button></div>
           </div>}

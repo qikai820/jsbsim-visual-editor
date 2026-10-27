@@ -3,6 +3,8 @@ import type { SimInstanceSummary } from './tauriApi';
 export const FLEET_LIST_DISPLAY_KEY = 'jsbsim-fleet-list-display-v2';
 const LEGACY_FLEET_LIST_DISPLAY_KEY = 'jsbsim-fleet-list-display-v1';
 export const MAX_FLEET_LIST_FIELDS = 12;
+export const DEFAULT_FLEET_COLUMN_GAP = 2;
+export const MAX_FLEET_COLUMN_GAP = 20;
 
 export const BUILTIN_FLEET_FIELDS = [
   { key: 'altitude_m', label: '高度', unit: 'm', digits: 1, icon: 'up' },
@@ -21,6 +23,7 @@ export type FleetBuiltinKey = (typeof BUILTIN_FLEET_FIELDS)[number]['key'];
 export type FleetListField =
   | { kind: 'builtin'; key: FleetBuiltinKey }
   | { kind: 'property'; path: string; label: string; unit: string; digits: number };
+export type FleetListDisplay = { fields: FleetListField[]; columnGap: number };
 
 export const DEFAULT_FLEET_LIST_FIELDS: FleetListField[] = [
   { kind: 'builtin', key: 'altitude_m' },
@@ -71,19 +74,35 @@ export function normalizeFleetListFields(value: unknown): FleetListField[] {
   return result.length ? result : [...DEFAULT_FLEET_LIST_FIELDS];
 }
 
-export function readFleetListFields(): FleetListField[] {
+export function normalizeFleetColumnGap(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(MAX_FLEET_COLUMN_GAP, Math.max(0, Math.round(value)))
+    : DEFAULT_FLEET_COLUMN_GAP;
+}
+
+export function readFleetListDisplay(): FleetListDisplay {
   try {
     const stored = localStorage.getItem(FLEET_LIST_DISPLAY_KEY);
-    if (stored) return normalizeFleetListFields(JSON.parse(stored));
+    if (stored) {
+      const value: unknown = JSON.parse(stored);
+      if (Array.isArray(value)) return {
+        fields: normalizeFleetListFields(value), columnGap: DEFAULT_FLEET_COLUMN_GAP,
+      };
+      if (value && typeof value === 'object' && 'fields' in value) return {
+        fields: normalizeFleetListFields(value.fields),
+        columnGap: normalizeFleetColumnGap('columnGap' in value ? value.columnGap : undefined),
+      };
+    }
     const legacy = localStorage.getItem(LEGACY_FLEET_LIST_DISPLAY_KEY);
     if (legacy) {
       const fields = normalizeFleetListFields(JSON.parse(legacy));
-      return fields.length < MAX_FLEET_LIST_FIELDS
+      return { fields: fields.length < MAX_FLEET_LIST_FIELDS
         && !fields.some(field => field.kind === 'builtin' && field.key === 'realtime_factor')
-        ? [...fields, { kind: 'builtin', key: 'realtime_factor' }] : fields;
+        ? [...fields, { kind: 'builtin', key: 'realtime_factor' }] : fields,
+        columnGap: DEFAULT_FLEET_COLUMN_GAP };
     }
-    return [...DEFAULT_FLEET_LIST_FIELDS];
-  } catch { return [...DEFAULT_FLEET_LIST_FIELDS]; }
+  } catch { /* Use defaults when local storage is unavailable or malformed. */ }
+  return { fields: [...DEFAULT_FLEET_LIST_FIELDS], columnGap: DEFAULT_FLEET_COLUMN_GAP };
 }
 
 export function fleetFieldLabel(field: FleetListField): string {

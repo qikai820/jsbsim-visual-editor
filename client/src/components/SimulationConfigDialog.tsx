@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 import { useSimSocket } from '../sim/useSimSocket';
+import { fleetSlotIds } from '../utils/fleetModelGroups';
 
 type Tab = '系统设置' | '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
 type VariableCategory = 'attitude' | 'position' | 'inertia' | 'controls' | 'propulsion' | 'environment' | 'simulation' | 'other';
@@ -354,7 +355,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
 
   return <div className="sim-config-overlay" onMouseDown={e => { if (e.target === e.currentTarget && !firmwareUpdating) onClose(); }}>
     <div className="sim-config-dialog">
-      <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><label className="sim-config-instance-picker"><span>{tr('实例', 'Instance')}</span><select aria-label={tr('切换配置实例', 'Switch configuration instance')} value={instanceId} disabled={saving || firmwareUpdating} onChange={event => switchInstance(event.target.value)}>{Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0')).map(id => <option key={id} value={id} disabled={!slots[id]}>{id} · {slots[id] || tr('未绑定', 'Unassigned')}</option>)}</select></label><span>{tr('模型', 'Model')}: {safeModel}</span></div><button disabled={firmwareUpdating} onClick={onClose}>×</button></header>
+      <header><div><b>⚙ {tr('仿真配置', 'Simulation Configuration')}</b><label className="sim-config-instance-picker"><span>{tr('实例', 'Instance')}</span><select aria-label={tr('切换配置实例', 'Switch configuration instance')} value={instanceId} disabled={saving || firmwareUpdating} onChange={event => switchInstance(event.target.value)}>{fleetSlotIds(slots).map(id => <option key={id} value={id} disabled={!slots[id]}>{id} · {slots[id] || tr('未绑定', 'Unassigned')}</option>)}</select></label><span>{tr('模型', 'Model')}: {safeModel}</span></div><button disabled={firmwareUpdating} onClick={onClose}>×</button></header>
       <div className="simulator-version-card">
         <div><strong>{tr('仿真机版本', 'Simulator Version')}</strong><small>{versionStatus}</small></div>
         {simulatorVersion ? <div className="simulator-version-values"><b>{simulatorVersion.product || 'JSBSim Realtime'} {simulatorVersion.version || '—'}</b><span>{simulatorVersion.firmware || '—'} · JSBSim {simulatorVersion.jsbsim || '—'} · {tr('航空库', 'Aviation library')} {simulatorVersion.aviation_library || '—'}</span><span title={simulatorVersion.build_time}>{tr('编译时间', 'Built')} {formatBuildTime(simulatorVersion.build_time, isZh)} · Git {simulatorVersion.git_short_hash || '—'}</span></div> : <span className="simulator-version-unavailable">—</span>}

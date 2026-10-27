@@ -1,6 +1,20 @@
 import type { HilEndpoints } from './hilEndpoints';
 
-export const FLEET_INSTANCE_IDS = Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0'));
+export const MAX_FLEET_SLOTS = 32;
+export const DEFAULT_FLEET_SLOT_COUNT = 8;
+export const FLEET_INSTANCE_IDS = Array.from({ length: MAX_FLEET_SLOTS }, (_, index) => String(index + 1).padStart(2, '0'));
+
+export function defaultFleetSlots(): Record<string, string> {
+  return Object.fromEntries(FLEET_INSTANCE_IDS.slice(0, DEFAULT_FLEET_SLOT_COUNT).map(id => [id, '']));
+}
+
+export function fleetSlotIds(slots: Record<string, string>): string[] {
+  return FLEET_INSTANCE_IDS.filter(id => Object.prototype.hasOwnProperty.call(slots, id));
+}
+
+export function nextFleetSlotId(slots: Record<string, string>): string | undefined {
+  return FLEET_INSTANCE_IDS.find(id => !Object.prototype.hasOwnProperty.call(slots, id));
+}
 
 const STORAGE_KEY = 'jsbsim-fleet-model-groups-v1';
 
@@ -61,9 +75,10 @@ export function modelGeocentricToGpsLatitude(latitudeDeg: number, altitudeM: num
   return latitude * 180 / Math.PI;
 }
 
-/** Place 01 at the northwest corner, 02–04 eastward and 05–08 one row south. */
+/** Place the first visible slot at the northwest corner; preserve gaps in slot IDs. */
 export function buildFleetInitialGrid(origin: FleetInitialPose, spacingM = 0.5,
-                                      previous: FleetInitialOverrides = {}): FleetInitialOverrides {
+                                      previous: FleetInitialOverrides = {},
+                                      ids: string[] = FLEET_INSTANCE_IDS.slice(0, DEFAULT_FLEET_SLOT_COUNT)): FleetInitialOverrides {
   if (!Number.isFinite(spacingM) || spacingM <= 0 ||
       !normalizeFleetInitialOverrides({ '01': origin })['01'] ||
       Math.abs(origin.latitudeDeg) >= 89.999) {
@@ -76,7 +91,9 @@ export function buildFleetInitialGrid(origin: FleetInitialPose, spacingM = 0.5,
   const factor = 1 - eccentricitySquared * sinLatitude * sinLatitude;
   const meridianRadius = a * (1 - eccentricitySquared) / factor ** 1.5;
   const primeVerticalRadius = a / Math.sqrt(factor);
-  return Object.fromEntries(FLEET_INSTANCE_IDS.map((id, index) => {
+  const baseIndex = Number(ids[0] || '01') - 1;
+  return Object.fromEntries(ids.filter(id => FLEET_INSTANCE_IDS.includes(id)).map(id => {
+    const index = Number(id) - 1 - baseIndex;
     const row = Math.floor(index / 4);
     const column = index % 4;
     const previousPose = previous[id] || origin;
@@ -109,9 +126,8 @@ export function normalizeFleetInitialOverrides(value: unknown): FleetInitialOver
 export function normalizeFleetSlots(value: unknown): Record<string, string> {
   const slots = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
-  return Object.fromEntries(FLEET_INSTANCE_IDS.map(id => [id,
-    typeof slots[id] === 'string' ? (slots[id] as string).trim() : '',
-  ]));
+  return Object.fromEntries(FLEET_INSTANCE_IDS.flatMap(id => Object.prototype.hasOwnProperty.call(slots, id)
+    ? [[id, typeof slots[id] === 'string' ? (slots[id] as string).trim() : '']] : []));
 }
 
 export function readFleetModelGroups(): FleetModelGroup[] {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from 'react';
 import type { SimInstanceSummary } from '../utils/tauriApi';
-import { FLEET_INSTANCE_IDS, type FleetInitialOverrides } from '../utils/fleetModelGroups';
+import { fleetSlotIds, type FleetInitialOverrides } from '../utils/fleetModelGroups';
 
 // v1 may contain a center shifted 180° by the old inverse projection.
 const VIEW_STORAGE = 'jsbsim-multi-map-view-v2';
@@ -98,7 +98,7 @@ export default function MultiSimMap({ connected, instances, selected, slots, ini
   const drag = useRef<{ x: number; y: number; center: Point; zoom: number } | null>(null);
   const positions = useMemo(() => {
     const byId = new Map(instances.map(item => [item.instance_id, item]));
-    return FLEET_INSTANCE_IDS.flatMap(id => {
+    return fleetSlotIds(slots).flatMap(id => {
       const item = byId.get(id);
       const reported = item ? aircraftPosition(item, connected) : null;
       if (reported) return [reported];

@@ -8,7 +8,7 @@ import AircraftLibrary from './AircraftLibrary';
 import SimMenu, { type FleetControls } from './SimMenu';
 import TelemetryRecorder from './TelemetryRecorder';
 import SimulationConfigDialog from './SimulationConfigDialog';
-import type { FleetInitialOverrides, FleetNetworkOverrides, FleetModelGroup } from '../utils/fleetModelGroups';
+import { fleetSlotIds, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from '../utils/fleetModelGroups';
 import LocalSettingsDialog from './LocalSettingsDialog';
 import J23GuideDialog from './J23GuideDialog';
 import NshConsoleDialog from './NshConsoleDialog';
@@ -1674,7 +1674,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             </button>
             {showInstanceMenu && <div className="file-menu-dropdown editor-instance-dropdown" role="menu">
               <div className="file-menu-section-title">{isZh ? '切换编辑实例' : 'Edit instance'}</div>
-              {Array.from({ length: 8 }, (_, index) => String(index + 1).padStart(2, '0')).map(id =>
+              {fleetSlotIds(instanceSlots).map(id =>
                 <button key={id} type="button" role="menuitem" className={activeInstance === id ? 'editor-instance-selected' : ''}
                   disabled={loading} onClick={() => void handleSelectInstance(id)}>
                   <strong>{id}</strong><span>{instanceSlots[id] || (isZh ? '未绑定模型' : 'No model assigned')}</span>{activeInstance === id && <b>✓</b>}

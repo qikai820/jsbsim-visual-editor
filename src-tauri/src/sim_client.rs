@@ -37,6 +37,7 @@ pub struct InstanceNetwork {
     pub sensor: Option<InstanceNetworkEndpoint>,
     pub gps: Option<InstanceNetworkEndpoint>,
 }
+pub const MAX_SIM_INSTANCES: u8 = 32;
 #[cfg(not(test))]
 const DISCOVERY_PORT: u16 = 5803;
 #[cfg(test)]
@@ -53,7 +54,7 @@ fn lifecycle_packet(command: u8) -> [u8; 5] {
 fn instance_command_packet(id: u8, action: u8, model: Option<&str>, host: Option<&str>,
                            port: Option<u16>, initial: Option<&InstanceInitial>,
                            network: Option<&InstanceNetwork>) -> std::io::Result<Vec<u8>> {
-    if !(1..=8).contains(&id) || !(1..=4).contains(&action) {
+    if !(1..=MAX_SIM_INSTANCES).contains(&id) || !(1..=4).contains(&action) {
         return Err(std::io::Error::other("invalid instance or action"));
     }
     let mut packet = vec![b'V', b'C', b'M', b'D', 10, id, action];
@@ -231,7 +232,7 @@ fn frame_instance_id(frame: &Value) -> Option<u8> {
         Some(Value::Number(number)) => u8::try_from(number.as_u64()?).ok()?,
         _ => return None,
     };
-    (1..=8).contains(&number).then_some(number)
+    (1..=MAX_SIM_INSTANCES).contains(&number).then_some(number)
 }
 
 #[derive(Default)]
@@ -887,7 +888,7 @@ impl SimClient {
     }
 
     pub fn instance_snapshot(&self, id: u8) -> Option<Value> {
-        if !(1..=8).contains(&id) { return None; }
+        if !(1..=MAX_SIM_INSTANCES).contains(&id) { return None; }
         let state = self.inner.lock().unwrap();
         let (frame, seen) = state.instance_frames.get(&id)?;
         let mut snapshot = frame.clone();
@@ -896,7 +897,7 @@ impl SimClient {
     }
 
     /// Read only the numeric property paths selected for fleet list cards.
-    /// Sending the complete tree for all eight instances every second would
+    /// Sending the complete tree for all instances every second would
     /// copy substantially more data than the list needs.
     pub fn instance_field_values(&self, paths: &[String]) -> Vec<Value> {
         let state = self.inner.lock().unwrap();
