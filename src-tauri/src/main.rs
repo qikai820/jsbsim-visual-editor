@@ -521,7 +521,20 @@ fn sim_start_blocking(
                 .ok_or("The selected script has no associated aircraft model")?;
             client.send_load_script(script_name, model_name).map_err(|e| e.to_string())?
         } else if let Some(model_name) = model.as_deref() {
-            client.send_load(model_name).map_err(|e| e.to_string())?
+            let directory = model_name.rsplit('/').next().unwrap_or(model_name).trim_end_matches(".xml");
+            let endpoint = if !directory.is_empty() && directory.len() < 64 &&
+                directory.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-') {
+                let path = format!("aircraft/{directory}/{directory}.xml");
+                match ftp_sync::download_path(&path) {
+                    Ok(xml) => remote_model::separate_hil_sensor_endpoint(&xml)?,
+                    Err(_) => None, // Preserve loading for ROMFS models unavailable to the file service.
+                }
+            } else { None };
+            if let Some((host, port)) = endpoint {
+                client.send_primary_hil_model(directory, &host, port).map_err(|e| e.to_string())?
+            } else {
+                client.send_load(model_name).map_err(|e| e.to_string())?
+            }
         } else {
             client.send_command(1).map_err(|e| e.to_string())?;
             0

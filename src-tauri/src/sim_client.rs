@@ -1114,6 +1114,21 @@ impl SimClient {
         self.send_to_control_addresses(&packet)
     }
 
+    /// Start the primary model with its FC endpoint.  VCMD 10 registers the
+    /// board's existing HIL socket profile before it loads the aircraft.
+    pub fn send_primary_hil_model(&self, model: &str, host: &str, port: u16) -> std::io::Result<u32> {
+        let packet = instance_command_packet(1, 1, Some(model), Some(host), Some(port), None, None)?;
+        {
+            let mut state = self.inner.lock().unwrap();
+            state.active_load_id = Some(0);
+            state.latest_load_diagnostic = None;
+            state.latest_sim_status = None;
+            state.last_visual_status_time = None;
+        }
+        self.send_to_control_addresses(&packet)?;
+        Ok(0)
+    }
+
     /// Send a lifecycle command using the bridge's state acknowledgement as a
     /// handshake.  Retransmit only when the acknowledgement has not arrived
     /// by the next polling deadline; never send a fixed burst of copies.

@@ -1,3 +1,4 @@
+import FloatInput from '../FloatInput';
 import type { ExprNode } from '../../types';
 import { BLOCK_DEFS } from '../../utils/expressionConverter';
 import TableChart from './TableChart';
@@ -28,11 +29,9 @@ export function BlockPropertyPanel({ expr, onChange, onDelete, isRoot }: BlockPr
       {expr.kind === 'value' && (
         <div className="expr-bp-field">
           <label>数值</label>
-          <input
-            type="number"
-            step="any"
+          <FloatInput
             value={expr.value}
-            onChange={e => onChange({ ...expr, value: parseFloat(e.target.value) || 0 })}
+            onValueChange={value => onChange({ ...expr, value })}
           />
         </div>
       )}
@@ -147,18 +146,18 @@ export function TableEditor({ expr, onChange }: TableEditorProps) {
               {expr.data.map((row, ri) => (
                 <tr key={ri}>
                   <td className="expr-mini-bp">
-                    <input type="number" step="any" value={expr.breakpoints1[ri] ?? 0}
-                      onChange={e => {
-                        const bp = [...expr.breakpoints1]; bp[ri] = parseFloat(e.target.value) || 0;
+                    <FloatInput value={expr.breakpoints1[ri] ?? 0}
+                      onValueChange={value => {
+                        const bp = [...expr.breakpoints1]; bp[ri] = value;
                         update({ breakpoints1: bp });
                       }} />
                   </td>
                   {row.map((val, ci) => (
                     <td key={ci}>
-                      <input type="number" step="any" value={val}
-                        onChange={e => {
+                      <FloatInput value={val}
+                        onValueChange={value => {
                           const data = expr.data.map(r => [...r]);
-                          data[ri][ci] = parseFloat(e.target.value) || 0;
+                          data[ri][ci] = value;
                           update({ data });
                         }} />
                     </td>

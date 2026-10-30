@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
-import { getUnitOptions, convertUnit, formatValue } from '../utils/unitConverter';
+import { getUnitOptions, convertUnit } from '../utils/unitConverter';
 import type { ParamDef, ExprNode } from '../types';
 import SubFileEditor from './SubFileEditor';
+import FloatInput from './FloatInput';
 import AeroEditor from './AeroEditor';
 import TableChart from './expression/TableChart';
 import ExpressionEditor from './expression/ExpressionEditor';
@@ -407,13 +408,22 @@ export default function PropertyPanel() {
           <div key={key} className="field-row">
             <label>{paramDef.label}</label>
             <div className="field-input-row">
-              <input
-                type="number"
-                value={isInteger ? String(Math.round(numVal)) : formatValue(numVal)}
-                step={isInteger ? 1 : 'any'}
-                min={isInteger ? 0 : undefined}
-                onChange={e => handleNumChange(key, isInteger ? parseInt(e.target.value, 10) || 0 : parseFloat(e.target.value) || 0, currentUnit)}
-              />
+              {isInteger ? (
+                <input
+                  type="number"
+                  value={String(Math.round(numVal))}
+                  step={1}
+                  min={0}
+                  onChange={e => handleNumChange(key, parseInt(e.target.value, 10) || 0, currentUnit)}
+                />
+              ) : (
+                <FloatInput
+                  key={`${node.id}:${key}:${currentUnit}`}
+                  aria-label={paramDef.label}
+                  value={numVal}
+                  onValueChange={value => handleNumChange(key, value, currentUnit)}
+                />
+              )}
               {unitOptions.length > 1 ? (
                 <select
                   className="unit-select"
@@ -483,12 +493,12 @@ export default function PropertyPanel() {
                 return (
                   <div key={axis} className="axis-input">
                     <span className="axis-label">{l}</span>
-                    <input
-                      type="number"
-                      value={formatValue(axisVal)}
-                      step="any"
-                      onChange={e => {
-                        const newLoc = { ...loc, [axis]: parseFloat(e.target.value) || 0 };
+                    <FloatInput
+                      key={`${node.id}:${key}:${axis}:${currentUnit}`}
+                      aria-label={`${paramDef.label} ${l}`}
+                      value={axisVal}
+                      onValueChange={value => {
+                        const newLoc = { ...loc, [axis]: value };
                         handleChange(key, newLoc);
                       }}
                     />
@@ -894,14 +904,11 @@ export default function PropertyPanel() {
                 <div key={k} className="field-row">
                   <label>{k}</label>
                   <div className="field-input-row">
-                    <input
-                      type="number"
-                      step="any"
-                      value={v}
-                      onChange={e => {
-                        const newVal = parseFloat(e.target.value) || 0;
-                        updateNodeParams(node.id, { [k]: newVal });
-                      }}
+                    <FloatInput
+                      key={`${node.id}:${k}`}
+                      aria-label={k}
+                      value={v as number}
+                      onValueChange={value => updateNodeParams(node.id, { [k]: value })}
                     />
                   </div>
                 </div>
@@ -972,9 +979,9 @@ function TableDataEditor({ table, onUpdate }: { table: any; onUpdate: (t: any) =
     data: data.map(r => [r[1]]),
   } : null;
 
-  const handleCellEdit = (row: number, col: number, val: string) => {
+  const handleCellEdit = (row: number, col: number, val: number) => {
     const newData = data.map((r, ri) => ri === row ? [...r] : [...r]);
-    newData[row][col] = parseFloat(val) || 0;
+    newData[row][col] = val;
     onUpdate({ ...table, data: newData });
   };
 
@@ -1031,11 +1038,9 @@ function TableDataEditor({ table, onUpdate }: { table: any; onUpdate: (t: any) =
                   <tr key={ri}>
                     {row.map((val, ci) => (
                       <td key={ci} style={{ padding: 1, border: '1px solid var(--border)' }}>
-                        <input
-                          type="number"
-                          step="any"
+                        <FloatInput
                           value={val}
-                          onChange={e => handleCellEdit(ri, ci, e.target.value)}
+                          onValueChange={value => handleCellEdit(ri, ci, value)}
                           style={cellInputStyle}
                         />
                       </td>

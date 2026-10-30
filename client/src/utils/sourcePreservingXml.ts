@@ -185,6 +185,13 @@ function patchSystemText(sourceXml: string, source: Element, candidate: Element)
 
     const sourceChildren = directElements(original);
     const candidateChildren = directElements(wanted);
+    // The visual graph cannot represent a JSBSim lookup table. Its generated
+    // <function/> is an absence of a patch, not an instruction to delete the
+    // source table. A replacement expression needs an explicit source edit.
+    if (original.tagName === 'function' && sourceChildren.some(child => child.tagName === 'table')) {
+      if (candidateChildren.length === 0) return;
+      throw new Error('查表函数不能通过图形模块替换，请直接编辑原始 XML');
+    }
     if (sourceChildren.length !== span.children.length) throw new Error('XML 子节点位置不匹配');
     for (let index = 0; index < sourceChildren.length; index++) {
       if (sourceChildren[index].tagName !== span.children[index].tag) throw new Error('XML 子节点顺序不匹配');

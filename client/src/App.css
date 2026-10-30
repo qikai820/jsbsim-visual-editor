@@ -401,6 +401,11 @@ html, body, #root {
 }
 .field-row input:focus, .field-row select:focus { border-color: var(--accent); background: var(--bg-secondary); outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
 
+.float-input[aria-invalid="true"] {
+  border-color: #dc2626 !important;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.12);
+}
+
 .field-input-row { display: flex; align-items: center; gap: 6px; }
 .field-input-row input { flex: 1; }
 .unit-label {

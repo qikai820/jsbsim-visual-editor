@@ -1948,9 +1948,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             onLog?.(`[${new Date().toLocaleTimeString()}] 已从模型库载入多机模型组：${Object.values(group.slots).filter(Boolean).length} 架`);
             return true;
           }}
-          onLoad={async (loaded) => {
+          onLoad={async (loaded, signal) => {
             const modelName = String(loaded?.model || loaded?.aircraft?.name || '').trim();
             const data = modelName ? await withPwmCaptures(await withSerialSensors(loaded, modelName), modelName) : loaded;
+            if (signal.aborted) return;
             loadProject(data);
             if (data.sourceXml) localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
             if (data.referenceFiles) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles));

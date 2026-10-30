@@ -287,7 +287,20 @@ fn list_directory(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn list_network_directory(path: &str) -> Result<Vec<String>, String> {
-    let built_in = crate::romfs_network::list(path);
+    // FTP is rooted at the SD card.  The board may expose its read-only
+    // ROMFS through NSH, but some builds do not start telnetd.  When USB is
+    // connected, its read-only file service can supply the missing ROMFS
+    // entries without changing the selected network simulation transport.
+    let built_in = crate::romfs_network::list(path).or_else(|nsh_error| {
+        let usb_path = format!("romfs/jsbsim{}{path}", if path.is_empty() { "" } else { "/" });
+        usb_file::list(&usb_path)
+            .map(|entries| entries.into_iter()
+                .filter(|entry| path != "aircraft" || entry.directory)
+                .map(|entry| entry.name)
+                .filter(|name| safe_component(name).is_ok())
+                .collect())
+            .map_err(|usb_error| format!("NSH: {nsh_error}; USB ROMFS: {usb_error}"))
+    });
     let user = list_ftp_directory(path);
     let mut entries = match (built_in, user) {
         (Ok(mut built_in), Ok(user)) => { built_in.extend(user); built_in },
@@ -357,6 +370,8 @@ fn read_ftp_library(path: &str) -> Result<String, String> {
         Ok(bytes) => String::from_utf8(bytes)
             .map_err(|error| format!("remote text is not UTF-8: {error}")),
         Err(ftp_error) => crate::romfs_network::read_text(path)
+            .or_else(|nsh_error| usb_file::read_text(&format!("romfs/jsbsim/{path}"))
+                .map_err(|usb_error| format!("NSH: {nsh_error}; USB ROMFS: {usb_error}")))
             .map_err(|romfs_error| format!("FTP: {ftp_error}; ROMFS: {romfs_error}")),
     }
 }

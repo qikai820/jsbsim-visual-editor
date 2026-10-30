@@ -28,7 +28,7 @@ const TYPE_INFO: Record<string, { icon: string; label: string; color: string }> 
 
 interface Props {
   onClose: () => void;
-  onLoad: (data: any) => void | Promise<void>;
+  onLoad: (data: any, signal: AbortSignal) => void | Promise<void>;
   onSelectForSimulation?: (aircraftId: string) => void;
   onSelectScriptForSimulation?: (scriptPath: string) => void;
   currentFleetSlots?: Record<string, string>;
@@ -40,6 +40,16 @@ interface Props {
 
 interface ScriptEntry { name: string; file: string; path: string; aircraft?: string; initialize?: string; start?: string; end?: string; dt?: string; events?: number; error?: string; sourcePath?: string }
 
+function waitForModelLoad<T>(request: Promise<T>, stage: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${stage}超过 90 秒，请检查仿真机连接后重试`)), 90_000);
+    request.then(
+      value => { window.clearTimeout(timer); resolve(value); },
+      error => { window.clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation, onSelectScriptForSimulation, currentFleetSlots, currentFleetInitialOverrides, currentFleetNetworkOverrides, onLoadFleetGroup, initialTab = 'models' }: Props) {
   const [tab, setTab] = useState<'models' | 'scripts' | 'engines' | 'propellers' | 'fleet'>(initialTab);
   const [library, setLibrary] = useState<AircraftEntry[]>([]);
@@ -49,6 +59,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selected, setSelected] = useState<AircraftEntry | null>(null);
   const [loadingAircraft, setLoadingAircraft] = useState(false);
+  const [loadStage, setLoadStage] = useState('');
   const [loadError, setLoadError] = useState('');
   const [selectedScript, setSelectedScript] = useState<ScriptEntry | null>(null);
   const [fleetGroups, setFleetGroups] = useState(readFleetModelGroups);
@@ -250,20 +261,25 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   };
 
   const handleLoad = async (aircraft: AircraftEntry) => {
+    const controller = new AbortController();
     setLoadingAircraft(true);
+    setLoadStage('读取模型文件');
     try {
-      const data = await loadAircraft(aircraft.sourceId || aircraft.id);
-      await onLoad(data);
+      const data = await waitForModelLoad(loadAircraft(aircraft.sourceId || aircraft.id), '读取模型文件');
+      setLoadStage('导入编辑画布');
+      await waitForModelLoad(Promise.resolve().then(() => onLoad(data, controller.signal)), '导入编辑画布');
       // Loading a model into the editor also makes it the launch target.
       // Keeping these as separate actions left simStart() without a model
       // parameter even though the canvas already showed that aircraft.
       onSelectForSimulation?.(aircraft.sourceId || aircraft.id);
       onClose();
     } catch (err: any) {
+      controller.abort();
       const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || '未知错误');
       alert('加载失败：' + msg);
     }
     setLoadingAircraft(false);
+    setLoadStage('');
   };
 
   const typeCounts = {
@@ -383,7 +399,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
                 onClick={() => handleLoad(activeModel)}
                 disabled={loadingAircraft}
               >
-                {loadingAircraft ? '⏳ 加载中...' : '📥 加载此模型'}
+                {loadingAircraft ? `⏳ ${loadStage}...` : '📥 加载此模型'}
               </button>
               {group === 'nuttx' && <button className="library-select-sim-btn" onClick={() => copyModel(activeModel)}>📄 复制到用户模型并重命名</button>}
               {group === 'user' && <div className="library-user-actions"><button onClick={() => renameUserModel(activeModel)}>✎ 重命名</button><button className="library-delete-btn" onClick={() => deleteUserModel(activeModel)}>删除</button></div>}

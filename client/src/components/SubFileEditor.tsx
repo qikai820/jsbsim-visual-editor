@@ -1,3 +1,4 @@
+import FloatInput from './FloatInput';
 import { useFlowStore } from '../store/flowStore';
 import type { EngineDef, ThrusterDef, SystemDef } from '../types';
 import SignalPathInput from './SignalPathInput';
@@ -28,20 +29,20 @@ export default function SubFileEditor() {
         {(d.engineType === 'piston' || d.engineType === 'electric') && (
           <div className="sfe-field">
             <label>最大功率 (HP)</label>
-            <input type="number" value={d.maxHP || 0} onChange={e => updateData({ maxHP: parseFloat(e.target.value) || 0 })} />
+            <FloatInput value={d.maxHP ?? 0} onValueChange={value => updateData({ maxHP: value })} />
           </div>
         )}
         {(d.engineType === 'turbine' || d.engineType === 'rocket') && (
           <div className="sfe-field">
             <label>最大推力 (lbs)</label>
-            <input type="number" value={d.maxThrust || 0} onChange={e => updateData({ maxThrust: parseFloat(e.target.value) || 0 })} />
+            <FloatInput value={d.maxThrust ?? 0} onValueChange={value => updateData({ maxThrust: value })} />
           </div>
         )}
         {d.engineType === 'piston' && (
           <>
             <div className="sfe-field">
               <label>排量 (CID)</label>
-              <input type="number" value={d.displacement || 0} onChange={e => updateData({ displacement: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.displacement ?? 0} onValueChange={value => updateData({ displacement: value })} />
             </div>
             <div className="sfe-field">
               <label>冲程数</label>
@@ -49,27 +50,27 @@ export default function SubFileEditor() {
             </div>
             <div className="sfe-field">
               <label>BSFC (lbs/hp*hr)</label>
-              <input type="number" step="0.01" value={d.bsfc || 0.45} onChange={e => updateData({ bsfc: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.bsfc ?? 0.45} onValueChange={value => updateData({ bsfc: value })} />
             </div>
             <div className="sfe-field">
               <label>启动扭矩 (lb*ft)</label>
-              <input type="number" value={d.starterTorque || 0} onChange={e => updateData({ starterTorque: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.starterTorque ?? 0} onValueChange={value => updateData({ starterTorque: value })} />
             </div>
             <div className="sfe-field">
               <label>怠速 RPM</label>
-              <input type="number" value={d.idleRPM || 600} onChange={e => updateData({ idleRPM: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.idleRPM ?? 600} onValueChange={value => updateData({ idleRPM: value })} />
             </div>
             <div className="sfe-field">
               <label>最大 RPM</label>
-              <input type="number" value={d.maxRPM || 2700} onChange={e => updateData({ maxRPM: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.maxRPM ?? 2700} onValueChange={value => updateData({ maxRPM: value })} />
             </div>
             <div className="sfe-field">
               <label>最小进气压力 (inHg)</label>
-              <input type="number" step="0.1" value={d.minMP || 14.7} onChange={e => updateData({ minMP: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.minMP ?? 14.7} onValueChange={value => updateData({ minMP: value })} />
             </div>
             <div className="sfe-field">
               <label>最大进气压力 (inHg)</label>
-              <input type="number" step="0.1" value={d.maxMP || 29.92} onChange={e => updateData({ maxMP: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.maxMP ?? 29.92} onValueChange={value => updateData({ maxMP: value })} />
             </div>
           </>
         )}
@@ -77,11 +78,11 @@ export default function SubFileEditor() {
           <>
             <div className="sfe-field">
               <label>怠速 RPM</label>
-              <input type="number" value={d.idleRPM || 0} onChange={e => updateData({ idleRPM: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.idleRPM ?? 0} onValueChange={value => updateData({ idleRPM: value })} />
             </div>
             <div className="sfe-field">
               <label>最大 RPM</label>
-              <input type="number" value={d.maxRPM || 0} onChange={e => updateData({ maxRPM: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.maxRPM ?? 0} onValueChange={value => updateData({ maxRPM: value })} />
             </div>
           </>
         )}
@@ -105,7 +106,7 @@ export default function SubFileEditor() {
           <>
             <div className="sfe-field">
               <label>直径 (ft)</label>
-              <input type="number" step="0.01" value={d.diameter || 0} onChange={e => updateData({ diameter: parseFloat(e.target.value) || 0 })} />
+              <FloatInput value={d.diameter ?? 0} onValueChange={value => updateData({ diameter: value })} />
             </div>
             <div className="sfe-field">
               <label>叶片数</label>
@@ -113,7 +114,7 @@ export default function SubFileEditor() {
             </div>
             <div className="sfe-field">
               <label>齿轮比</label>
-              <input type="number" step="0.01" value={d.gearRatio || 1} onChange={e => updateData({ gearRatio: parseFloat(e.target.value) || 1 })} />
+              <FloatInput value={d.gearRatio ?? 1} onValueChange={value => updateData({ gearRatio: value })} />
             </div>
           </>
         )}
@@ -149,11 +150,11 @@ export default function SubFileEditor() {
                   value={prop.name}
                   onChange={name => updateProp(idx, 'name', name)}
                 />
-                <input
-                  type="number"
+                <FloatInput
                   placeholder="默认值"
-                  value={prop.value ?? ''}
-                  onChange={e => updateProp(idx, 'value', e.target.value ? parseFloat(e.target.value) : undefined)}
+                  value={prop.value}
+                  onValueChange={value => updateProp(idx, 'value', value)}
+                  onClear={() => updateProp(idx, 'value', undefined)}
                 />
                 <button className="sfe-prop-remove" onClick={() => removeProp(idx)}>✗</button>
               </div>

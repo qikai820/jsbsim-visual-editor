@@ -40,6 +40,49 @@ fn references(xml: &str) -> Result<Vec<String>, String> {
     Ok(output)
 }
 
+/// A single NuttX HIL instance must share its actuator input socket with
+/// sensor output.  When the XML sends sensors to a different destination port,
+/// the desktop starts instance 01 with an explicit FC endpoint so the board's
+/// existing instance profile keeps the output source on the input port.
+pub fn separate_hil_sensor_endpoint(xml: &str) -> Result<Option<(String, u16)>, String> {
+    let mut reader = Reader::from_str(xml);
+    let mut buffer = Vec::new();
+    let mut input_port = None;
+    let mut sensor_endpoint = None;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                let is_input = element.name().as_ref() == b"input";
+                let is_output = element.name().as_ref() == b"output";
+                if !is_input && !is_output { buffer.clear(); continue; }
+                let mut kind = String::new();
+                let mut host = String::new();
+                let mut port = None;
+                for attr in element.attributes() {
+                    let attr = attr.map_err(|error| error.to_string())?;
+                    let value = attr.normalized_value(XmlVersion::Implicit1_0)
+                        .map_err(|error| error.to_string())?;
+                    match attr.key.as_ref() {
+                        b"type" => kind = value.into_owned(),
+                        b"host" => host = value.into_owned(),
+                        b"port" => port = value.parse::<u16>().ok().filter(|port| *port != 0),
+                        _ => {},
+                    }
+                }
+                if is_input && kind == "HIL_ACTUATOR_CONTROLS" { input_port = port; }
+                if is_output && kind == "HIL_SENSOR" && !host.is_empty() {
+                    sensor_endpoint = port.map(|port| (host, port));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(error.to_string()),
+            _ => {},
+        }
+        buffer.clear();
+    }
+    Ok(sensor_endpoint.filter(|(_, port)| Some(*port) != input_port && input_port.is_some()))
+}
+
 fn candidates(model: &str, parent: &str, reference: &str) -> Result<Vec<String>, String> {
     let raw = reference.trim().replace('\\', "/");
     let parts: Vec<&str> = raw.split('/').collect();
@@ -137,6 +180,15 @@ pub fn attach_sources(result: &mut Value, model: &str, main: &str, refs: &[Remot
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_hil_sensor_port_that_needs_instance_socket_sharing() {
+        let xml = r#"<fdm_config><input type="HIL_ACTUATOR_CONTROLS" port="14560"/>
+            <output type="HIL_SENSOR" host="192.168.3.10" port="14561"/></fdm_config>"#;
+        assert_eq!(separate_hil_sensor_endpoint(xml).unwrap(),
+                   Some(("192.168.3.10".into(), 14561)));
+        assert_eq!(separate_hil_sensor_endpoint(&xml.replace("14561", "14560")).unwrap(), None);
+    }
 
     #[test]
     fn loads_f450_sections_and_nested_engine_files() {

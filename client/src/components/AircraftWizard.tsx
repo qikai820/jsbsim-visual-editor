@@ -1,3 +1,4 @@
+import FloatInput from './FloatInput';
 import { useState, useCallback } from 'react';
 import { generateAircraft } from '../utils/tauriApi';
 
@@ -305,8 +306,8 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
         {['X', 'Y', 'Z'].map((axis, i) => (
           <div key={axis} className="wizard-loc-item">
             <span>{axis}</span>
-            <input type="number" step="any" value={loc[['x', 'y', 'z'][i] as 'x' | 'y' | 'z']}
-              onChange={e => onChange({ ...loc, [['x', 'y', 'z'][i]]: parseFloat(e.target.value) || 0 })} />
+            <FloatInput value={loc[['x', 'y', 'z'][i] as 'x' | 'y' | 'z']}
+              onValueChange={value => onChange({ ...loc, [['x', 'y', 'z'][i]]: value })} />
           </div>
         ))}
       </div>
@@ -320,26 +321,26 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
         <h3>几何参数 Metrics</h3>
         <div className="wizard-grid2">
           <div className="wizard-field"><label>机翼面积 {data.unitSystem === 'IMPERIAL' ? '(FT²)' : '(M²)'}</label>
-            <input type="number" step="any" value={data.wingarea} onChange={e => update({ wingarea: parseFloat(e.target.value) || 0 })} /></div>
+            <FloatInput value={data.wingarea} onValueChange={value => update({ wingarea: value })} /></div>
           <div className="wizard-field"><label>翼展 {data.unitSystem === 'IMPERIAL' ? '(FT)' : '(M)'}</label>
-            <input type="number" step="any" value={data.wingspan} onChange={e => update({ wingspan: parseFloat(e.target.value) || 0 })} /></div>
+            <FloatInput value={data.wingspan} onValueChange={value => update({ wingspan: value })} /></div>
           <div className="wizard-field"><label>弦长 {data.unitSystem === 'IMPERIAL' ? '(FT)' : '(M)'}</label>
-            <input type="number" step="any" value={data.chord} onChange={e => update({ chord: parseFloat(e.target.value) || 0 })} /></div>
+            <FloatInput value={data.chord} onValueChange={value => update({ chord: value })} /></div>
           {data.aircraftType === 'helicopter' && (
             <div className="wizard-field"><label>机翼安装角 (DEG)</label>
-              <input type="number" step="any" value={data.wingIncidence} onChange={e => update({ wingIncidence: parseFloat(e.target.value) || 0 })} /></div>
+              <FloatInput value={data.wingIncidence} onValueChange={value => update({ wingIncidence: value })} /></div>
           )}
         </div>
         {!isRotory && (
           <div className="wizard-grid2">
             <div className="wizard-field"><label>水平尾翼面积</label>
-              <input type="number" step="any" value={data.htailarea} onChange={e => update({ htailarea: parseFloat(e.target.value) || 0 })} /></div>
+              <FloatInput value={data.htailarea} onValueChange={value => update({ htailarea: value })} /></div>
             <div className="wizard-field"><label>水平尾翼力臂</label>
-              <input type="number" step="any" value={data.htailarm} onChange={e => update({ htailarm: parseFloat(e.target.value) || 0 })} /></div>
+              <FloatInput value={data.htailarm} onValueChange={value => update({ htailarm: value })} /></div>
             <div className="wizard-field"><label>垂直尾翼面积</label>
-              <input type="number" step="any" value={data.vtailarea} onChange={e => update({ vtailarea: parseFloat(e.target.value) || 0 })} /></div>
+              <FloatInput value={data.vtailarea} onValueChange={value => update({ vtailarea: value })} /></div>
             <div className="wizard-field"><label>垂直尾翼力臂</label>
-              <input type="number" step="any" value={data.vtailarm} onChange={e => update({ vtailarm: parseFloat(e.target.value) || 0 })} /></div>
+              <FloatInput value={data.vtailarm} onValueChange={value => update({ vtailarm: value })} /></div>
           </div>
         )}
         <div className="wizard-section-title">参考点位置</div>
@@ -355,18 +356,18 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
       <h3>质量与惯量 Mass Balance</h3>
       <div className="wizard-grid2">
         <div className="wizard-field"><label>空重 {data.unitSystem === 'IMPERIAL' ? '(LBS)' : '(KG)'}</label>
-          <input type="number" step="any" value={data.emptywt} onChange={e => update({ emptywt: parseFloat(e.target.value) || 0 })} /></div>
+          <FloatInput value={data.emptywt} onValueChange={value => update({ emptywt: value })} /></div>
       </div>
       <div className="wizard-section-title">转动惯量</div>
       <div className="wizard-grid2">
         <div className="wizard-field"><label>Ixx</label>
-          <input type="number" step="any" value={data.ixx} onChange={e => update({ ixx: parseFloat(e.target.value) || 0 })} /></div>
+          <FloatInput value={data.ixx} onValueChange={value => update({ ixx: value })} /></div>
         <div className="wizard-field"><label>Iyy</label>
-          <input type="number" step="any" value={data.iyy} onChange={e => update({ iyy: parseFloat(e.target.value) || 0 })} /></div>
+          <FloatInput value={data.iyy} onValueChange={value => update({ iyy: value })} /></div>
         <div className="wizard-field"><label>Izz</label>
-          <input type="number" step="any" value={data.izz} onChange={e => update({ izz: parseFloat(e.target.value) || 0 })} /></div>
+          <FloatInput value={data.izz} onValueChange={value => update({ izz: value })} /></div>
         <div className="wizard-field"><label>Ixz</label>
-          <input type="number" step="any" value={data.ixz} onChange={e => update({ ixz: parseFloat(e.target.value) || 0 })} /></div>
+          <FloatInput value={data.ixz} onValueChange={value => update({ ixz: value })} /></div>
       </div>
       {renderLocField('重心位置 (CG)', data.cg, l => update({ cg: l }))}
       <div className="wizard-section-title">
@@ -379,7 +380,7 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
             <div className="wizard-field"><label>名称</label>
               <input type="text" value={pm.name} onChange={e => { const arr = [...data.pointmasses]; arr[i] = { ...arr[i], name: e.target.value }; update({ pointmasses: arr }); }} /></div>
             <div className="wizard-field"><label>重量</label>
-              <input type="number" step="any" value={pm.weight} onChange={e => { const arr = [...data.pointmasses]; arr[i] = { ...arr[i], weight: parseFloat(e.target.value) || 0 }; update({ pointmasses: arr }); }} /></div>
+              <FloatInput value={pm.weight} onValueChange={value => { const arr = [...data.pointmasses]; arr[i] = { ...arr[i], weight: value }; update({ pointmasses: arr }); }} /></div>
           </div>
           {renderLocField('位置', { x: pm.x, y: pm.y, z: pm.z }, l => { const arr = [...data.pointmasses]; arr[i] = { ...arr[i], ...l }; update({ pointmasses: arr }); })}
           <button className="wizard-del-btn" onClick={() => update({ pointmasses: data.pointmasses.filter((_, j) => j !== i) })}>🗑️ 删除</button>
@@ -406,17 +407,17 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
           {renderLocField('位置', { x: c.x, y: c.y, z: c.z }, l => { const arr = [...data.contacts]; arr[i] = { ...arr[i], ...l }; update({ contacts: arr }); })}
           <div className="wizard-grid2">
             <div className="wizard-field"><label>弹簧系数</label>
-              <input type="number" step="any" value={c.spring} onChange={e => { const arr = [...data.contacts]; arr[i] = { ...arr[i], spring: parseFloat(e.target.value) || 0 }; update({ contacts: arr }); }} /></div>
+              <FloatInput value={c.spring} onValueChange={value => { const arr = [...data.contacts]; arr[i] = { ...arr[i], spring: value }; update({ contacts: arr }); }} /></div>
             <div className="wizard-field"><label>阻尼系数</label>
-              <input type="number" step="any" value={c.damping} onChange={e => { const arr = [...data.contacts]; arr[i] = { ...arr[i], damping: parseFloat(e.target.value) || 0 }; update({ contacts: arr }); }} /></div>
+              <FloatInput value={c.damping} onValueChange={value => { const arr = [...data.contacts]; arr[i] = { ...arr[i], damping: value }; update({ contacts: arr }); }} /></div>
             <div className="wizard-field"><label>静摩擦</label>
-              <input type="number" step="any" value={c.staticFriction} onChange={e => { const arr = [...data.contacts]; arr[i] = { ...arr[i], staticFriction: parseFloat(e.target.value) || 0 }; update({ contacts: arr }); }} /></div>
+              <FloatInput value={c.staticFriction} onValueChange={value => { const arr = [...data.contacts]; arr[i] = { ...arr[i], staticFriction: value }; update({ contacts: arr }); }} /></div>
             <div className="wizard-field"><label>动摩擦</label>
-              <input type="number" step="any" value={c.dynamicFriction} onChange={e => { const arr = [...data.contacts]; arr[i] = { ...arr[i], dynamicFriction: parseFloat(e.target.value) || 0 }; update({ contacts: arr }); }} /></div>
+              <FloatInput value={c.dynamicFriction} onValueChange={value => { const arr = [...data.contacts]; arr[i] = { ...arr[i], dynamicFriction: value }; update({ contacts: arr }); }} /></div>
             <div className="wizard-field"><label>滚动摩擦</label>
-              <input type="number" step="any" value={c.rollingFriction} onChange={e => { const arr = [...data.contacts]; arr[i] = { ...arr[i], rollingFriction: parseFloat(e.target.value) || 0 }; update({ contacts: arr }); }} /></div>
+              <FloatInput value={c.rollingFriction} onValueChange={value => { const arr = [...data.contacts]; arr[i] = { ...arr[i], rollingFriction: value }; update({ contacts: arr }); }} /></div>
             <div className="wizard-field"><label>最大转向角</label>
-              <input type="number" step="any" value={c.maxSteer} onChange={e => { const arr = [...data.contacts]; arr[i] = { ...arr[i], maxSteer: parseFloat(e.target.value) || 0 }; update({ contacts: arr }); }} /></div>
+              <FloatInput value={c.maxSteer} onValueChange={value => { const arr = [...data.contacts]; arr[i] = { ...arr[i], maxSteer: value }; update({ contacts: arr }); }} /></div>
           </div>
           <div className="wizard-grid2">
             <div className="wizard-field"><label>刹车组</label>
@@ -474,9 +475,9 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
           {renderLocField('位置', { x: eng.x, y: eng.y, z: eng.z }, l => { const arr = [...data.engines]; arr[i] = { ...arr[i], ...l }; update({ engines: arr }); })}
           <div className="wizard-grid2">
             <div className="wizard-field"><label>Pitch (DEG)</label>
-              <input type="number" step="any" value={eng.pitch} onChange={e => { const arr = [...data.engines]; arr[i] = { ...arr[i], pitch: parseFloat(e.target.value) || 0 }; update({ engines: arr }); }} /></div>
+              <FloatInput value={eng.pitch} onValueChange={value => { const arr = [...data.engines]; arr[i] = { ...arr[i], pitch: value }; update({ engines: arr }); }} /></div>
             <div className="wizard-field"><label>Yaw (DEG)</label>
-              <input type="number" step="any" value={eng.yaw} onChange={e => { const arr = [...data.engines]; arr[i] = { ...arr[i], yaw: parseFloat(e.target.value) || 0 }; update({ engines: arr }); }} /></div>
+              <FloatInput value={eng.yaw} onValueChange={value => { const arr = [...data.engines]; arr[i] = { ...arr[i], yaw: value }; update({ engines: arr }); }} /></div>
           </div>
         </div>
       ))}
@@ -494,9 +495,9 @@ export default function AircraftWizard({ onClose, onGenerate }: Props) {
               </div>
               <div className="wizard-grid2">
                 <div className="wizard-field"><label>容量</label>
-                  <input type="number" step="any" value={t.capacity} onChange={e => { const arr = [...data.tanks]; arr[i] = { ...arr[i], capacity: parseFloat(e.target.value) || 0 }; update({ tanks: arr }); }} /></div>
+                  <FloatInput value={t.capacity} onValueChange={value => { const arr = [...data.tanks]; arr[i] = { ...arr[i], capacity: value }; update({ tanks: arr }); }} /></div>
                 <div className="wizard-field"><label>当前油量</label>
-                  <input type="number" step="any" value={t.contents} onChange={e => { const arr = [...data.tanks]; arr[i] = { ...arr[i], contents: parseFloat(e.target.value) || 0 }; update({ tanks: arr }); }} /></div>
+                  <FloatInput value={t.contents} onValueChange={value => { const arr = [...data.tanks]; arr[i] = { ...arr[i], contents: value }; update({ tanks: arr }); }} /></div>
               </div>
               {renderLocField('位置', { x: t.x, y: t.y, z: t.z }, l => { const arr = [...data.tanks]; arr[i] = { ...arr[i], ...l }; update({ tanks: arr }); })}
             </div>

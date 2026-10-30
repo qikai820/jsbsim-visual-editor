@@ -1,3 +1,4 @@
+import FloatInput from './FloatInput';
 import { useState, useCallback, useMemo, Component, type ReactNode } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import type { ExprNode, AeroCoefficient } from '../types';
@@ -317,10 +318,9 @@ export default function AeroEditor() {
           {current.expression?.kind === 'value' && (
             <div className="ae-quick-edit">
               <label>常数值</label>
-              <input
-                type="number" step="any"
+              <FloatInput
                 value={current.expression.value}
-                onChange={e => updateExpression(editIdx, { kind: 'value', value: parseFloat(e.target.value) || 0 })}
+                onValueChange={value => updateExpression(editIdx, { kind: 'value', value })}
               />
             </div>
           )}
