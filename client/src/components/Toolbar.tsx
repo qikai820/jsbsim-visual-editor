@@ -17,6 +17,7 @@ import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
 import { xmlContentEqual } from '../utils/xmlContentEqual';
+import { prepareInertiaUpdate } from '../utils/inertiaSync';
 import { isTauri, selectModelImport, getSimulatorTransportMode, getPlotJugglerRate, setPlotJugglerRate, startPlotJuggler } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
@@ -658,7 +659,6 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const remoteModelDirectory = localStorage.getItem('jsbsim-remote-model') || '';
   const [showXml, setShowXml] = useState(false);
   const [showXmlSourceBrowser, setShowXmlSourceBrowser] = useState(false);
-  const [uploadReview, setUploadReview] = useState<{ documents: XmlSourceDocument[]; resolve: () => void } | null>(null);
   const [pendingImport, setPendingImport] = useState<PendingModelImport | null>(null);
   const [xmlContent, setXmlContent] = useState('');
   // An import result belongs to the current import action. Restoring the old
@@ -970,6 +970,13 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const stateBeforeSave = useFlowStore.getState();
     let serialHilChanged = false;
     let mainIoChanged = false;
+    let inertiaUpdate: ReturnType<typeof prepareInertiaUpdate>;
+    try {
+      inertiaUpdate = prepareInertiaUpdate(stateBeforeSave, originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main')));
+    } catch (error) {
+      alert(`无法准备惯量 XML：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     try {
       const baseline = localStorage.getItem(remoteBaselineKey(model));
       if (baseline) {
@@ -1044,6 +1051,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const hadInlineSerialLogic = originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main'))
       .includes('SERIAL_SENSOR_LOGIC_BEGIN');
     const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path),
+      ...(inertiaUpdate ? [inertiaUpdate.path] : []),
       ...(serialHilChanged || mainIoChanged ? [`aircraft/${model}/${model}.xml`] : []),
       ...(serialXml !== null ? [serialPath] : []),
       ...(pwmXml !== null ? [pwmPath] : []),
@@ -1052,7 +1060,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       ? changesList.map(file => `  • ${file}`).join('\n')
       : hasBaseline ? '  • 当前未记录到 XML 修改' : `  • 全量上传：${model} 尚无同步基线`;
     const mainDirty = hasBaseline
-      ? dirtyRecords.some(file => file.category === 'main') ||
+      ? inertiaUpdate?.path === `aircraft/${model}/${model}.xml` || dirtyRecords.some(file => file.category === 'main') ||
         modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`)) ||
         hasInlineSerialLogic || hadInlineSerialLogic || serialHilChanged || mainIoChanged
       : true;
@@ -1061,6 +1069,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       if (path.includes('/')) return path;
       return file.category === 'system' ? `systems/${path}` : `engine/${path}`;
     }));
+    if (inertiaUpdate && inertiaUpdate.path !== `aircraft/${model}/${model}.xml`) {
+      const packaged = packageFiles.find(file => file.path === inertiaUpdate!.path);
+      if (packaged) packaged.xml = inertiaUpdate.content;
+      else externalPaths.add(inertiaUpdate.path);
+    }
     for (const file of modifiedXmlFiles) {
       if (file.startsWith('systems/') || file.startsWith('engine/')) externalPaths.add(file);
     }
@@ -1080,12 +1093,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     try {
       if (externalPaths.size) {
         const [systems, engines] = await Promise.all([ftpListSystems(), ftpListEngines()]);
-        const existing = new Set([
-          ...systems.map(file => `systems/${String(file).replace(/^systems\//, '').replace(/^\/+/, '')}`),
-          ...engines.map(file => `engine/${String(file).replace(/^engine\//, '').replace(/^\/+/, '')}`),
-        ].map(path => path.toLowerCase()));
-        const conflicts = Array.from(externalPaths).filter(path => existing.has(path.replace(/^\/+/, '').toLowerCase()));
-        if (conflicts.length && !confirm(`检测到同名子文件：\n\n${conflicts.map(path => `  • /mnt/sdcard/jsbsim/${path}`).join('\n')}\n\n继续将覆盖这些文件。是否确认覆盖？`)) return;
+        // Listing both directories ensures the remote file service is available.
+        void systems;
+        void engines;
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error || '未知错误');
@@ -1101,7 +1111,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       alert(`无法读取仿真机现有子文件列表，已取消上传，未写入模型。\n\n${hint}\n${detail}`);
       return;
     }
-    if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n已有文件将逐个比较并在覆盖前确认。确认继续吗？`)) return;
+    if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n已有文件会被覆盖。确认一次后将上传全部文件，是否继续？`)) return;
     setLoading(true);
     try {
       const current = useFlowStore.getState();
@@ -1112,15 +1122,16 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (!mainSource.trim()) {
           throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
         }
+        const patchedSource = inertiaUpdate && inertiaUpdate.path === mainFile?.path ? inertiaUpdate.content : mainSource;
         const ioXml = patchMainViztraUdpOutputs(
-          patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model));
+          patchMainIoAttributes(patchedSource, current.nodes), current.nodes, savedRemoteNodes(model));
         xml = await patchInlineSerialLogic(
           serialHilChanged ? patchMainSerialHil(ioXml, current.nodes) : ioXml,
           current.nodes, current.edges);
       }
       const uploadedChildren = new Map<string, string>();
       for (const path of externalPaths) {
-        const content = await buildChildUploadXml(current, path);
+        const content = path === inertiaUpdate?.path ? inertiaUpdate.content : await buildChildUploadXml(current, path);
         uploadedChildren.set(path, content);
       }
       if (assetFiles.length) await checkModelAssets(assetSource, assetFiles.map(file => file.name));
@@ -1128,14 +1139,14 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const written: string[] = [];
       const verified: string[] = [];
       if (mainDirty) {
-        const result = await ftpUploadModel(model, xml);
+        const result = await ftpUploadModel(model, xml, { batchConfirmed: true });
         const remote = await ftpDownloadModel(model);
         if (comparableXml(remote.xml) !== comparableXml(xml)) throw new Error(`主模型回读不一致：${target}`);
         verified.push(target);
         if (result.uploaded) written.push(target);
       }
       if (serialXml !== null) {
-        const result = await ftpUploadFile(serialPath, serialXml);
+        const result = await ftpUploadFile(serialPath, serialXml, { batchConfirmed: true });
         const remote = await ftpDownloadXml(serialPath);
         if (comparableXml(remote.content) !== comparableXml(serialXml)) {
           throw new Error(`串口传感器 XML 回读不一致：${serialTarget}`);
@@ -1144,7 +1155,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (result.uploaded) written.push(serialTarget);
       }
       if (pwmXml !== null) {
-        const result = await ftpUploadFile(pwmPath, pwmXml);
+        const result = await ftpUploadFile(pwmPath, pwmXml, { batchConfirmed: true });
         const remote = await ftpDownloadXml(pwmPath);
         if (comparableXml(remote.content) !== comparableXml(pwmXml)) {
           throw new Error(`PWM 捕获 XML 回读不一致：${pwmTarget}`);
@@ -1153,7 +1164,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (result.uploaded) written.push(pwmTarget);
       }
       for (const [path, content] of uploadedChildren) {
-        const result = await ftpUploadFile(path, content);
+        const result = await ftpUploadFile(path, content, { batchConfirmed: true });
         const remote = await ftpDownloadXml(path);
         if (comparableXml(remote.content) !== comparableXml(content)) throw new Error(`子文件回读不一致：/mnt/sdcard/jsbsim/${path}`);
         const fullPath = `/mnt/sdcard/jsbsim/${path}`;
@@ -1161,7 +1172,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         if (result.uploaded) written.push(fullPath);
       }
       for (const file of packageFiles) {
-        const result = await ftpUploadFile(file.path, file.xml);
+        const result = await ftpUploadFile(file.path, file.xml, { batchConfirmed: true });
         const remote = await ftpDownloadXml(file.path);
         if (comparableXml(remote.content) !== comparableXml(file.xml)) throw new Error(`关联文件回读不一致：/mnt/sdcard/jsbsim/${file.path}`);
         const fullPath = `/mnt/sdcard/jsbsim/${file.path}`;
@@ -1385,6 +1396,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     if (!isRemoteUploadEnabled()) {
       const current = useFlowStore.getState();
       const dirtyFiles = (current.xmlFiles || []).filter(file => file.dirty).map(file => file.path);
+      const inertiaUpdate = prepareInertiaUpdate(current, originalMainXml((current.xmlFiles || []).find(file => file.category === 'main')));
+      if (inertiaUpdate) dirtyFiles.push(inertiaUpdate.path);
       const mainPath = (current.xmlFiles || []).find(file => file.category === 'main')?.path || `aircraft/${model}/${model}.xml`;
       const baseline = localStorage.getItem(remoteBaselineKey(model));
       if (baseline) {
@@ -1442,7 +1455,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       throw new Error(`当前工程为 ${current.aircraft.name}，无法同步到 ${model}；请先加载对应模型。`);
     }
     const fingerprint = projectFingerprint(project);
-    if (!force && localStorage.getItem(remoteBaselineKey(model)) === fingerprint) {
+    const inertiaUpdate = prepareInertiaUpdate(current, originalMainXml(sourceMain));
+    if (!force && !inertiaUpdate && localStorage.getItem(remoteBaselineKey(model)) === fingerprint) {
       onLog?.(`[${new Date().toLocaleTimeString()}] 未检测到本地修改，跳过 NuttX 模型同步`);
       return false;
     }
@@ -1458,22 +1472,25 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         mainIoChanged = mainIoFingerprint(current) !== mainIoFingerprint(previous);
       }
     } catch { /* The tracked main-file dirty flag remains available. */ }
-    const mainCandidate = serialHilChanged || mainIoChanged || !!mainFile?.dirty || modifiedXmlFiles.some(file =>
+    const mainCandidate = inertiaUpdate?.path === mainPath || serialHilChanged || mainIoChanged || !!mainFile?.dirty || modifiedXmlFiles.some(file =>
       file === `${model}.xml` || file.endsWith(`/${model}.xml`)
     );
     const mainSource = originalMainXml(mainFile);
     if (mainCandidate && !mainSource.trim()) {
       throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次同步已取消。请重新从仿真机加载模型。');
     }
-    const candidateMainXml = mainCandidate
+    let candidateMainXml = mainCandidate
       ? serialHilChanged
         ? patchMainSerialHil(patchMainViztraUdpOutputs(patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model)), current.nodes)
         : patchMainViztraUdpOutputs(patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model))
       : mainSource;
-    const childCandidates = (current.xmlFiles || []).filter(file => file.dirty && file.category !== 'main');
+    if (inertiaUpdate?.path === mainPath) {
+      candidateMainXml = prepareInertiaUpdate(current, candidateMainXml)?.content || candidateMainXml;
+    }
+    const childCandidates = (current.xmlFiles || []).filter(file => (file.dirty || file.path === inertiaUpdate?.path) && file.category !== 'main');
     const childContent = new Map<string, string>();
     for (const file of childCandidates) {
-      childContent.set(file.path, await buildChildUploadXml(current, file.path));
+      childContent.set(file.path, file.path === inertiaUpdate?.path ? inertiaUpdate.content : await buildChildUploadXml(current, file.path));
     }
     const serialPath = serialSensorPath(model);
     const pwmPath = pwmCapturePath(model);
@@ -1520,7 +1537,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     }
     if (unchangedPaths.length) {
       const unchanged = new Set(unchangedPaths);
-      useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file => unchanged.has(file.path) ? { ...file, dirty: false } : file) });
+      useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file => {
+        if (!unchanged.has(file.path)) return file;
+        const content = file.path === mainPath ? candidateMainXml : childContent.get(file.path);
+        return { ...file, ...(content ? { originalXml: content, currentXml: content } : {}), dirty: false };
+      }) });
       onSaveComplete?.(unchangedPaths);
     }
     const mainDirty = pendingFiles.includes(mainPath);
@@ -1528,7 +1549,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     if (!pendingFiles.length) {
       const cleanProject = {
         ...project,
-        xmlFiles: (project.xmlFiles || []).map(file => unchangedPaths.includes(file.path) ? { ...file, dirty: false } : file),
+        xmlFiles: useFlowStore.getState().xmlFiles,
       };
       localStorage.setItem(remoteBaselineKey(model), projectFingerprint(cleanProject));
       onLog?.(`[${new Date().toLocaleTimeString()}] 本机 XML 与仿真机一致，跳过上传`);
@@ -1537,29 +1558,6 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     if (pendingFiles.length > 0) {
       const isZh = !/^en(?:-|$)/i.test(navigator.language || '');
       const fileList = pendingFiles.map(file => `  • ${file}`).join('\n');
-      const reviewMessage = isZh
-        ? `检测到本次将上传的 XML 文件：\n\n${fileList}\n\n是否先打开 XML 源码浏览器进行审查？\n确定=打开审查，取消=直接进入覆盖确认。`
-        : `The following XML files will be uploaded:\n\n${fileList}\n\nOpen the XML Source Browser for review first?\nOK = review, Cancel = go directly to overwrite confirmation.`;
-      if (window.confirm(reviewMessage)) {
-        const documents = pendingFiles.map(path => {
-          const tracked = (current.xmlFiles || []).find(file => file.path === path);
-          return {
-            path,
-            content: path === mainPath
-              ? candidateMainXml
-              : path === serialPath ? serialXml || ''
-                : path === pwmPath ? pwmXml || '' : childContent.get(path) || '',
-            category: tracked?.category,
-            dirty: tracked?.dirty,
-          };
-        }).filter(file => file.content.trim());
-        if (documents.length) {
-          await new Promise<void>(resolve => {
-            setUploadReview({ documents, resolve });
-            setShowXmlSourceBrowser(false);
-          });
-        }
-      }
       const message = isZh
         ? `检测到本地修改，点击“确定”后将上传以下文件到仿真机：\n\n${fileList}\n\n上传后会覆盖仿真机对应文件，是否继续？`
         : `Local changes detected. The following files will be uploaded to the simulator:\n\n${fileList}\n\nExisting simulator files may be overwritten. Continue?`;
@@ -1575,38 +1573,38 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     // Starting a simulation must not regenerate the aircraft merely because
     // layout/subfile state changed.  Regeneration expands file-backed top-level
     // sections (Metrics/Mass/Propulsion/Aero) and child thruster tables into the
-    // main XML.  Only rebuild when the main file itself was edited.  A forced
-    // sync of an unchanged model sends the original complete XML verbatim.
+    // main XML. Only rebuild when the main file itself was edited.
     if (mainDirty) {
-      await ftpUploadModel(model, uploadedMainXml);
-      uploaded = true;
-    } else if (force && uploadedMainXml.trim()) {
-      await ftpUploadModel(model, uploadedMainXml);
-      uploaded = true;
+      const result = await ftpUploadModel(model, uploadedMainXml, { batchConfirmed: true });
+      const remote = await ftpDownloadModel(model);
+      if (comparableXml(remote.xml) !== comparableXml(uploadedMainXml)) throw new Error(`主模型回读不一致：${mainPath}`);
+      uploaded ||= result.uploaded;
     }
     for (const file of changedFiles) {
       const content = childContent.get(file.path);
       if (!content?.trim()) throw new Error(`子文件 ${file.path} 的安全补丁为空，已取消上传。`);
-      await ftpUploadFile(file.path, content);
-      uploaded = true;
+      const result = await ftpUploadFile(file.path, content, { batchConfirmed: true });
+      const remote = await ftpDownloadXml(file.path);
+      if (comparableXml(remote.content) !== comparableXml(content)) throw new Error(`子文件回读不一致：${file.path}`);
+      uploaded ||= result.uploaded;
     }
     if (serialXml !== null && pendingFiles.includes(serialPath)) {
-      await ftpUploadFile(serialPath, serialXml);
+      const result = await ftpUploadFile(serialPath, serialXml, { batchConfirmed: true });
       const remote = await ftpDownloadXml(serialPath);
       if (comparableXml(remote.content) !== comparableXml(serialXml)) {
         throw new Error(`串口传感器 XML 回读不一致：/mnt/sdcard/jsbsim/${serialPath}`);
       }
-      uploaded = true;
+      uploaded ||= result.uploaded;
     }
     if (pwmXml !== null && pendingFiles.includes(pwmPath)) {
-      await ftpUploadFile(pwmPath, pwmXml);
+      const result = await ftpUploadFile(pwmPath, pwmXml, { batchConfirmed: true });
       const remote = await ftpDownloadXml(pwmPath);
       if (comparableXml(remote.content) !== comparableXml(pwmXml)) {
         throw new Error(`PWM 捕获 XML 回读不一致：/mnt/sdcard/jsbsim/${pwmPath}`);
       }
-      uploaded = true;
+      uploaded ||= result.uploaded;
     }
-    useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
+    useFlowStore.setState({ xmlFiles: (useFlowStore.getState().xmlFiles || []).map(file =>
       file.category === 'main'
         ? {
             ...file,
@@ -1813,11 +1811,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       {showJ23Guide && <J23GuideDialog onClose={() => setShowJ23Guide(false)} />}
 
       {showXmlSourceBrowser && <XmlSourceBrowser documents={xmlSourceDocuments} loadRemoteContent={loadRemoteXmlForReview} onClose={() => setShowXmlSourceBrowser(false)} />}
-      {uploadReview && <XmlSourceBrowser documents={uploadReview.documents} initialPath={uploadReview.documents[0]?.path} loadRemoteContent={loadRemoteXmlForReview} onClose={() => {
-        const resolve = uploadReview.resolve;
-        setUploadReview(null);
-        resolve();
-      }} />}
+
 
       {showXml && (
         <div className="xml-modal-overlay" onPointerDown={event => { if (event.target === event.currentTarget) setShowXml(false); }}>

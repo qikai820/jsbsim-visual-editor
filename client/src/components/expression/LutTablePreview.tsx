@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ExprNode, ExprTable } from '../../types';
 import TableChart from './TableChart';
+import { displayNumber } from '../../utils/displayNumber';
 
 interface LutTablePreviewProps {
   title: string;
@@ -25,7 +26,7 @@ function label(value: string, fallback: string) {
 
 function fmt(value: number | undefined) {
   if (value === undefined || Number.isNaN(value)) return '—';
-  return Math.abs(value) >= 1000 ? value.toFixed(0) : Number(value.toFixed(5)).toString();
+  return displayNumber(value);
 }
 
 function DimensionIcon({ type }: { type: ExprTable['tableType'] }) {

@@ -525,7 +525,7 @@ function xmlChangePreview(remoteXml: string, localXml: string): string {
   return `${changes.join('\n')}${omitted > 0 ? `\n…另有 ${omitted} 行差异` : ''}`;
 }
 
-async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote: () => Promise<string | null>): Promise<boolean> {
+async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote: () => Promise<string | null>, batchConfirmed = false): Promise<boolean> {
   if (!isRemoteUploadEnabled()) {
     throw new Error('仿真机 XML 上传已关闭，请先在“本地配置”中启用');
   }
@@ -536,6 +536,7 @@ async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote
     throw new Error(`无法读取仿真机原文件，不能比较变更，已禁止上传：${error?.message || error}`);
   }
   if (remoteXml === null) {
+    if (batchConfirmed) return true;
     const confirmed = window.confirm(
       `仿真机上尚无此 XML，将新建：\n/mnt/sdcard/jsbsim/${path}\n\n不会覆盖已有文件。确认创建吗？`
     );
@@ -543,6 +544,7 @@ async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote
     return true;
   }
   if (comparableXml(remoteXml) === comparableXml(localXml)) return false;
+  if (batchConfirmed) return true;
   const preview = xmlChangePreview(remoteXml, localXml);
   const confirmed = window.confirm(
     `即将更新仿真机 XML：\n/mnt/sdcard/jsbsim/${path}\n\n请比较以下变更：\n\n${preview}\n\n确认覆盖原文件吗？`
@@ -551,7 +553,7 @@ async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote
   return true;
 }
 
-export async function ftpUploadFile(path: string, content: string): Promise<{ path: string; uploaded: boolean }> {
+export async function ftpUploadFile(path: string, content: string, options?: { batchConfirmed?: boolean }): Promise<{ path: string; uploaded: boolean }> {
   const normalizedPath = String(path).replace(/^\/+|^jsbsim\//g, '');
   const shouldUpload = await confirmRemoteXmlUpdate(normalizedPath, content, async () => {
     const load = async () => (await ftpDownloadXml(normalizedPath)).content;
@@ -560,7 +562,7 @@ export async function ftpUploadFile(path: string, content: string): Promise<{ pa
     const directory = parts.join('/');
     if (!filename || !/^(?:systems|engine|scripts|config\/models|aircraft\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)$/.test(directory)) return load();
     return remoteXmlOrNew(directory, filename, load);
-  });
+  }, options?.batchConfirmed);
   if (!shouldUpload) return { path: normalizedPath, uploaded: false };
   return call('ftp_upload_file', { path: normalizedPath, content });
 }
@@ -577,12 +579,12 @@ export async function ftpDownloadScript(file: string): Promise<{ file: string; x
   return call('ftp_download_script', { file });
 }
 
-export async function ftpUploadModel(model: string, xml: string): Promise<{ model: string; uploaded: boolean }> {
+export async function ftpUploadModel(model: string, xml: string, options?: { batchConfirmed?: boolean }): Promise<{ model: string; uploaded: boolean }> {
   const modelName = String(model).replace(/^aircraft\//, '').replace(/\/.*$/, '');
   const path = `aircraft/${modelName}/${modelName}.xml`;
   const shouldUpload = await confirmRemoteXmlUpdate(path, xml, async () => {
     return remoteXmlOrNew(`aircraft/${modelName}`, `${modelName}.xml`, async () => (await ftpDownloadModel(modelName)).xml);
-  });
+  }, options?.batchConfirmed);
   if (!shouldUpload) return { model: modelName, uploaded: false };
   return call('ftp_upload_model', { model: modelName, xml });
 }

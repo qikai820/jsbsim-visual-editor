@@ -1,3 +1,4 @@
+import { displayNumber } from './displayNumber';
 import type { ExprNode } from '../types';
 
 // Convert an ExprNode tree to a readable formula string
@@ -117,11 +118,7 @@ function wrapIfNeeded(child: ExprNode, parentKind: string): string {
 
 function formatNum(n: number): string {
   if (isNaN(n)) return '0';
-  if (Number.isInteger(n) && Math.abs(n) < 100000) return String(n);
-  if (Math.abs(n) >= 1000) return n.toFixed(0);
-  if (Math.abs(n) >= 1) return n.toFixed(2);
-  if (n === 0) return '0';
-  return n.toFixed(4);
+  return displayNumber(n);
 }
 
 // Render formula as HTML-like segments for styled display

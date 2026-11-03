@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const source = await readFile(new URL('../../jsbsim_realtime/data/aviation/aircraft/H7/H7_Viztra.xml', import.meta.url), 'utf8');
+const voliroSource = await readFile(new URL('../../jsbsim_realtime/data/aviation/aircraft/voliro_t/VoliroTActuators.xml', import.meta.url), 'utf8');
 const actualCandidate = process.argv[2] ? await readFile(process.argv[2], 'utf8') : null;
 const fixture = new URL('../client/.minimal-system-patch.html', import.meta.url);
 await writeFile(fixture, '<html><body>XML patch test</body></html>');
@@ -56,6 +57,7 @@ try {
   const expression = `(async () => {
     const { patchExistingSubfileXml } = await import('/src/utils/sourcePreservingXml.ts');
     const source = ${JSON.stringify(source)};
+    const voliroSource = ${JSON.stringify(voliroSource)};
     const candidate = new DOMParser().parseFromString(source, 'application/xml');
     const stripFormatting = node => {
       for (const child of [...node.childNodes]) {
@@ -82,17 +84,36 @@ try {
     const patchedValue = patchExistingSubfileXml(source, 'system', {}, new XMLSerializer().serializeToString(edited));
     const actualPatch = ${JSON.stringify(actualCandidate)}
       ? patchExistingSubfileXml(source, 'system', {}, ${JSON.stringify(actualCandidate)}) : null;
-    return { patched, unchanged, patchedValue, removed, actualPatch };
+    const voliro = new DOMParser().parseFromString(voliroSource, 'application/xml');
+    for (const tableData of voliro.querySelectorAll('tableData')) {
+      tableData.textContent = '\\n' + tableData.textContent.trim().split(/\\r?\\n/).map(line =>
+        line.trim().split(/\\s+/).map(value => String(Number(value))).join('\\t')).join('\\n') + '\\n';
+    }
+    const tableCandidate = new XMLSerializer().serializeToString(voliro);
+    const voliroUnchanged = patchExistingSubfileXml(voliroSource, 'system', {}, tableCandidate);
+    const output = voliro.querySelector('fcs_function output');
+    output.textContent = 'fcs/test-output';
+    const voliroEdited = patchExistingSubfileXml(voliroSource, 'system', {}, new XMLSerializer().serializeToString(voliro));
+    const data = voliro.querySelector('tableData');
+    data.textContent = data.textContent.replace(/0(?=\\s+0)/, '1');
+    let tableEditBlocked = false;
+    try { patchExistingSubfileXml(voliroSource, 'system', {}, new XMLSerializer().serializeToString(voliro)); }
+    catch (error) { tableEditBlocked = error.name === 'XmlPatchUnsafeError'; }
+    return { patched, unchanged, patchedValue, removed, actualPatch, voliroUnchanged, voliroEdited, tableEditBlocked };
   })()`;
   const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
   if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-  const { patched, unchanged, patchedValue, removed, actualPatch } = result.result.value;
+  const { patched, unchanged, patchedValue, removed, actualPatch, voliroUnchanged, voliroEdited, tableEditBlocked } = result.result.value;
   const assertExact = (actual, expected, label) => {
     if (actual === expected) return;
     let index = 0;
     while (index < actual.length && index < expected.length && actual[index] === expected[index]) index++;
     throw new Error(`${label}: first difference at ${index}; got ${JSON.stringify(actual.slice(index, index + 100))}, expected ${JSON.stringify(expected.slice(index, index + 100))}`);
   };
+  assertExact(voliroUnchanged, voliroSource, 'Equivalent Voliro lookup tables retain original bytes');
+  assertExact(voliroEdited, voliroSource.replace('<output>fcs/voliro_t/thrust-lbf[0]</output>', '<output>fcs/test-output</output>'),
+    'An unrelated Voliro edit preserves all lookup table bytes');
+  assert.ok(tableEditBlocked, 'A changed lookup table must not be silently discarded');
   assertExact(unchanged, source, 'Saving an unchanged system is byte-for-byte stable');
   const insertion = /\n([ \t]*)<\/channel>/.exec(source);
   assert.ok(insertion, 'Source channel has a closing line');

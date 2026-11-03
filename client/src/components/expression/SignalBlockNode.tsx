@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { displayNumber } from '../../utils/displayNumber';
 import type { NodeProps } from '@xyflow/react';
 import OperatorBlock from './OperatorBlock';
 import type { ExprTable } from '../../types';
@@ -14,7 +15,7 @@ function SignalBlockNode(node: NodeProps) {
   };
   const clipMin = bound(d.cliptoMin ?? d.compProps?.clipto_min);
   const clipMax = bound(d.cliptoMax ?? d.compProps?.clipto_max);
-  const range = `[${clipMin ?? '−∞'}, ${clipMax ?? '∞'}]`;
+  const range = `[${clipMin === undefined ? '−∞' : displayNumber(clipMin)}, ${clipMax === undefined ? '∞' : displayNumber(clipMax)}]`;
   // Simplify only a plain clipping actuator. Additional parameters (including
   // property-driven or unknown ones) retain the general actuator label.
   const clipOnly = kind === 'actuator' && clipMin !== undefined && clipMax !== undefined &&
@@ -25,9 +26,9 @@ function SignalBlockNode(node: NodeProps) {
     kind = 'saturation';
     value = range;
   }
-  if (kind === 'pure_gain' || kind === 'scheduled_gain') value = String(scalar(d.compProps?.gain) ?? '1');
-  if (kind === 'constant') value = String(scalar(d.compProps?.constant) ?? '0');
-  if (kind === 'value') value = String(d.expression.value);
+  if (kind === 'pure_gain' || kind === 'scheduled_gain') value = displayNumber(String(scalar(d.compProps?.gain) ?? '1'));
+  if (kind === 'constant') value = displayNumber(String(scalar(d.compProps?.constant) ?? '0'));
+  if (kind === 'value') value = displayNumber(d.expression.value);
   if (kind === 'property' || kind === 'function_ref') value = d.expression?.name?.split('/').pop();
   const name = d.name || d.outputSignal || d.meta?.label;
   const title = d.kind === 'tablePreview'

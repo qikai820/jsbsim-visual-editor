@@ -44,6 +44,18 @@ const merge = (source: any) => ({
 function NumberField({ label, value, onChange, unit, step = 1, min }: any) {
   return <label className="sim-config-field"><span>{label}</span><div><input type="number" value={value} step={step} min={min} onChange={e => onChange(Number(e.target.value))} />{unit && <em>{unit}</em>}</div></label>;
 }
+function SimulationRateField({ dt, label, onChange }: { dt: number; label: string; onChange: (dt: number) => void }) {
+  const rate = Number.isFinite(dt) && dt > 0 ? Math.round(1 / dt) : 0;
+  const [draft, setDraft] = useState(String(rate));
+  useEffect(() => setDraft(String(rate)), [dt, rate]);
+  return <label className="sim-config-field"><span>{label}</span><div><input type="text" inputMode="numeric" value={draft} onChange={e => {
+    const value = e.target.value;
+    if (!/^\d*$/.test(value)) return;
+    setDraft(value);
+    const hz = Number(value);
+    if (Number.isSafeInteger(hz) && hz >= 2 && hz <= 99999) onChange(1 / hz);
+  }} onBlur={() => setDraft(String(rate))} /><em>Hz</em></div></label>;
+}
 function SelectField({ label, value, onChange, children }: any) {
   return <label className="sim-config-field"><span>{label}</span><select value={value} onChange={e => onChange(e.target.value)}>{children}</select></label>;
 }
@@ -378,7 +390,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           </section>}
           {tab === '运行与时间' && <section><h3>{tr('运行与时间','Runtime & Time')}</h3><div className="sim-config-grid">
             <NumberField label={tr('仿真步长','Time step')} value={config.runtime.dt} step={0.0001} min={0.00001} unit="s" onChange={(v:any)=>set('runtime','dt',v)} />
-            <NumberField label={tr('仿真频率（只读）','Simulation rate (read-only)')} value={(1/config.runtime.dt).toFixed(1)} unit="Hz" onChange={()=>{}} />
+            <SimulationRateField label={tr('仿真频率','Simulation rate')} dt={config.runtime.dt} onChange={v=>set('runtime','dt',v)} />
             <NumberField label={tr('每周期迭代次数','Iterations per cycle')} value={config.runtime.iterationsPerCycle} min={1} onChange={(v:any)=>set('runtime','iterationsPerCycle',v)} />
             <NumberField label={tr('最大追赶迭代次数','Maximum catch-up iterations')} value={config.runtime.catchupIterations} min={1} onChange={(v:any)=>set('runtime','catchupIterations',v)} />
             <NumberField label={tr('实时倍率','Real-time factor')} value={config.runtime.realtimeFactor} step={0.1} min={0.1} unit="×" onChange={(v:any)=>set('runtime','realtimeFactor',v)} />

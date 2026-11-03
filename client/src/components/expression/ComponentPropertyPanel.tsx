@@ -1,3 +1,4 @@
+import DisplayNumberInput from '../DisplayNumberInput';
 import { useState } from 'react';
 import SignalPathInput from '../SignalPathInput';
 
@@ -123,7 +124,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
       {data.itemType === 'constant' && (
         <div className="field-row">
           <label>常数值</label>
-          <input type="text" value={String(data.compProps?.constant?.value ?? '0')}
+          <DisplayNumberInput value={String(data.compProps?.constant?.value ?? '0')}
             onChange={event => setParam('constant', event.target.value)} />
         </div>
       )}
@@ -152,8 +153,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           <div className="comp-prop-subtitle">输出限幅 clipto</div>
           <div className="field-row">
             <label>下限 min</label>
-            <input
-              type="text"
+            <DisplayNumberInput
               value={data.cliptoMin ?? ''}
               onChange={e => setClip('cliptoMin', e.target.value)}
               placeholder="如 0.0"
@@ -161,8 +161,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           </div>
           <div className="field-row">
             <label>上限 max</label>
-            <input
-              type="text"
+            <DisplayNumberInput
               value={data.cliptoMax ?? ''}
               onChange={e => setClip('cliptoMax', e.target.value)}
               placeholder="如 0.9999"
@@ -178,7 +177,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           {(['min', 'max'] as const).map(bound => (
             <div className="field-row" key={`domain-${bound}`}>
               <label>{bound === 'min' ? '下限 min' : '上限 max'}</label>
-              <input type="text" value={nestedValue('domain', bound)}
+              <DisplayNumberInput value={nestedValue('domain', bound)}
                 placeholder={bound === 'min' ? '-1' : '1'}
                 onChange={e => setNestedParam('domain', bound, e.target.value)} />
             </div>
@@ -188,7 +187,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           {(['min', 'max'] as const).map(bound => (
             <div className="field-row" key={`range-${bound}`}>
               <label>{bound === 'min' ? '下限 min' : '上限 max'}</label>
-              <input type="text" value={nestedValue('range', bound)}
+              <DisplayNumberInput value={nestedValue('range', bound)}
                 onChange={e => setNestedParam('range', bound, e.target.value)} />
             </div>
           ))}
@@ -215,7 +214,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
               <label>{PARAM_LABELS[field] || field}</label>
               {field === 'property' || field === 'properties' || field === 'input' || field === 'output' || field.startsWith('hil_')
                 ? <SignalPathInput value={String(v.value ?? '')} onChange={value => setParam(field, value)} multiple={field === 'properties'} />
-                : <input type="text" value={String(v.value ?? '')} onChange={e => setParam(field, e.target.value)} />}
+                : <DisplayNumberInput value={String(v.value ?? '')} onChange={e => setParam(field, e.target.value)} />}
             </div>
           ))}
         </>

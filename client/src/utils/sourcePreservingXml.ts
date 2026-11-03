@@ -155,6 +155,32 @@ function scanXmlSpans(xml: string): XmlSpan {
   return roots[0];
 }
 
+// A generated 1D table may differ only in indentation and numeric spelling.
+// Require the same variables, row shapes and exact numeric values before
+// keeping the source bytes. Unknown table shapes remain protected.
+function equivalentLookupTable(source: Element, candidate: Element): boolean {
+  if (source.tagName !== 'table' || candidate.tagName !== 'table') return false;
+  const src = directElements(source), dst = directElements(candidate);
+  if (src.length !== 2 || dst.length !== 2 ||
+      src[0].tagName !== 'independentVar' || dst[0].tagName !== 'independentVar' ||
+      src[1].tagName !== 'tableData' || dst[1].tagName !== 'tableData') return false;
+  const attrsMatch = (a: Element, b: Element) => Array.from(b.attributes).every(attr =>
+    a.getAttribute(attr.name) === attr.value ||
+    (a.tagName === 'independentVar' && attr.name === 'lookup' && attr.value === 'row' && !a.hasAttribute('lookup')));
+  if (!attrsMatch(source, candidate) || !attrsMatch(src[0], dst[0]) || !attrsMatch(src[1], dst[1])) return false;
+  if (src[0].getAttribute('lookup') && src[0].getAttribute('lookup') !== 'row') return false;
+  if (src[0].textContent?.trim() !== dst[0].textContent?.trim()) return false;
+  if (src[1].children.length || dst[1].children.length || src[1].getAttribute('breakPoint')) return false;
+  const rows = (element: Element) => (element.textContent || '').trim().split(/\r?\n/)
+    .map(line => line.trim()).filter(Boolean).map(line => line.split(/\s+/));
+  const a = rows(src[1]), b = rows(dst[1]);
+  const number = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+  return a.length === b.length && a.every((row, i) => row.length === 2 && b[i].length === 2 &&
+    row.every((value, j) => number.test(value) && number.test(b[i][j]) &&
+      Number.isFinite(Number(value)) && Number(value) === Number(b[i][j]) &&
+      (!Number.isInteger(Number(value)) || Number.isSafeInteger(Number(value)))));
+}
+
 function patchSystemText(sourceXml: string, source: Element, candidate: Element): string {
   const root = scanXmlSpans(sourceXml);
   const edits: TextEdit[] = [];
@@ -185,12 +211,14 @@ function patchSystemText(sourceXml: string, source: Element, candidate: Element)
 
     const sourceChildren = directElements(original);
     const candidateChildren = directElements(wanted);
-    // The visual graph cannot represent a JSBSim lookup table. Its generated
-    // <function/> is an absence of a patch, not an instruction to delete the
-    // source table. A replacement expression needs an explicit source edit.
+    // Keep the original table bytes when generation only changes formatting.
+    // Do not silently discard a real table edit or replace an unsupported table.
     if (original.tagName === 'function' && sourceChildren.some(child => child.tagName === 'table')) {
       if (candidateChildren.length === 0) return;
-      throw new Error('查表函数不能通过图形模块替换，请直接编辑原始 XML');
+      if (sourceChildren.length === 1 && candidateChildren.length === 1 &&
+          equivalentLookupTable(sourceChildren[0], candidateChildren[0]) &&
+          Array.from(wanted.attributes).every(attr => original.getAttribute(attr.name) === attr.value)) return;
+      throw new Error('查表函数存在无法安全合并的修改，请直接编辑原始 XML');
     }
     if (sourceChildren.length !== span.children.length) throw new Error('XML 子节点位置不匹配');
     for (let index = 0; index < sourceChildren.length; index++) {

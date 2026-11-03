@@ -1,3 +1,4 @@
+import { displayNumber } from './displayNumber';
 export type UnitSystem = 'imperial' | 'metric';
 
 // Unit conversion utilities for JSBSim properties
@@ -105,14 +106,7 @@ export function formatValueWithUnit(
   const conv = getConversion(path, unitSystem);
   const converted = value * conv.factor + conv.offset;
 
-  let formatted: string;
-  if (Math.abs(converted) >= 1000) {
-    formatted = converted.toFixed(0);
-  } else if (Math.abs(converted) < 0.0001 && converted !== 0) {
-    formatted = converted.toExponential(2);
-  } else {
-    formatted = converted.toFixed(4);
-  }
+  const formatted = displayNumber(converted);
 
   return { value: formatted, unit: conv.toUnit };
 }

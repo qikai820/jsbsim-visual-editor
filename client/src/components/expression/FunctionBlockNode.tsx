@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { displayNumber } from '../../utils/displayNumber';
 import type { NodeProps } from '@xyflow/react';
 import OperatorBlock from './OperatorBlock';
 
@@ -7,7 +8,7 @@ function FunctionBlockNode(node: NodeProps) {
   const isSignalLeaf = inSignalFlow && ['property', 'function_ref'].includes(exprNode.kind);
   const inputs = Array.from({ length: inputCount }, (_, i) => ({ id: `in-${i}`, title: `输入 ${i + 1}` }));
   if (isSignalLeaf) inputs.push({ id: 'in-signal', title: exprNode.name });
-  const value = exprNode.kind === 'value' ? String(exprNode.value)
+  const value = exprNode.kind === 'value' ? displayNumber(exprNode.value)
     : ['property', 'function_ref'].includes(exprNode.kind) ? exprNode.name?.split('/').pop() : undefined;
   return <OperatorBlock node={node} kind={exprNode.kind} value={value}
     table={exprNode.kind === 'table' ? exprNode : undefined} inputs={inputs} outputs={['out-0']}

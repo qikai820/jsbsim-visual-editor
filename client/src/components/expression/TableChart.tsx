@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { displayNumber } from '../../utils/displayNumber';
 import type { ExprNode } from '../../types';
 
 interface TableChartProps {
@@ -21,10 +22,7 @@ function valueToColor(val: number | undefined | null, min: number, max: number):
 
 function formatNum(n: number | undefined | null): string {
   if (n === undefined || n === null || isNaN(n)) return '0';
-  if (Math.abs(n) >= 1000) return n.toFixed(0);
-  if (Math.abs(n) >= 1) return n.toFixed(2);
-  if (n === 0) return '0';
-  return n.toFixed(3);
+  return displayNumber(n);
 }
 
 // ── 1D Line Chart ───────────────────────────────────────────────────────────

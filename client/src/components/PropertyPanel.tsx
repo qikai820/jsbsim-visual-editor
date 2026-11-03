@@ -1,3 +1,4 @@
+import { displayNumber } from '../utils/displayNumber';
 import { useEffect, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
@@ -1090,7 +1091,7 @@ function getExprSummary(expr: any): string {
   if (!expr || !expr.kind) return '';
   try {
     switch (expr.kind) {
-      case 'value': return `= ${expr.value}`;
+      case 'value': return `= ${displayNumber(expr.value)}`;
       case 'property': return `= ${expr.name?.split('/').pop() || expr.name}`;
       case 'function_ref': return `→ ${expr.name?.split('/').pop() || expr.name}`;
       case 'table': return `📊 ${expr.tableType}(${expr.var1?.split('/').pop()})`;

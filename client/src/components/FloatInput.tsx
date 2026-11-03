@@ -1,5 +1,6 @@
 import { useState, type InputHTMLAttributes } from 'react';
 import { useLanguage } from '../i18n';
+import { displayNumber } from '../utils/displayNumber';
 
 type FloatInputProps = Omit<InputHTMLAttributes<HTMLInputElement>,
   'type' | 'inputMode' | 'value' | 'onChange' | 'step' | 'min' | 'max'> & {
@@ -24,7 +25,7 @@ export default function FloatInput({
   const { isZh } = useLanguage();
   const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
-  const text = draft ?? (value === undefined ? '' : String(value));
+  const text = draft ?? (value === undefined ? '' : displayNumber(value));
   const error = isZh
     ? '请输入有效的有限数值，例如 -0.18 或 1e-3；按 Esc 恢复原值。'
     : 'Enter a finite number, such as -0.18 or 1e-3. Press Esc to restore the previous value.';

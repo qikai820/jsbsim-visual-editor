@@ -65,6 +65,7 @@ try {
   await send('Page.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `
     localStorage.setItem('jsbsim-language', 'en-US');
+    localStorage.setItem('jsbsim-multi-model-slots-v1', JSON.stringify({'01':'test'}));
     window.confirm = () => true;
     window.__stored = JSON.stringify({version:1,mcap:{enabled:true,rateHz:500,bufferMb:500}});
     window.__uploads = [];
@@ -94,7 +95,23 @@ try {
   const open = `[...document.querySelectorAll('button')].find(el => el.textContent.trim() === '⚙ Simulation')`;
   await until(open);
   await evaluate(`${open}.click()`);
-  await until(`document.querySelector('.sim-config-dialog footer').textContent.includes('Current configuration')`);
+  await until(`document.querySelector('.sim-config-dialog footer')?.textContent.includes('Current configuration')`);
+  await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'Runtime & Time').click()`);
+  const simRate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('Simulation rate'))?.querySelector('input')`;
+  const timeStep = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('Time step'))?.querySelector('input')`;
+  await until(`${simRate}.value === '500'`);
+  await evaluate(`(() => {
+    const field = ${simRate};
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, '250');
+    field.dispatchEvent(new Event('input', {bubbles:true}));
+  })()`);
+  await until(`${timeStep}.value === '0.004'`);
+  await evaluate(`(() => {
+    const field = ${simRate};
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, '250.5');
+    field.dispatchEvent(new Event('input', {bubbles:true}));
+  })()`);
+  assert.equal(await evaluate(`${simRate}.value`), '250', 'fractional frequency is rejected');
   const performanceTab = `[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'Performance & Safety')`;
   const usbDebug = `[...document.querySelectorAll('.sim-config-check')].find(el => el.textContent.includes('USB debug prints'))?.querySelector('input')`;
   await evaluate(`${performanceTab}.click()`);
@@ -102,7 +119,7 @@ try {
   assert.equal(await evaluate(`${usbDebug}.checked`), false, 'old configurations default to quiet USB diagnostics');
   await evaluate(`${usbDebug}.click()`);
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'MCAP Logging').click()`);
-  const rate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('High-rate field frequency'))?.querySelector('input')`;
+  const rate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('State and critical field rate'))?.querySelector('input')`;
   await until(`${rate}.value === '500'`);
   await evaluate(`(() => {
     const field = ${rate};
@@ -128,6 +145,7 @@ try {
   await until(`${save}.textContent === 'Save to Simulator'`);
   assert.equal(await evaluate(`${save}.disabled`), true);
   assert.equal(await evaluate('JSON.parse(window.__stored).mcap.rateHz'), 400);
+  assert.equal(await evaluate('JSON.parse(window.__stored).runtime.dt'), 0.004);
   assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), true);
   assert.match(await evaluate(`document.querySelector('.sim-config-dialog footer').textContent`), /Saved and verified/);
   const shot = await send('Page.captureScreenshot', {format:'png'});

@@ -1,3 +1,4 @@
+import { displayNumber } from '../utils/displayNumber';
 import FloatInput from './FloatInput';
 import { useState, useCallback, useMemo, Component, type ReactNode } from 'react';
 import { useFlowStore } from '../store/flowStore';
@@ -72,7 +73,7 @@ function getExprSummary(expr: ExprNode | undefined | null): string {
   if (!expr || !expr.kind) return '?';
   try {
     switch (expr.kind) {
-      case 'value': return `= ${expr.value}`;
+      case 'value': return `= ${displayNumber(expr.value)}`;
       case 'property': return `= ${expr.name.split('/').pop()}`;
       case 'function_ref': return `→ ${expr.name.split('/').pop()}`;
       case 'table': return `📊 ${expr.tableType}(${expr.var1.split('/').pop()})`;
