@@ -7,6 +7,7 @@ type FloatInputProps = Omit<InputHTMLAttributes<HTMLInputElement>,
   value: number | undefined;
   onValueChange: (value: number) => void;
   onClear?: () => void;
+  formatValue?: (value: number) => string;
 };
 
 function parseFloatInput(text: string): number | null {
@@ -20,12 +21,12 @@ function parseFloatInput(text: string): number | null {
 // users clear the field or type prefixes such as "-", "0." and "1e-".
 // Like QGC's FactTextField, validate and commit when editing finishes.
 export default function FloatInput({
-  value, onValueChange, onClear, onFocus, onBlur, onKeyDown, className, title, ...props
+  value, onValueChange, onClear, formatValue = displayNumber, onFocus, onBlur, onKeyDown, className, title, ...props
 }: FloatInputProps) {
   const { isZh } = useLanguage();
   const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
-  const text = draft ?? (value === undefined ? '' : displayNumber(value));
+  const text = draft ?? (value === undefined ? '' : formatValue(value));
   const error = isZh
     ? '请输入有效的有限数值，例如 -0.18 或 1e-3；按 Esc 恢复原值。'
     : 'Enter a finite number, such as -0.18 or 1e-3. Press Esc to restore the previous value.';
@@ -36,7 +37,7 @@ export default function FloatInput({
     inputMode="decimal"
     className={['float-input', className].filter(Boolean).join(' ')}
     aria-invalid={invalid || undefined}
-    title={invalid ? error : title}
+    title={invalid ? error : title ?? (value === undefined ? undefined : String(value))}
     value={text}
     onFocus={event => {
       setDraft(current => current ?? (value === undefined ? '' : String(value)));

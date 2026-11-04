@@ -1,4 +1,5 @@
 import type { Node, Edge } from '@xyflow/react';
+import { expressionMonitorKey } from '../sim/monitorIdentity';
 import { orderRanksByBarycenter } from './layoutUtils';
 import type {
   ExprNode, ExprValue, ExprProperty, ExprFunctionRef, ExprTable,
@@ -94,7 +95,7 @@ export function resetBlockIdCounter(): void {
  * Convert an expression tree into ReactFlow nodes and edges.
  * Returns the graph plus the ID of the root (output) node.
  */
-export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
+export function treeToGraph(expr: ExprNode, monitorOwner?: string): LayoutResult & { rootId: string } {
   resetBlockIdCounter();
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -104,29 +105,30 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
     id: string;
     expr: ExprNode;
     depth: number;
+    monitorPath: number[];
     childEdges: { sourceId: string; targetPort: number }[];
   }
 
   const infoMap = new Map<object, TreeNodeInfo>();
 
-  function assignDepth(e: ExprNode): number {
+  function assignDepth(e: ExprNode, monitorPath: number[]): number {
     if (infoMap.has(e)) return infoMap.get(e)!.depth;
 
     let depth = 0;
     const children = getChildren(e);
 
     if (children.length > 0) {
-      const maxChildDepth = Math.max(...children.map(c => assignDepth(c)));
+      const maxChildDepth = Math.max(...children.map((c, index) => assignDepth(c, [...monitorPath, index])));
       depth = maxChildDepth + 1;
     }
 
     const id = nextBlockId();
-    const info: TreeNodeInfo = { id, expr: e, depth, childEdges: [] };
+    const info: TreeNodeInfo = { id, expr: e, depth, monitorPath, childEdges: [] };
     infoMap.set(e, info);
     return depth;
   }
 
-  assignDepth(expr);
+  assignDepth(expr, [0]);
 
   // Group by depth for column assignment
   const byDepth = new Map<number, ExprNode[]>();
@@ -177,6 +179,8 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
         position: { x: 0, y: 0 },
         data: {
           exprNode: e,
+          monitorKey: monitorOwner ? expressionMonitorKey(monitorOwner, info.monitorPath) : undefined,
+          monitorKind: e.kind,
           blockDef: def,
           inputCount,
           blockId: info.id,
@@ -199,6 +203,7 @@ export function treeToGraph(expr: ExprNode): LayoutResult & { rootId: string } {
         targetHandle: `in-${portIdx}`,
         sourceHandle: 'out-0',
         type: 'smoothstep',
+        data: { monitorKey: monitorOwner ? expressionMonitorKey(monitorOwner, childInfo.monitorPath) : undefined, monitorKind: child.kind },
         animated: false,
       });
     });
@@ -321,7 +326,7 @@ function rebuildExprNode(original: ExprNode, children: ExprNode[]): ExprNode {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function getChildren(e: ExprNode): ExprNode[] {
+export function getChildren(e: ExprNode): ExprNode[] {
   switch (e.kind) {
     case 'value': case 'property': case 'function_ref': case 'table':
     case 'random': case 'urandom': case 'pi':

@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+const directory = await mkdtemp(path.join(tmpdir(), 'scene-monitor-plan-'));
+try {
+  const output = path.join(directory, 'signals.cjs');
+  await build({ entryPoints: [fileURLToPath(new URL('../client/src/sim/sceneSignals.ts', import.meta.url))], outfile: output, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+  const { SCENE_POSE_KEYS, sceneSignalKeys, mergeSceneMonitorKeys } = createRequire(import.meta.url)(output);
+  const scene = sceneSignalKeys('voliro_t');
+  assert.equal(scene.length, 19); assert.equal(scene[0], 'fcs/voliro_t/pitch-rad');
+  assert.ok(SCENE_POSE_KEYS.every(key => scene.includes(key)), 'all six measured position and attitude channels are subscribed');
+  const user = ['fcs/esc-out', '_monitor/value/n123'];
+  const merged = mergeSceneMonitorKeys(user, scene);
+  assert.ok(user.every(key => merged.includes(key)), 'user observations remain subscribed');
+  assert.ok(!merged.includes('fcs/esc-out[0]'), 'index-zero aliases use one subscription');
+  assert.equal(merged[0], 'fcs/voliro_t/pitch-rad');
+  const full = Array.from({ length: 32 }, (_, i) => `test/${i}`);
+  assert.deepEqual(new Set(mergeSceneMonitorKeys(full, scene)), new Set(full), 'a full user subscription is preserved');
+  const partial = mergeSceneMonitorKeys(full.slice(0, 30), scene);
+  assert.equal(partial.length, 32); assert.ok(partial.includes('fcs/voliro_t/pitch-rad'));
+  assert.deepEqual(mergeSceneMonitorKeys(user, []), [...user].sort(), 'leaving scene restores user signals');
+  assert.equal(sceneSignalKeys('F450').length, 8);
+  console.log('Scene monitor subscriptions: actual servo priority, merged user signals, alias deduplication, limits and restoration passed.');
+} finally { await rm(directory, { recursive: true, force: true }); }

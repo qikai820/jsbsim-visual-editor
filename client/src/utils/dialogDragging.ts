@@ -1,6 +1,7 @@
 // One gesture handler for the editor's modal windows, including windows rendered in portals.
 // Keep the selectors explicit so menus, resize handles, and editable content never start a drag.
 const dragTargets = [
+  ['.monitor-window > header', '.monitor-window'],
   ['.local-settings-dialog > header', '.local-settings-dialog'],
   ['.xml-diagnostic-dialog > header', '.xml-diagnostic-dialog'],
   ['.j23-guide-header', '.j23-guide-dialog'],
@@ -24,7 +25,7 @@ const dragTargets = [
 ] as const;
 
 const floatingRootSelector = [
-  '.local-settings-overlay', '.xml-modal-overlay', '.expr-modal-overlay',
+  '.monitor-window', '.local-settings-overlay', '.xml-modal-overlay', '.expr-modal-overlay',
   '.wizard-overlay', '.sim-config-overlay', '.sim-config-version-overlay',
   '.script-editor-overlay', '.lut-preview-overlay', '.xml-import-files-overlay',
   '.model-import-overlay', '.xml-source-overlay', '.xml-diagnostic-overlay',

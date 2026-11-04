@@ -7,6 +7,8 @@ import { spawn } from 'node:child_process';
 
 const source = await readFile(new URL('../../jsbsim_realtime/data/aviation/aircraft/H7/H7_Viztra.xml', import.meta.url), 'utf8');
 const voliroSource = await readFile(new URL('../../jsbsim_realtime/data/aviation/aircraft/voliro_t/VoliroTActuators.xml', import.meta.url), 'utf8');
+const voliroOutput = voliroSource.match(/<fcs_function\b[\s\S]*?<output>([^<]+)<\/output>/)?.[1];
+assert.ok(voliroOutput, 'Voliro fixture has an output to edit');
 const actualCandidate = process.argv[2] ? await readFile(process.argv[2], 'utf8') : null;
 const fixture = new URL('../client/.minimal-system-patch.html', import.meta.url);
 await writeFile(fixture, '<html><body>XML patch test</body></html>');
@@ -111,7 +113,7 @@ try {
     throw new Error(`${label}: first difference at ${index}; got ${JSON.stringify(actual.slice(index, index + 100))}, expected ${JSON.stringify(expected.slice(index, index + 100))}`);
   };
   assertExact(voliroUnchanged, voliroSource, 'Equivalent Voliro lookup tables retain original bytes');
-  assertExact(voliroEdited, voliroSource.replace('<output>fcs/voliro_t/thrust-lbf[0]</output>', '<output>fcs/test-output</output>'),
+  assertExact(voliroEdited, voliroSource.replace(`<output>${voliroOutput}</output>`, '<output>fcs/test-output</output>'),
     'An unrelated Voliro edit preserves all lookup table bytes');
   assert.ok(tableEditBlocked, 'A changed lookup table must not be silently discarded');
   assertExact(unchanged, source, 'Saving an unchanged system is byte-for-byte stable');

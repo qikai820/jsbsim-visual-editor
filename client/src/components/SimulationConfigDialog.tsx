@@ -1,3 +1,7 @@
+import { useFlowStore } from '../store/flowStore';
+import FloatInput from './FloatInput';
+import { environmentEdits, environmentFields, projectModelNames } from '../sim/runtimeParameters';
+import { submitRuntimeEdits } from '../store/runtimeTuningStore';
 import { useEffect, useMemo, useState } from 'react';
 import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
@@ -21,7 +25,7 @@ const variableCategory = (path: string): VariableCategory => {
 };
 const defaults = {
   version: 1,
-  runtime: { dt: 0.002, iterationsPerCycle: 1, catchupIterations: 4, realtimeFactor: 1, endBehavior: 'stop' },
+  runtime: { dt: 0.002, iterationsPerCycle: 1, catchupIterations: 4, realtimeFactor: 1, displayRateHz: 25, endBehavior: 'stop' },
   integrators: { rotationalRate: 1, translationalRate: 3, rotationalPosition: 1, translationalPosition: 4 },
   initial: { latitudeDeg: 0, longitudeDeg: 0, altitudeM: 0, rollDeg: 0, pitchDeg: 0, yawDeg: 0, airspeedMps: 0, trim: false },
   environment: { pressureSlPsf: 2116.22, temperatureBiasR: 0, relativeHumidityPct: 0, windNorthFps: 0, windEastFps: 0, windDownFps: 0, turbulenceType: 0, turbulenceWindspeed20ftFps: 0, turbulenceSeverity: 0 },
@@ -41,8 +45,8 @@ const merge = (source: any) => ({
   diagnostics: { ...defaults.diagnostics, ...source?.diagnostics },
 });
 
-function NumberField({ label, value, onChange, unit, step = 1, min }: any) {
-  return <label className="sim-config-field"><span>{label}</span><div><input type="number" value={value} step={step} min={min} onChange={e => onChange(Number(e.target.value))} />{unit && <em>{unit}</em>}</div></label>;
+function NumberField({ label, value, onChange, unit, step = 1, min, max, commit = false }: any) {
+  return <label className="sim-config-field"><span>{label}</span><div>{commit ? <FloatInput value={value} onValueChange={onChange} /> : <input type="number" value={value} step={step} min={min} max={max} onChange={e => onChange(Number(e.target.value))} />}{unit && <em>{unit}</em>}</div></label>;
 }
 function SimulationRateField({ dt, label, onChange }: { dt: number; label: string; onChange: (dt: number) => void }) {
   const rate = Number.isFinite(dt) && dt > 0 ? Math.round(1 / dt) : 0;
@@ -115,7 +119,16 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
     try { const saved = JSON.parse(localStorage.getItem(variableCacheKey) || '[]'); return Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : []; } catch { return []; }
   });
   const serialized = useMemo(() => JSON.stringify(config, null, 2), [config]);
-  const set = (group: string, key: string, value: any) => setConfig((current: any) => ({ ...current, [group]: { ...current[group], [key]: value } }));
+  const set = (group: string, key: string, value: any) => {
+    setConfig((current: any) => ({ ...current, [group]: { ...current[group], [key]: value } }));
+    if (group === 'environment') {
+      const project = useFlowStore.getState();
+      const node = project.nodes.find(node => node.data.componentType === 'environment');
+      const field = environmentFields.find(([, configKey]) => configKey === key)?.[0];
+      if (node && field && projectModelNames(project).includes(model)) project.updateNodeParams(node.id, { [field]: Number(value) });
+      else submitRuntimeEdits(environmentEdits({ [key]: Number(value) }), [model], Number(instanceId));
+    }
+  };
   const selectedVariables: string[] = Array.isArray(config.mcap.selectedVariables) ? config.mcap.selectedVariables : [];
   const criticalVariables: string[] = Array.isArray(config.mcap.criticalVariables) ? config.mcap.criticalVariables : [];
   const toggleVariable = (path: string) => {
@@ -323,16 +336,20 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
 
   const save = async () => {
     if (saving) return;
+    if (!Number.isInteger(config.runtime.displayRateHz) || config.runtime.displayRateHz < 1 || config.runtime.displayRateHz > 100) {
+      setStatus(tr('显示频率请输入 1～100 Hz 的整数。', 'Display rate must be an integer from 1 to 100 Hz.'));
+      return;
+    }
     const changedGroups = Object.keys(defaults).filter(key => key !== 'version' && JSON.stringify((config as any)[key]) !== JSON.stringify((baseline ? JSON.parse(baseline) : defaults as any)[key]));
     if (!window.confirm(isZh
-      ? `保存到仿真机：\n/mnt/sdcard/jsbsim/${path}\n\n变更分组：${changedGroups.join('、') || '无'}\n配置将在下次重新加载模型时生效。`
-      : `Save to simulator:\n/mnt/sdcard/jsbsim/${path}\n\nChanged groups: ${changedGroups.join(', ') || 'None'}\nThe configuration takes effect after the model is reloaded.`)) return;
+      ? `保存到仿真机：\n/mnt/sdcard/jsbsim/${path}\n\n变更分组：${changedGroups.join('、') || '无'}\n环境参数可实时应用；其他配置将在下次重新加载模型时生效。`
+      : `Save to simulator:\n/mnt/sdcard/jsbsim/${path}\n\nChanged groups: ${changedGroups.join(', ') || 'None'}\nEnvironment parameters support live updates; other configuration takes effect after model reload.`)) return;
     setSaving(true);
     setStatus(tr('正在写入仿真机SD卡并回读校验…', 'Writing to simulator SD card and verifying…'));
     try {
       await ftpUploadSimConfig(path, serialized);
       setBaseline(serialized);
-      setStatus(tr('已保存并回读校验，重新加载模型后生效', 'Saved and verified; reload the model to apply'));
+      setStatus(tr('已保存并回读校验；环境实时应用结果见调参提示，其他配置重新加载后生效', 'Saved and verified; see live tuning status for environment edits. Reload to apply other settings'));
     } catch (error: any) {
       setStatus(`${tr('保存失败，修改已保留', 'Save failed; edits retained')}: ${error?.message || error}`);
     } finally {
@@ -391,11 +408,12 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           {tab === '运行与时间' && <section><h3>{tr('运行与时间','Runtime & Time')}</h3><div className="sim-config-grid">
             <NumberField label={tr('仿真步长','Time step')} value={config.runtime.dt} step={0.0001} min={0.00001} unit="s" onChange={(v:any)=>set('runtime','dt',v)} />
             <SimulationRateField label={tr('仿真频率','Simulation rate')} dt={config.runtime.dt} onChange={v=>set('runtime','dt',v)} />
+            <NumberField label={tr('连线/示波器显示频率','Wire / scope display rate')} value={config.runtime.displayRateHz} min={1} max={100} unit="Hz" onChange={(v:number)=>set('runtime','displayRateHz',v)} />
             <NumberField label={tr('每周期迭代次数','Iterations per cycle')} value={config.runtime.iterationsPerCycle} min={1} onChange={(v:any)=>set('runtime','iterationsPerCycle',v)} />
             <NumberField label={tr('最大追赶迭代次数','Maximum catch-up iterations')} value={config.runtime.catchupIterations} min={1} onChange={(v:any)=>set('runtime','catchupIterations',v)} />
             <NumberField label={tr('实时倍率','Real-time factor')} value={config.runtime.realtimeFactor} step={0.1} min={0.1} unit="×" onChange={(v:any)=>set('runtime','realtimeFactor',v)} />
             <SelectField label={tr('脚本结束行为','End-of-script action')} value={config.runtime.endBehavior} onChange={(v:any)=>set('runtime','endBehavior',v)}><option value="stop">{tr('停止','Stop')}</option><option value="pause">{tr('暂停','Pause')}</option><option value="loop">{tr('循环','Loop')}</option></SelectField>
-          </div><div className="sim-config-plotjuggler">
+          </div><p>{tr('显示频率为任务机运行时的遥测发送频率，范围 1～100 Hz，保存到任务机并重新加载模型后生效。多通道和属性轮询时，单个信号的实际频率可能更低。', 'Display rate controls simulator telemetry from 1 to 100 Hz. Save to the simulator and reload the model to apply. Individual signals may update more slowly when channels or property-tree slices are rotated.')}</p><div className="sim-config-plotjuggler">
             <label htmlFor="sim-config-plot-rate">{tr('PlotJuggler 发送频率', 'PlotJuggler send rate')}</label>
             <div><input id="sim-config-plot-rate" type="number" min="0" max="200" step="1" value={plotRateInput}
               onChange={event => { setPlotRateInput(event.target.value); setPlotRateStatus(''); }}
@@ -413,16 +431,16 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
             {([['latitudeDeg',tr('纬度','Latitude'),'°'],['longitudeDeg',tr('经度','Longitude'),'°'],['altitudeM',tr('海拔','Altitude'),'m'],['rollDeg','Roll','°'],['pitchDeg','Pitch','°'],['yawDeg','Yaw','°'],['airspeedMps',tr('初始空速','Initial airspeed'),'m/s']] as const).map(([key,label,unit]) => <NumberField key={key} label={label} value={config.initial[key]} step={0.1} unit={unit} onChange={(v:any)=>set('initial',key,v)} />)}
             <label className="sim-config-check"><input type="checkbox" checked={config.initial.trim} onChange={e=>set('initial','trim',e.target.checked)} />{tr('启动时执行配平','Trim on startup')}</label>
           </div></section>}
-          {tab === '环境模型' && <section><h3>{tr('环境模型','Environment Model')}</h3><p>{tr('运行时由 JSBSim 的 FGStandardAtmosphere/FGWinds 读取；保存后需重新加载模型。','Applied through JSBSim FGStandardAtmosphere/FGWinds after reload.')}</p><div className="sim-config-grid">
-            <NumberField label={tr('海平面压力','Sea-level pressure')} value={config.environment.pressureSlPsf} step={0.01} min={0} unit="PSF" onChange={(v:any)=>set('environment','pressureSlPsf',v)} />
-            <NumberField label={tr('温度偏差','Temperature bias')} value={config.environment.temperatureBiasR} step={0.1} unit="R" onChange={(v:any)=>set('environment','temperatureBiasR',v)} />
-            <NumberField label={tr('相对湿度','Relative humidity')} value={config.environment.relativeHumidityPct} step={1} min={0} unit="%" onChange={(v:any)=>set('environment','relativeHumidityPct',v)} />
-            <NumberField label={tr('北向风','North wind')} value={config.environment.windNorthFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windNorthFps',v)} />
-            <NumberField label={tr('东向风','East wind')} value={config.environment.windEastFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windEastFps',v)} />
-            <NumberField label={tr('地向风','Down wind')} value={config.environment.windDownFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windDownFps',v)} />
+          {tab === '环境模型' && <section><h3>{tr('环境模型','Environment Model')}</h3><p>{tr('支持实时调参的运行端会立即应用环境修改并保持当前状态；保存后下次启动保留。','Environment edits apply live on a supported runtime. Save to retain them for the next start.')}</p><div className="sim-config-grid">
+            <NumberField commit label={tr('海平面压力','Sea-level pressure')} value={config.environment.pressureSlPsf} step={0.01} min={0} unit="PSF" onChange={(v:any)=>set('environment','pressureSlPsf',v)} />
+            <NumberField commit label={tr('温度偏差','Temperature bias')} value={config.environment.temperatureBiasR} step={0.1} unit="R" onChange={(v:any)=>set('environment','temperatureBiasR',v)} />
+            <NumberField commit label={tr('相对湿度','Relative humidity')} value={config.environment.relativeHumidityPct} step={1} min={0} unit="%" onChange={(v:any)=>set('environment','relativeHumidityPct',v)} />
+            <NumberField commit label={tr('北向风','North wind')} value={config.environment.windNorthFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windNorthFps',v)} />
+            <NumberField commit label={tr('东向风','East wind')} value={config.environment.windEastFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windEastFps',v)} />
+            <NumberField commit label={tr('地向风','Down wind')} value={config.environment.windDownFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windDownFps',v)} />
             <SelectField label={tr('湍流模型','Turbulence model')} value={String(config.environment.turbulenceType)} onChange={(v:any)=>set('environment','turbulenceType',Number(v))}><option value="0">0 · {tr('关闭','Off')}</option><option value="1">1 · Standard</option><option value="2">2 · Culp</option><option value="3">3 · MIL-SPEC</option><option value="4">4 · Tustin</option></SelectField>
-            <NumberField label={tr('20 ft 风速','20 ft wind speed')} value={config.environment.turbulenceWindspeed20ftFps} step={0.1} min={0} unit="ft/s" onChange={(v:any)=>set('environment','turbulenceWindspeed20ftFps',v)} />
-            <NumberField label={tr('湍流强度','Turbulence severity')} value={config.environment.turbulenceSeverity} step={1} min={0} unit="0–7" onChange={(v:any)=>set('environment','turbulenceSeverity',Math.min(7, Math.max(0, v)))} />
+            <NumberField commit label={tr('20 ft 风速','20 ft wind speed')} value={config.environment.turbulenceWindspeed20ftFps} step={0.1} min={0} unit="ft/s" onChange={(v:any)=>set('environment','turbulenceWindspeed20ftFps',v)} />
+            <NumberField commit label={tr('湍流强度','Turbulence severity')} value={config.environment.turbulenceSeverity} step={1} min={0} unit="0–7" onChange={(v:any)=>set('environment','turbulenceSeverity',Math.min(7, Math.max(0, v)))} />
           </div></section>}
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
             <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 MCAP 日志','Enable MCAP logging')}</label>

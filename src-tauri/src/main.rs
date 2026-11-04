@@ -7,6 +7,9 @@ mod load_diagnostics;
 mod xml_generator;
 mod expression_xml;
 mod sim_client;
+mod scene_telemetry;
+mod signal_monitor;
+mod runtime_tuning;
 mod flight_controller_status;
 mod telemetry_recorder;
 mod plotjuggler;
@@ -17,6 +20,7 @@ mod dataflow;
 mod jsbsim_process;
 mod ftp_sync;
 mod usb_file;
+mod storage_usage;
 mod transport;
 mod network_discovery;
 mod romfs_network;
@@ -399,6 +403,39 @@ fn get_sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         "latest": client.latest(),
         "packets": client.packet_count()
     }))
+}
+
+#[tauri::command]
+fn sim_runtime_snapshot(instance_id: u8) -> Option<serde_json::Value> { runtime_tuning::snapshot(instance_id) }
+
+#[tauri::command]
+async fn sim_runtime_apply(app: tauri::AppHandle, instance_id: u8, session: String, model: String, edits: Vec<runtime_tuning::Edit>) -> Result<serde_json::Value, String> {
+    let client = app.state::<AppState>().sim_client.lock().map_err(|e| e.to_string())?.clone();
+    run_blocking(move || runtime_tuning::apply(instance_id, &session, &model, &edits,
+        |bytes| client.send_monitor_packet(bytes).map_err(|e| e.to_string()))).await
+}
+
+#[tauri::command]
+fn sim_monitor_snapshot(app: tauri::AppHandle, instance_id: String) -> Result<Vec<serde_json::Value>, String> {
+    let id = instance_id.parse::<u8>().map_err(|_| "无效实例编号")?;
+    if !(1..=32).contains(&id) { return Err("无效实例编号".into()); }
+    if !external_sim_mode() {
+        let state = app.state::<AppState>();
+        let manager = state.jsbsim.lock().map_err(|e| e.to_string())?;
+        let status = if !manager.is_running() { "stopped" } else if manager.is_paused() { "paused" } else { "running" };
+        return Ok(vec![serde_json::json!({"kind":"monitor_status", "instance_id":"01", "state":status})]);
+    }
+    Ok(app.state::<AppState>().sim_client.lock().map_err(|e| e.to_string())?.monitor_snapshot(id))
+}
+
+#[tauri::command]
+async fn sim_monitor_subscribe(app: tauri::AppHandle, instance_id: u8, revision: u32, keys: Vec<String>) -> Result<(), String> {
+    let packets = signal_monitor::packets(instance_id, revision, &keys)?;
+    let client = app.state::<AppState>().sim_client.lock().map_err(|e| e.to_string())?.clone();
+    run_blocking(move || {
+        for packet in packets { client.send_monitor_packet(&packet).map_err(|e| e.to_string())?; }
+        Ok(())
+    }).await
 }
 
 #[tauri::command]
@@ -1163,6 +1200,11 @@ async fn usb_file_ping() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn usb_file_storage() -> Result<Vec<storage_usage::StorageUsage>, String> {
+    run_blocking(|| storage_usage::parse(&usb_file::nsh_execute(storage_usage::COMMAND)?)).await
+}
+
+#[tauri::command]
 async fn usb_file_list(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || Ok(serde_json::json!({ "path": path, "files": usb_file::list(&path)?, "source": "usb-bulk" }))).await
 }
@@ -1608,6 +1650,7 @@ fn main() {
                                 let _ = app_handle.emit("telemetry", data);
                             }
                         }
+                        let _ = app_handle.emit("scene-frames", scene_telemetry::snapshots());
                         instance_ticks = (instance_ticks + 1) % 8;
                         if instance_ticks == 0 {
                             let _ = app_handle.emit("sim-instances", client.instance_summaries());
@@ -1649,6 +1692,10 @@ fn main() {
             send_control,
             get_sim_status,
             sim_instance_snapshot,
+            sim_runtime_snapshot,
+            sim_runtime_apply,
+            sim_monitor_subscribe,
+            sim_monitor_snapshot,
             sim_instance_fields,
             sim_instance_control,
             sim_sync_time,
@@ -1695,6 +1742,7 @@ fn main() {
             ftp_upload_sim_config,
             usb_file_status,
             usb_file_ping,
+            usb_file_storage,
             usb_file_list,
             usb_file_list_with_modified,
             usb_file_read,

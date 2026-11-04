@@ -127,6 +127,8 @@ impl JsbsimManager {
 
         let mut child = Command::new(JSBSIM_BIN)
             .arg("--root=.")
+            .arg("--realtime")
+            .env("JSBSIM_MONITOR_PORT", "5803")
             .arg(format!("--script={}", script_path.display()))
             .arg(format!("--logdirectivefile={}", output_xml.display()))
             .current_dir(JSBSIM_ROOT)
@@ -163,6 +165,8 @@ impl JsbsimManager {
 
         let mut child = Command::new(JSBSIM_BIN)
             .arg("--root=.")
+            .arg("--realtime")
+            .env("JSBSIM_MONITOR_PORT", "5803")
             .arg(format!("--aircraft={}", model))
             .arg(format!("--logdirectivefile={}", output_xml.display()))
             .arg("--end=600")
@@ -431,6 +435,16 @@ impl JsbsimManager {
                             };
 
                             if text.is_empty() {
+                                continue;
+                            }
+
+                            if text.starts_with('{') {
+                                if let Ok(frame) = serde_json::from_str::<Value>(&text) {
+                                    crate::runtime_tuning::ingest(&frame);
+                                    if frame.get("kind").and_then(Value::as_str) == Some("signal_samples") {
+                                        let _ = app_handle.emit("telemetry", frame);
+                                    }
+                                }
                                 continue;
                             }
 

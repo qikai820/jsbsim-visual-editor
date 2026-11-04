@@ -1,4 +1,4 @@
-import { xmlContentEqual } from './xmlContentEqual';
+import { xmlContentEqual, xmlElementsEqual } from './xmlContentEqual';
 
 const MODELED_SYSTEM_CHILDREN = new Set([
   'property', 'function', 'fcs_function', 'channel',
@@ -89,7 +89,7 @@ function matchingChild(sourceParent: Element, candidate: Element, used: Set<Elem
   return directElements(sourceParent).find(child => !used.has(child) && identity(child) === wanted) || null;
 }
 
-type XmlSpan = {
+export type XmlSpan = {
   tag: string;
   start: number;
   openEnd: number;
@@ -99,7 +99,7 @@ type XmlSpan = {
 };
 type TextEdit = { start: number; end: number; text: string };
 
-function scanXmlSpans(xml: string): XmlSpan {
+export function scanXmlSpans(xml: string): XmlSpan {
   const roots: XmlSpan[] = [];
   const stack: XmlSpan[] = [];
   const tagEnd = (from: number): number => {
@@ -155,30 +155,21 @@ function scanXmlSpans(xml: string): XmlSpan {
   return roots[0];
 }
 
-// A generated 1D table may differ only in indentation and numeric spelling.
-// Require the same variables, row shapes and exact numeric values before
-// keeping the source bytes. Unknown table shapes remain protected.
+// Compatibility with the generator's explicit default lookup="row" on a 1D
+// table. All value/shape comparisons still go through the shared comparator.
 function equivalentLookupTable(source: Element, candidate: Element): boolean {
   if (source.tagName !== 'table' || candidate.tagName !== 'table') return false;
   const src = directElements(source), dst = directElements(candidate);
   if (src.length !== 2 || dst.length !== 2 ||
       src[0].tagName !== 'independentVar' || dst[0].tagName !== 'independentVar' ||
       src[1].tagName !== 'tableData' || dst[1].tagName !== 'tableData') return false;
-  const attrsMatch = (a: Element, b: Element) => Array.from(b.attributes).every(attr =>
-    a.getAttribute(attr.name) === attr.value ||
-    (a.tagName === 'independentVar' && attr.name === 'lookup' && attr.value === 'row' && !a.hasAttribute('lookup')));
-  if (!attrsMatch(source, candidate) || !attrsMatch(src[0], dst[0]) || !attrsMatch(src[1], dst[1])) return false;
-  if (src[0].getAttribute('lookup') && src[0].getAttribute('lookup') !== 'row') return false;
-  if (src[0].textContent?.trim() !== dst[0].textContent?.trim()) return false;
-  if (src[1].children.length || dst[1].children.length || src[1].getAttribute('breakPoint')) return false;
-  const rows = (element: Element) => (element.textContent || '').trim().split(/\r?\n/)
-    .map(line => line.trim()).filter(Boolean).map(line => line.split(/\s+/));
-  const a = rows(src[1]), b = rows(dst[1]);
-  const number = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
-  return a.length === b.length && a.every((row, i) => row.length === 2 && b[i].length === 2 &&
-    row.every((value, j) => number.test(value) && number.test(b[i][j]) &&
-      Number.isFinite(Number(value)) && Number(value) === Number(b[i][j]) &&
-      (!Number.isInteger(Number(value)) || Number.isSafeInteger(Number(value)))));
+  const a = source.cloneNode(true) as Element, b = candidate.cloneNode(true) as Element;
+  for (const table of [a, b]) {
+    const variable = table.children[0];
+    if (!variable.hasAttribute('lookup')) variable.setAttribute('lookup', 'row');
+  }
+  const serializer = new XMLSerializer();
+  return xmlContentEqual(serializer.serializeToString(a), serializer.serializeToString(b));
 }
 
 function patchSystemText(sourceXml: string, source: Element, candidate: Element): string {
@@ -207,7 +198,7 @@ function patchSystemText(sourceXml: string, source: Element, candidate: Element)
   };
   const visit = (original: Element, wanted: Element, span: XmlSpan): void => {
     if (original.tagName !== span.tag) throw new Error('XML 节点位置不匹配');
-    if (xmlContentEqual(serializer.serializeToString(original), serializer.serializeToString(wanted))) return;
+    if (xmlElementsEqual(original, wanted)) return;
 
     const sourceChildren = directElements(original);
     const candidateChildren = directElements(wanted);

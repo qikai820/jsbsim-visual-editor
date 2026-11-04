@@ -1,3 +1,4 @@
+import { expressionShape } from '../../sim/runtimeParameters';
 import { useState, useCallback, useRef, useMemo, useEffect, Component, type ReactNode } from 'react';
 import {
   ReactFlow, Background, Controls, MiniMap,
@@ -12,6 +13,11 @@ import {
   BLOCK_DEFS,
 } from '../../utils/expressionConverter';
 import FunctionBlockNode from './FunctionBlockNode';
+import { pendingExpressionIds } from './pendingOperators';
+import { MonitorGraphProvider, useMonitorGraph, monitorNodeTypes, MonitorBranch, PlainSignalEdge } from '../monitor/MonitorGraph';
+import { withSignalMonitor } from '../monitor/MonitoredEdge';
+import { useSignalMonitorStore } from '../../store/signalMonitorStore';
+import { addScopeInView } from '../monitor/scopePlacement';
 import ExpressionPalette from './ExpressionPalette';
 import { BlockPropertyPanel } from './BlockPropertyPanel';
 import { layoutExpressionNodes } from '../../utils/expressionLayout';
@@ -19,7 +25,8 @@ import ExpressionTextPanel from './ExpressionTextPanel';
 import { useExpressionModes } from './useExpressionModes';
 import './expressionModes.css';
 
-const nodeTypes = { functionBlock: FunctionBlockNode };
+const nodeTypes = { functionBlock: FunctionBlockNode, ...monitorNodeTypes };
+const edgeTypes = { smoothstep: withSignalMonitor(PlainSignalEdge), signal: withSignalMonitor(PlainSignalEdge), monitorBranch: MonitorBranch };
 
 // Error boundary
 class ExprErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
@@ -52,17 +59,20 @@ class ExprErrorBoundary extends Component<{ children: ReactNode }, { hasError: b
 
 interface ExpressionEditorProps {
   expression: ExprNode;
+  baselineExpression?: ExprNode | null;
+  monitorOwner?: string;
   onChange: (expr: ExprNode) => void;
+  onLiveChange?: (expr: ExprNode) => void;
   onBack: () => void;
   propertySource?: { signal: string; label: string } | null;
   onOpenPropertySource?: (signal: string) => void;
 }
 
-export default function ExpressionEditor({ expression, onChange, onBack, propertySource, onOpenPropertySource }: ExpressionEditorProps) {
+export default function ExpressionEditor({ expression, baselineExpression, monitorOwner, onChange, onLiveChange, onBack, propertySource, onOpenPropertySource }: ExpressionEditorProps) {
   // Convert expression tree to graph (only once on mount)
   const initial = useMemo(() => {
     resetBlockIdCounter();
-    return treeToGraph(expression);
+    return treeToGraph(expression, monitorOwner);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [nodes, setNodes] = useState<Node[]>(initial.nodes);
@@ -73,6 +83,8 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
   const rfInstance = useRef<ReactFlowInstance | null>(null);
 
   // Use refs to track latest state for callbacks
+  const pendingIds = useMemo(() => baselineExpression === undefined ? new Set<string>() : pendingExpressionIds(nodes, edges, baselineExpression), [nodes, edges, baselineExpression]);
+  const monitor = useMonitorGraph(`expr:${monitorOwner || 'anonymous'}`, nodes, edges);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -85,7 +97,7 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
   }, [rootId]);
 
   const replaceCanvas = useCallback((tree: ExprNode) => {
-    const graph = treeToGraph(tree);
+    const graph = treeToGraph(tree, monitorOwner);
     nodesRef.current = graph.nodes;
     edgesRef.current = graph.edges;
     setNodes(graph.nodes);
@@ -122,6 +134,7 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
 
   // Add a new block from palette
   const handleAddBlock = useCallback((kind: string) => {
+    if (kind === 'scope') { addScopeInView(`expr:${monitorOwner || 'anonymous'}`, rfInstance.current, rfWrapper.current); return; }
     const newExpr = createBlock(kind);
     const def = BLOCK_DEFS[kind];
     if (!def) return;
@@ -159,6 +172,7 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
 
   // Delete selected node
   const handleDelete = useCallback(() => {
+    if (selectedNodeId && useSignalMonitorStore.getState().project.scopes.some(scope => scope.id === selectedNodeId)) { useSignalMonitorStore.getState().removeScope(selectedNodeId); setSelectedNodeId(null); return; }
     if (!selectedNodeId || selectedNodeId === rootId) return;
     setNodes(ns => ns.filter(n => n.id !== selectedNodeId));
     setEdges(es => es.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId));
@@ -169,6 +183,12 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
   const handleUpdateNode = useCallback((updatedExpr: ExprNode) => {
     if (!selectedNodeId) return;
     try {
+      if (updatedExpr.kind === 'value' && monitorOwner) {
+        const before = currentGraphExpression();
+        const changed = nodesRef.current.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, exprNode: updatedExpr } } : n);
+        const after = graphToTree(changed, edgesRef.current, rootId);
+        if (before && after && expressionShape(before) === expressionShape(after)) (onLiveChange || onChange)(after);
+      }
       setNodes(ns => ns.map(n => {
         if (n.id !== selectedNodeId) return n;
         const def = BLOCK_DEFS[updatedExpr.kind];
@@ -188,7 +208,7 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
     } catch (e) {
       console.warn('[ExpressionEditor] handleUpdateNode error:', e);
     }
-  }, [selectedNodeId]);
+  }, [selectedNodeId, currentGraphExpression, rootId, onChange, onLiveChange, monitorOwner]);
 
   // Apply and go back
   const handleApply = useCallback(() => {
@@ -280,6 +300,10 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
           onDrop={(e) => {
             e.preventDefault();
             const kind = e.dataTransfer.getData('application/expression-block');
+            if (kind === 'scope' && rfInstance.current) {
+              addScopeInView(`expr:${monitorOwner || 'anonymous'}`, rfInstance.current, rfWrapper.current, rfInstance.current.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+              return;
+            }
             if (kind) {
               // Calculate drop position relative to the ReactFlow canvas
               if (rfInstance.current && rfWrapper.current) {
@@ -308,13 +332,14 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
             }
           }}
         >
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
+          <MonitorGraphProvider value={monitor.context}><ReactFlow
+            nodes={monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node)}
+            edges={monitor.edges}
+            onNodesChange={changes => { const modelChanges = monitor.filterChanges(changes); if (modelChanges.length) onNodesChange(modelChanges); }}
             onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
+            onConnect={connection => { if (!monitor.connect(connection)) onConnect(connection); }}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onInit={(instance) => { rfInstance.current = instance; }}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
@@ -330,7 +355,7 @@ export default function ExpressionEditor({ expression, onChange, onBack, propert
             <Background gap={20} size={1} />
             <Controls />
             <MiniMap />
-          </ReactFlow>
+          </ReactFlow></MonitorGraphProvider>
         </div>
 
         {/* Right: Property panel for selected block */}

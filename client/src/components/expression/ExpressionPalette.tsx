@@ -24,6 +24,7 @@ export default function ExpressionPalette({ onAddBlock }: ExpressionPaletteProps
       <div style={{ padding: '2px 6px', fontSize: 9, color: 'var(--text-muted)' }}>
         点击或拖拽添加到画布
       </div>
+      <button className="expr-palette-item monitor-palette-button" draggable onDragStart={event => handleDragStart(event, 'scope')} onClick={() => onAddBlock('scope')}>∿ 示波器 Scope</button>
       {CATEGORIES.map(cat => {
         const blocks = Object.values(BLOCK_DEFS).filter(b => b.category === cat.key);
         if (blocks.length === 0) return null;

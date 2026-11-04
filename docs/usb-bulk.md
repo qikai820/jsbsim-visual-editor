@@ -6,6 +6,14 @@ mass storage, a serial port, or a network adapter. The application's
 protocol. It shows the SD card and eMMC `data` filesystem as separate roots;
 operating-system file managers do not mount either filesystem.
 
+The two volume tabs at the top show total, used and available capacity with a
+usage bar. **eMMC (data)** reports the `/data` filesystem, not the entire raw
+eMMC device. Opening the window, refreshing, or completing a file change reads
+exact block counts from `cat /proc/fs/blocks` through the existing USB NSH
+channel; no firmware update is needed on boards supporting USB NSH and this
+procfs entry. Missing mounts and query errors are shown as unavailable, never
+as zero usage. Changing directories does not repeatedly query storage.
+
 Development identity: `VID 1209`, `PID 93a1`, interface 0. Allocate a unique
 production VID/PID before shipping hardware.
 

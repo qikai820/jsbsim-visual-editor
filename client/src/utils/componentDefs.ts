@@ -2,6 +2,8 @@ import { ComponentDef } from '../types';
 import { SERIAL_SENSOR_DEVICES } from './serialDevices';
 
 export const componentDefs: ComponentDef[] = [
+  { type: 'scope', label: '示波器 Scope', category: '观察', color: '#0891b2', icon: '∿',
+    description: '接到信号线上查看当前数值，打开后查看实时波形', params: {}, inputs: [{ id: 'scope-in', label: '信号' }], outputs: [] },
   {
     type: 'fuselage',
     label: '机身 Fuselage',

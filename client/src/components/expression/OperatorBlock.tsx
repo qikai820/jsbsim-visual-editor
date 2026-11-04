@@ -41,7 +41,7 @@ export default function OperatorBlock({ node, kind, value, table, inputs, output
     }
   }, [id, manual, minWidth, minHeight, resizing, w, h, updateNode]);
   useLayoutEffect(() => { updateInternals(id); }, [id, w, h, portKey, updateInternals]);
-  return <div className={`diagram-block ${selected ? 'selected' : ''}`} style={{ width: w, height: h }} title={title}>
+  return <div className={`diagram-block ${selected ? 'selected' : ''} ${data.pendingSync ? 'pending-sync' : ''}`} style={{ width: w, height: h }} title={data.pendingSync ? `${title || '运算块'}\n尚未保存到仿真机模型文件` : title}>
     <NodeResizer isVisible={selected} minWidth={minWidth} minHeight={minHeight} color="#2563eb"
       onResizeEnd={finishResize} />
     <NodeToolbar isVisible={selected} position={Position.Top} offset={12}>

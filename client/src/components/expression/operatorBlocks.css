@@ -4,6 +4,8 @@
   color: #172b4d; box-shadow: 0 1px 3px rgb(15 23 42 / 10%);
 }
 .diagram-block.selected { border-color: #2563eb; box-shadow: 0 0 0 2px rgb(37 99 235 / 12%); }
+.diagram-block.pending-sync, .diagram-block.pending-sync.selected { border-color: #dc2626; color: #b91c1c; background: #fff5f5; box-shadow: 0 0 0 1px rgb(220 38 38 / 25%); }
+.diagram-block.pending-sync .operator-symbol-table path[stroke="#2563eb"] { stroke: #dc2626; }
 .diagram-symbol-center { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .operator-symbol { width: calc(100% - 12px); height: calc(100% - 8px); max-height: 62px; overflow: visible; }
 .operator-symbol-table { width: calc(100% - 4px); height: calc(100% - 4px); max-height: none; }

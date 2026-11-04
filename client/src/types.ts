@@ -1,7 +1,7 @@
 import type { Node, Edge } from '@xyflow/react';
 
 export type ComponentType =
-  | 'fuselage' | 'wing' | 'htail' | 'vtail'
+  | 'scope' | 'fuselage' | 'wing' | 'htail' | 'vtail'
   | 'engine' | 'propeller'
   | 'landing_gear' | 'fuel_tank' | 'point_mass'
   | 'inertia' | 'aero_coefficients' | 'environment'

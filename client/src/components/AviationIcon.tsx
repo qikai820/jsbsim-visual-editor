@@ -1,6 +1,7 @@
 import type { ComponentType } from '../types';
 
 const paths: Record<ComponentType, string> = {
+  scope: 'M3 4h18v16H3z M5 12c3-10 5 10 8 0s5 10 6 0',
   fuselage: 'M12 2l2 7 6 3v2l-6-1-1 8h-2l-1-8-6 1v-2l6-3 2-7z',
   wing: 'M3 11l18-5-3 5 3 5-18-5z',
   htail: 'M4 10l16-3-2 4 2 4-16-3z',

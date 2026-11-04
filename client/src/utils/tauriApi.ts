@@ -1,5 +1,6 @@
 /** Tauri desktop IPC adapter. The standalone HTTP/web edition is removed. */
 import { validateXmlSource } from './xmlDiagnostics';
+import { compareXmlContent, parseXmlSemantics } from './xmlContentEqual';
 
 // Detect Tauri runtime
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -500,13 +501,9 @@ export async function ftpDownloadDsdl(file: string): Promise<string> {
   return result.content || '';
 }
 
-function comparableXml(xml: string): string {
-  return String(xml || '').replace(/\r\n?/g, '\n').trim();
-}
-
 function xmlChangePreview(remoteXml: string, localXml: string): string {
-  const remoteLines = comparableXml(remoteXml).split('\n');
-  const localLines = comparableXml(localXml).split('\n');
+  const remoteLines = remoteXml.split('\n');
+  const localLines = localXml.split('\n');
   const changes: string[] = [];
   let changedLines = 0;
   const total = Math.max(remoteLines.length, localLines.length);
@@ -529,6 +526,7 @@ async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote
   if (!isRemoteUploadEnabled()) {
     throw new Error('仿真机 XML 上传已关闭，请先在“本地配置”中启用');
   }
+  parseXmlSemantics(localXml);
   let remoteXml: string | null;
   try {
     remoteXml = await loadRemote();
@@ -543,11 +541,13 @@ async function confirmRemoteXmlUpdate(path: string, localXml: string, loadRemote
     if (!confirmed) throw new Error('用户取消新建 XML，仿真机文件未修改');
     return true;
   }
-  if (comparableXml(remoteXml) === comparableXml(localXml)) return false;
+  const comparison = compareXmlContent(remoteXml, localXml);
+  if (comparison.error) throw new Error(`${path}：${comparison.error}，已禁止上传`);
+  if (comparison.equal) return false;
   if (batchConfirmed) return true;
-  const preview = xmlChangePreview(remoteXml, localXml);
+  const preview = xmlChangePreview(comparison.left!.xml, comparison.right!.xml);
   const confirmed = window.confirm(
-    `即将更新仿真机 XML：\n/mnt/sdcard/jsbsim/${path}\n\n请比较以下变更：\n\n${preview}\n\n确认覆盖原文件吗？`
+    `即将更新仿真机 XML：\n/mnt/sdcard/jsbsim/${path}\n\n请比较以下语义变更（规范化行号）：\n\n${preview}\n\n确认覆盖原文件吗？`
   );
   if (!confirmed) throw new Error('用户取消 XML 更新，仿真机文件未修改');
   return true;
@@ -626,6 +626,18 @@ export interface UsbFileEntry {
   directory: boolean;
   size: number;
   modified?: number | null;
+}
+
+export interface UsbStorageUsage {
+  volume: 'sd' | 'data';
+  mountPath: string;
+  totalBytes: number | null;
+  usedBytes: number | null;
+  availableBytes: number | null;
+}
+
+export async function usbFileStorage(): Promise<UsbStorageUsage[]> {
+  return call('usb_file_storage');
 }
 
 export async function usbFileStatus(): Promise<UsbFileStatus> {
@@ -823,14 +835,23 @@ export async function listenJsbsimLog(callback: EventCallback): Promise<() => vo
   return unlisten;
 }
 
-export async function listenTelemetry(callback: EventCallback): Promise<() => void> {
+export async function listenTelemetry(callback: EventCallback, retainForGlobalCleanup = true): Promise<() => void> {
   if (!isTauri) return () => {};
   await ensureTauri();
   const unlisten = await tauriListen('telemetry', (event: any) => {
     callback(event.payload);
   });
-  unlistenFns.push(unlisten);
+  if (retainForGlobalCleanup) unlistenFns.push(unlisten);
   return unlisten;
+}
+
+export async function listenSceneFrames(callback: (frames: Record<string, unknown>[]) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  await ensureTauri();
+  // This listener owns its cleanup; avoid retaining closed scene windows globally.
+  return tauriListen('scene-frames', (event: any) => {
+    if (Array.isArray(event.payload)) callback(event.payload);
+  });
 }
 
 export async function listenSimInstances(callback: (items: SimInstanceSummary[]) => void): Promise<() => void> {
@@ -875,4 +896,13 @@ export async function telemetryRecordStop(): Promise<TelemetryRecordingStatus> {
 }
 export async function telemetryRecordStatus(): Promise<TelemetryRecordingStatus> {
   return call('telemetry_record_status');
+}
+
+export async function simMonitorSubscribe(instanceId: number, revision: number, keys: string[]): Promise<void> {
+  if (!isTauri) return;
+  await call('sim_monitor_subscribe', { instanceId, revision, keys });
+}
+
+export async function simMonitorSnapshot(instanceId: string): Promise<any> {
+  return call('sim_monitor_snapshot', { instanceId });
 }

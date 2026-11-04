@@ -1,10 +1,12 @@
 import { create } from 'zustand';
+import { useSignalMonitorStore } from './signalMonitorStore';
 import {
   applyNodeChanges, applyEdgeChanges, addEdge,
   type Node, type Edge, type OnNodesChange, type OnEdgesChange, type Connection,
 } from '@xyflow/react';
 import { AircraftNodeData, ComponentType, ProjectXmlFile, SubFile, SubFileType } from '../types';
 import { getComponentDef } from '../utils/componentDefs';
+import type { ModelProject } from '../utils/modelChanges';
 import { defaultPwmCaptureChannel, getPwmCaptureChannels, PWM_CAPTURE_DEVICES } from '../utils/pwmCaptureConfig';
 
 interface FlowState {
@@ -14,6 +16,7 @@ interface FlowState {
   selectedNodeId: string | null;
   subFiles: SubFile[];
   xmlFiles: ProjectXmlFile[];
+  xmlEditBaseline: ModelProject | null;
   editingSubFileId: string | null;
   focusedNodeId: string | null;
 
@@ -27,7 +30,8 @@ interface FlowState {
   setSelectedNode: (id: string | null) => void;
   setFocusedNodeId: (id: string | null) => void;
   setAircraft: (aircraft: { name: string; version: string; release: string }) => void;
-  loadProject: (data: { nodes: Node<AircraftNodeData>[]; edges: Edge[]; aircraft: any; subFiles?: SubFile[]; xmlFiles?: ProjectXmlFile[] }) => void;
+  loadProject: (data: { nodes: Node<AircraftNodeData>[]; edges: Edge[]; aircraft: any; subFiles?: SubFile[]; xmlFiles?: ProjectXmlFile[]; xmlEditBaseline?: ModelProject }) => void;
+  restoreModelContent: (data: ModelProject) => void;
   clearAll: () => void;
   restoreLayout: () => void;
 
@@ -46,6 +50,9 @@ export function resolveNodeOwnedPath(node: Node<AircraftNodeData> | undefined): 
   if (!['system', 'flight_control', 'engine', 'propeller'].includes(type)) return '';
   const params = node.data.params || {};
   let raw = String(params.referencePath || params._source_file || params.file || '').trim();
+  // A parsed inline module already belongs to the main XML. Legacy name-based
+  // recovery must not turn opening it into a new external file reference.
+  if (!raw && params.source?.category === 'main' && params.source?.path) return '';
   // v2 cached projects expanded referenced files but discarded their `file`
   // attribute. Recover the well-known F450 module ownership from the module
   // identity so editing an old cached sensor cannot fall back to F450.xml.
@@ -174,6 +181,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   selectedNodeId: null,
   subFiles: [],
   xmlFiles: [],
+  xmlEditBaseline: null,
   editingSubFileId: null,
   focusedNodeId: null,
 
@@ -263,6 +271,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   addNode: (type, position) => {
+    if (type === 'scope') { useSignalMonitorStore.getState().addScope('main', position); return; }
     const def = getComponentDef(type);
     if (!def) return;
     // JSBSim owns one global atmosphere/wind model per FGFDMExec instance.
@@ -319,18 +328,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const nextNodes = state.nodes.map(n =>
       n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...params } } } : n
     );
-    const sourcePath = resolveNodeOwnedPath(node) || String(node?.data.params?.source?.path || '').trim();
-    // Canvas-only layout metadata is stored with the node but is not part of
-    // the referenced JSBSim XML. Marking it dirty caused a harmless drag to
-    // regenerate and upload a System child file.
-    const changesXml = changedKeys.some(key => key !== 'layout');
-    const topLevelIo = ['input', 'output', 'uavcan'].includes(node.data.componentType);
-    const xmlFiles = changesXml && (sourcePath || topLevelIo)
-      ? state.xmlFiles.map(file => topLevelIo
-        ? (file.category === 'main' ? { ...file, dirty: true } : file)
-        : (file.path === sourcePath ? { ...file, dirty: true } : file))
-      : state.xmlFiles;
-    set({ nodes: nextNodes, xmlFiles });
+    set({ nodes: nextNodes });
   },
 
   restoreLayout: () => {
@@ -344,8 +342,10 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   setAircraft: (aircraft) => set({ aircraft }),
 
   loadProject: (data) => {
+    useSignalMonitorStore.getState().load((data as any).monitoring);
     const ownedNodes = data.nodes.map(normalizeNodeOwnership);
     set({
+      xmlEditBaseline: data.xmlEditBaseline || { aircraft: data.aircraft, nodes: ownedNodes, edges: data.edges, subFiles: data.subFiles || [], xmlFiles: data.xmlFiles || [] },
       nodes: (data as any).preserveLayout ? ownedNodes : compactDisplayNodes(ownedNodes),
       edges: data.edges,
       aircraft: data.aircraft || { name: 'Loaded Aircraft', version: '2.0', release: 'PRODUCTION' },
@@ -359,7 +359,15 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     nodeCounter = maxId;
   },
 
-  clearAll: () => set({ nodes: [], edges: [], selectedNodeId: null, subFiles: [], xmlFiles: [], editingSubFileId: null, focusedNodeId: null }),
+  restoreModelContent: (data) => {
+    // Restoring removed nodes/files must also reserve their IDs for future
+    // additions. Keep the editor baseline and live monitoring state intact.
+    nodeCounter = Math.max(nodeCounter, ...data.nodes.map(node => Number(node.id.match(/^node-(\d+)$/)?.[1]) || 0));
+    subFileCounter = Math.max(subFileCounter, ...(data.subFiles || []).map(file => Number(file.id.match(/^sf-(\d+)$/)?.[1]) || 0));
+    set({ ...data, subFiles: data.subFiles || [], xmlFiles: data.xmlFiles || [], selectedNodeId: null, editingSubFileId: null, focusedNodeId: null });
+  },
+
+  clearAll: () => { useSignalMonitorStore.getState().load(); set({ nodes: [], edges: [], selectedNodeId: null, subFiles: [], xmlFiles: [], xmlEditBaseline: null, editingSubFileId: null, focusedNodeId: null }); },
 
   addSubFile: (fileType, fileName) => {
     const id = `sf-${++subFileCounter}`;

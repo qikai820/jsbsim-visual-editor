@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+const directory=await mkdtemp(path.join(tmpdir(),'signal-history-'));
+try {
+  const output=path.join(directory,'history.cjs');
+  await build({entryPoints:[fileURLToPath(new URL('../client/src/sim/signalHistory.ts',import.meta.url))],outfile:output,bundle:true,platform:'node',format:'cjs',logLevel:'silent'});
+  const {SignalHistory}=createRequire(import.meta.url)(output), history=new SignalHistory();
+  for(let i=0;i<200000;i++)history.append(i/100,i===12345?1000:i===99999?-900:i===150000?null:Math.sin(i/100));
+  assert.equal(history.length,200000,'full run remains available beyond the old point/time caps');
+  assert.equal(history.firstTime,0);assert.equal(history.lastTime,1999.99);
+  const overview=history.range(0,2000,800);
+  assert.ok(overview.length<6600,'long-run overview geometry is bounded by plot width');
+  assert.ok(overview.some(p=>p.t===123.45&&p.value===1000),'short positive peak survives overview aggregation');
+  assert.ok(overview.some(p=>p.t===999.99&&p.value===-900),'negative peak survives overview aggregation');
+  assert.ok(overview.some(p=>p.value===null),'gaps cannot become continuous overview traces');
+  assert.ok(overview.every((p,i)=>i===0||p.t>=overview[i-1].t));
+  const zoom=history.range(123.4,123.5,800);
+  assert.equal(zoom.length,11);assert.equal(zoom[5].value,1000,'zoom reads original samples');
+  assert.deepEqual(history.nearest(123.451),{t:123.45,value:1000},'cursor uses raw samples, not summary approximations');
+  assert.equal(history.recent().length,30);
+  assert.equal(history.range(0,2000,800,1000).at(-1).t,9.99,'frozen count excludes later samples');
+  const paused=new SignalHistory();paused.append(0,1);paused.append(1,2);const count=paused.length;
+  paused.append(1,9);
+  assert.equal(paused.nearest(1,1,count).value,2,'freeze also excludes later samples at the same simulation time');
+  assert.equal(paused.nearest(1).value,9);
+  console.log('PASS: full-run retention, bounded overview, extrema/gaps, exact zoom/cursor and frozen snapshot limits');
+} finally {await rm(directory,{recursive:true,force:true})}

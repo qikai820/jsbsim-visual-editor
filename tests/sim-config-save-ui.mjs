@@ -92,6 +92,9 @@ try {
   ` });
   await send('Emulation.setDeviceMetricsOverride', { width: 1464, height: 800, deviceScaleFactor: 1, mobile: false });
   await send('Page.navigate', { url: baseUrl });
+  const workspace = `document.querySelector('.workspace-menu-trigger')`;
+  await until(workspace);
+  await evaluate(`${workspace}.click()`);
   const open = `[...document.querySelectorAll('button')].find(el => el.textContent.trim() === '⚙ Simulation')`;
   await until(open);
   await evaluate(`${open}.click()`);
@@ -112,6 +115,16 @@ try {
     field.dispatchEvent(new Event('input', {bubbles:true}));
   })()`);
   assert.equal(await evaluate(`${simRate}.value`), '250', 'fractional frequency is rejected');
+  const displayRate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('Wire / scope display rate'))?.querySelector('input')`;
+  await until(`${displayRate}.value === '25'`);
+  for (const invalid of ['0', '101', '25.5']) {
+    await evaluate(`(() => {const field=${displayRate};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,${JSON.stringify(invalid)});field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await evaluate(`document.querySelector('.sim-config-dialog footer .primary').click()`);
+    await until(`document.querySelector('.sim-config-dialog footer').textContent.includes('Display rate must be an integer from 1 to 100 Hz')`);
+    assert.equal(await evaluate('window.__uploads.length'),0,'invalid display rate cannot reach the task machine');
+  }
+  await evaluate(`(() => {const field=${displayRate};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'50');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  assert.equal(await evaluate(`${timeStep}.value`),'0.004','display frequency does not change the simulation timestep');
   const performanceTab = `[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'Performance & Safety')`;
   const usbDebug = `[...document.querySelectorAll('.sim-config-check')].find(el => el.textContent.includes('USB debug prints'))?.querySelector('input')`;
   await evaluate(`${performanceTab}.click()`);
@@ -146,14 +159,20 @@ try {
   assert.equal(await evaluate(`${save}.disabled`), true);
   assert.equal(await evaluate('JSON.parse(window.__stored).mcap.rateHz'), 400);
   assert.equal(await evaluate('JSON.parse(window.__stored).runtime.dt'), 0.004);
+  assert.equal(await evaluate('JSON.parse(window.__stored).runtime.displayRateHz'),50);
   assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), true);
   assert.match(await evaluate(`document.querySelector('.sim-config-dialog footer').textContent`), /Saved and verified/);
   const shot = await send('Page.captureScreenshot', {format:'png'});
   await writeFile('/tmp/jsbsim-config-save-ui.png', Buffer.from(shot.data, 'base64'));
   await evaluate(`document.querySelector('.sim-config-dialog > header > button').click()`);
   await until(`!document.querySelector('.sim-config-dialog')`);
+  await evaluate(`${workspace}.click()`);
   await evaluate(`${open}.click()`);
   await until(`document.querySelector('.sim-config-dialog')`);
+  await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'Runtime & Time').click()`);
+  await until(`${displayRate}.value === '50'`);
+  const displayShot = await send('Page.captureScreenshot', {format:'png'});
+  await writeFile('/tmp/jsbsim-display-rate-config.png',Buffer.from(displayShot.data,'base64'));
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'MCAP Logging').click()`);
   await until(`${rate}.value === '400'`);
   await evaluate(`${performanceTab}.click()`);
@@ -166,7 +185,7 @@ try {
   assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), false);
   const usbShot = await send('Page.captureScreenshot', {format:'png'});
   await writeFile('/tmp/jsbsim-usb-debug-config.png', Buffer.from(usbShot.data, 'base64'));
-  console.log('PASS: save progress, timeout recovery, retained edits, retry, reopen, USB debug default off and on/off persistence. Desktop IPC mocked.');
+  console.log('PASS: display rate default/range/save/reopen, independent simulation timestep; config save/retry and USB debug persistence. Desktop IPC mocked.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));

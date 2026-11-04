@@ -15,10 +15,15 @@ import {
   assignSignalEdgeRouting, collectPropertyNodes, insertProductTables,
 } from '../../utils/signalGraph';
 import SignalEdge from './SignalEdge';
+import { MonitorGraphProvider, useMonitorGraph, monitorNodeTypes, MonitorBranch, PlainSignalEdge } from '../monitor/MonitorGraph';
+import { withSignalMonitor } from '../monitor/MonitoredEdge';
+import { useSignalMonitorStore } from '../../store/signalMonitorStore';
+import { addScopeInView } from '../monitor/scopePlacement';
 import { SignalEdgeActionsContext } from './signalEdgeActions';
 import type { Bendpoint } from '../edges/bendpoints';
 import { layoutSignalGraph } from '../../utils/signalLayout';
 import { routeSignalGraph } from '../../utils/signalRouting';
+import { pendingOperatorIds } from './pendingOperators';
 import FunctionBlockNode from './FunctionBlockNode';
 import SignalBlockNode from './SignalBlockNode';
 import SignalEndNode from './SignalEndNode';
@@ -31,6 +36,7 @@ import FormulaNotebook from './FormulaNotebook';
 import SignalPathInput from '../SignalPathInput';
 
 const nodeTypes = {
+  ...monitorNodeTypes,
   functionBlock: FunctionBlockNode,
   signalBlock: SignalBlockNode,
   signalEnd: SignalEndNode,
@@ -38,7 +44,9 @@ const nodeTypes = {
 
 // Custom edge that fans out wires sharing a handle (see SignalEdge). Stable
 // reference so ReactFlow doesn't warn about changing edgeTypes identity.
-const edgeTypes = { signal: SignalEdge };
+const MonitoredSignalEdge = withSignalMonitor(SignalEdge);
+const MonitoredPlainEdge = withSignalMonitor(PlainSignalEdge);
+const edgeTypes = { signal: MonitoredSignalEdge, smoothstep: MonitoredPlainEdge, monitorBranch: MonitorBranch };
 
 export interface ModuleExpression {
   id: string;
@@ -50,6 +58,7 @@ interface ModuleExpressionCanvasProps {
   expressions?: ModuleExpression[];
   onChange?: (id: string, expr: ExprNode) => void;
   channels?: any[];
+  baselineChannels?: any[] | null;
   topLevelProps?: string[];
   propertyDefinitions?: { name: string; attrs?: Record<string, string> }[];
   onPropertyValueChange?: (name: string, value: string) => void;
@@ -119,7 +128,7 @@ function buildMergedGraph(expressions: ModuleExpression[]) {
 
   expressions.forEach((exprItem, i) => {
     if (!exprItem.expression || !exprItem.expression.kind) return;
-    const sub = treeToGraph(exprItem.expression);
+    const sub = treeToGraph(exprItem.expression, exprItem.name);
     const prefix = `e${i}_`;
     const idMap = new Map<string, string>();
     let localMaxX = 0;
@@ -402,6 +411,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const layoutRequest = useRef(0);
   useEffect(() => () => { layoutRequest.current++; }, []);
 
+  const pendingIds = useMemo(() => props.baselineChannels === undefined ? new Set<string>() : pendingOperatorIds(nodes, props.baselineChannels), [nodes, props.baselineChannels]);
+  const monitor = useMonitorGraph(props.modelId || props.title || 'module', nodes, edges);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -531,7 +542,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     if (!expr || !expr.kind) return;
     if (expandedFnId && expandedFnId !== fnId) collapseFunction(expandedFnId);
 
-    const sub = treeToGraph(expr);
+    const sub = treeToGraph(expr, carrier.data.name);
     const pref = (id: string) => `${fnId}/exp/${id}`;
     const subNodes = sub.nodes.map(n => ({
       ...n,
@@ -540,7 +551,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     }));
     const subEdges = sub.edges.map(e => ({
       ...e, id: pref(e.id), source: pref(e.source), target: pref(e.target),
-      data: { kind: 'expr-internal', ownerId: fnId },
+      data: { ...e.data, kind: 'expr-internal', ownerId: fnId },
     }));
     // Align the subgraph root to the carrier's position (root is the rightmost column).
     const rootOld = sub.nodes.find(n => n.id === sub.rootId)!.position;
@@ -592,6 +603,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // Add a new operator block into the currently-expanded subgraph.
   const handleAddExprBlock = useCallback((kind: string) => {
+    if (kind === 'scope') { addScopeInView(props.modelId || props.title || 'module', rfInstance.current, rfWrapper.current); return; }
     if (!expandedFnId) return;
     const newExpr = createBlock(kind);
     const def = BLOCK_DEFS[kind];
@@ -646,7 +658,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       return next;
     });
   }, []);
-  const onNodeDragStop = useCallback(() => {
+  const onNodeDragStop = useCallback((_: unknown, node: Node, draggedNodes: Node[] = []) => {
+    if ([node, ...draggedNodes].every(item => item.type === 'monitorScope' || item.type === 'monitorTap')) return;
     if (isSignal) {
       setTimeout(() => commitSignal(nodesRef.current), 0);
     } else {
@@ -855,7 +868,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     const d = node.data;
     if (d?.kind === 'tablePreview') {
       setSelectedNodeId(node.id);
-      setLutPreviewId(String(d.ownerId));
+      setLutPreviewId(node.id);
       return;
     }
     if (d?.kind === 'component' && d.itemType === 'aero_table') {
@@ -903,6 +916,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // ── Add / delete components (signal mode) ──
   const handleAddComponent = useCallback((type: string, dropPosition?: { x: number; y: number }) => {
+    if (type === 'scope') { addScopeInView(props.modelId || props.title || 'module', rfInstance.current, rfWrapper.current, dropPosition); return; }
     const meta = COMPONENT_META[type] || { label: type, icon: '•', color: '#64748b' };
     const id = `c-new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const inputs = type === 'constant' ? [] : SINGLE_INPUT_TYPES.has(type) ? [''] : ['', ''];
@@ -959,6 +973,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   }, [commitSignal]);
 
   const handleDelete = useCallback(() => {
+    if (selectedNodeId && useSignalMonitorStore.getState().project.scopes.some(scope => scope.id === selectedNodeId)) { useSignalMonitorStore.getState().removeScope(selectedNodeId); setSelectedNodeId(null); return; }
     if (!selectedNodeId) return;
     const sel: any = nodesRef.current.find(n => n.id === selectedNodeId);
     if (!sel) return;
@@ -1007,6 +1022,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // ── Expr-mode add/edit (kept for aero / propulsion tables) ──
   const handleAddBlock = useCallback((kind: string) => {
+    if (kind === 'scope') { addScopeInView(props.modelId || props.title || 'module', rfInstance.current, rfWrapper.current); return; }
     const newExpr = createBlock(kind);
     const def = BLOCK_DEFS[kind];
     if (!def) return;
@@ -1110,13 +1126,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             handleAddComponent(type, rfInstance.current.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
           }}
         >
-          <SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, updateFanoutRoute, persistBendpoints }}>
+          <MonitorGraphProvider value={monitor.context}><SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, updateFanoutRoute, persistBendpoints }}>
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
+            nodes={monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node)}
+            edges={monitor.edges}
+            onNodesChange={changes => { const modelChanges = monitor.filterChanges(changes); if (modelChanges.length) onNodesChange(modelChanges); }}
             onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
+            onConnect={connection => { if (!monitor.connect(connection)) onConnect(connection); }}
             onNodeDragStop={onNodeDragStop}
             nodeTypes={nodeTypes}
             onInit={(instance) => { rfInstance.current = instance; }}
@@ -1144,14 +1160,17 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             <Controls />
             <MiniMap />
           </ReactFlow>
-          </SignalEdgeActionsContext.Provider>
+          </SignalEdgeActionsContext.Provider></MonitorGraphProvider>
         </div>
 
         <div className="expr-props">
           {editingExprId && editingNode ? (
             <ExpressionEditor
               expression={(editingNode.data as any).expression as ExprNode}
+              baselineExpression={props.baselineChannels === undefined ? undefined : (props.baselineChannels ? (buildSignalGraph(props.baselineChannels).nodes.find(n => n.id === editingNode.id)?.data.expression as ExprNode | undefined) || null : null)}
+              monitorOwner={String(editingNode.data.name || '')}
               onChange={handleExprSave}
+              onLiveChange={expr => updateComponent(editingNode.id, { expression: expr })}
               onBack={() => setEditingExprId(null)}
               propertySource={(() => {
                 const expr = (editingNode.data as any).expression as ExprNode;
@@ -1174,13 +1193,14 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
               onChange={(patch) => updateComponent(selectedNode.id, patch)}
               onDelete={handleDelete}
               onEditExpression={((selectedNode.data as any).itemType === 'function' || (selectedNode.data as any).itemType === 'fcs_function')
-                ? () => setEditingExprId(selectedNode.id) : undefined}
+                ? () => setEditingExprId(selectedNode.id) : (selectedNode.data as any).itemType === 'aero_table'
+                  ? () => setLutPreviewId(selectedNode.id) : undefined}
             />
           ) : selectedNode && (selectedNode.data as any)?.kind === 'tablePreview' ? (
             <div className="expr-props-empty">
               <p>{String((selectedNode.data as any).expression?.tableType || '')} 插值表</p>
               <p className="expr-props-hint">输入：{((selectedNode.data as any).inputs || []).join('、')}</p>
-              <button onClick={() => setLutPreviewId(String((selectedNode.data as any).ownerId))}>查看插值数据</button>
+              <button onClick={() => setLutPreviewId(selectedNode.id)}>3D 预览与编辑数据</button>
               <button onClick={() => setEditingExprId(String((selectedNode.data as any).ownerId))}>编辑所属函数</button>
             </div>
           ) : selectedNode && (selectedNode.data as any)?.kind === 'signal' ? (
@@ -1246,6 +1266,18 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         <LutTablePreview
           title={String((lutPreviewNode.data as any).name || (lutPreviewNode.data as any).outputSignal || '插值表')}
           expression={(lutPreviewNode.data as any).expression as ExprNode}
+          onChange={expression => {
+            const data = lutPreviewNode.data as any;
+            if (data.kind === 'tablePreview') {
+              const owner = nodesRef.current.find(node => node.id === data.ownerId);
+              const root = owner?.data.expression as ExprNode | undefined;
+              if (root?.kind !== 'product') return;
+              const next = { ...root, children: root.children.map((child, index) => index === data.factorIndex ? expression : child) };
+              updateComponent(String(data.ownerId), { expression: next, inputs: collectPropertyNodes(next).map(property => property.name) });
+            } else {
+              updateComponent(lutPreviewNode.id, { expression, inputs: collectPropertyNodes(expression).map(property => property.name) });
+            }
+          }}
           onClose={() => setLutPreviewId(null)}
         />
       )}
@@ -1273,6 +1305,7 @@ function SignalPalette({ onAdd }: { onAdd: (type: string) => void }) {
   return (
     <div className="expr-palette">
       <div className="expr-palette-title">组件</div>
+      <button className="expr-palette-item monitor-palette-button" draggable onDragStart={event => { event.dataTransfer.setData('application/signal-component', 'scope'); event.dataTransfer.effectAllowed = 'copy'; }} onClick={() => onAdd('scope')}>∿ 示波器 Scope</button>
       <div className="expr-palette-items">
         {COMPONENT_PALETTE.map(type => {
           const meta = COMPONENT_META[type] || { label: type, icon: '•', color: '#64748b' };

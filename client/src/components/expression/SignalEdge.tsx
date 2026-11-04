@@ -83,7 +83,7 @@ export default function SignalEdge(props: EdgeProps) {
     state.nodes.filter(n => n.selected).map(n => n.id)
   );
   const flowNodes = useStore((state) => state.nodes);
-  const obstacles = useMemo(() => signalObstacles(flowNodes), [flowNodes]);
+  const obstacles = useMemo(() => signalObstacles(flowNodes.filter(node => !['monitorScope', 'monitorTap'].includes(node.type || ''))), [flowNodes]);
   const isHighlighted = selectedNodeIds.includes(source) || selectedNodeIds.includes(target);
   const showLabel = selected || hovered || isHighlighted;
   const edgeStyle = isHighlighted || selected

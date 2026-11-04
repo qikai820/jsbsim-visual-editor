@@ -46,6 +46,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
   const setParam = (field: string, value: string) => {
     const cur = data.compProps?.[field] || {};
     onChange({
+      ...(field === 'gain' ? { gains: [value, ...(data.gains || []).slice(1)] } : {}),
       compProps: {
         ...(data.compProps || {}),
         [field]: { value, attrs: cur.attrs || {} },
@@ -56,7 +57,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
   const nestedValue = (field: string, child: string): string =>
     String(data.compProps?.[field]?.children?.find((entry: any) => entry.name === child)?.value ?? '');
 
-  const setNestedParam = (field: 'domain' | 'range', child: 'min' | 'max', value: string) => {
+  const setNestedParam = (field: 'domain' | 'range' | 'clipto', child: 'min' | 'max', value: string) => {
     const current = data.compProps?.[field] || {};
     const children: any[] = current.children
       ? current.children.map((entry: any) => ({ ...entry }))
@@ -85,6 +86,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
   };
 
   const setClip = (which: 'cliptoMin' | 'cliptoMax', value: string) => {
+    if (data.compProps?.clipto) { setNestedParam('clipto', which === 'cliptoMin' ? 'min' : 'max', value); return; }
     onChange({ [which]: value === '' ? undefined : value });
   };
 
@@ -124,7 +126,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
       {data.itemType === 'constant' && (
         <div className="field-row">
           <label>常数值</label>
-          <DisplayNumberInput value={String(data.compProps?.constant?.value ?? '0')}
+          <DisplayNumberInput commitOnBlur value={String(data.compProps?.constant?.value ?? '0')}
             onChange={event => setParam('constant', event.target.value)} />
         </div>
       )}
@@ -147,22 +149,22 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
         ))}
       </>}
 
-      {(data.itemType === 'function' || data.itemType === 'fcs_function') && (
+      {(data.itemType === 'function' || data.itemType === 'fcs_function' || data.compProps?.clipto) && (
         <>
           <div className="prop-divider" />
           <div className="comp-prop-subtitle">输出限幅 clipto</div>
           <div className="field-row">
             <label>下限 min</label>
-            <DisplayNumberInput
-              value={data.cliptoMin ?? ''}
+            <DisplayNumberInput commitOnBlur
+              value={data.cliptoMin ?? nestedValue('clipto', 'min')}
               onChange={e => setClip('cliptoMin', e.target.value)}
               placeholder="如 0.0"
             />
           </div>
           <div className="field-row">
             <label>上限 max</label>
-            <DisplayNumberInput
-              value={data.cliptoMax ?? ''}
+            <DisplayNumberInput commitOnBlur
+              value={data.cliptoMax ?? nestedValue('clipto', 'max')}
               onChange={e => setClip('cliptoMax', e.target.value)}
               placeholder="如 0.9999"
             />
@@ -177,7 +179,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           {(['min', 'max'] as const).map(bound => (
             <div className="field-row" key={`domain-${bound}`}>
               <label>{bound === 'min' ? '下限 min' : '上限 max'}</label>
-              <DisplayNumberInput value={nestedValue('domain', bound)}
+              <DisplayNumberInput commitOnBlur value={nestedValue('domain', bound)}
                 placeholder={bound === 'min' ? '-1' : '1'}
                 onChange={e => setNestedParam('domain', bound, e.target.value)} />
             </div>
@@ -187,7 +189,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
           {(['min', 'max'] as const).map(bound => (
             <div className="field-row" key={`range-${bound}`}>
               <label>{bound === 'min' ? '下限 min' : '上限 max'}</label>
-              <DisplayNumberInput value={nestedValue('range', bound)}
+              <DisplayNumberInput commitOnBlur value={nestedValue('range', bound)}
                 onChange={e => setNestedParam('range', bound, e.target.value)} />
             </div>
           ))}
@@ -198,7 +200,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
         <>
           <div className="prop-divider" />
           <button className="ae-open-expr-btn" style={{ width: '100%' }} onClick={onEditExpression}>
-            📐 编辑函数表达式
+            {data.itemType === 'aero_table' ? '▦ 3D 预览与编辑数据' : '📐 编辑函数表达式'}
           </button>
         </>
       )}
@@ -214,7 +216,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
               <label>{PARAM_LABELS[field] || field}</label>
               {field === 'property' || field === 'properties' || field === 'input' || field === 'output' || field.startsWith('hil_')
                 ? <SignalPathInput value={String(v.value ?? '')} onChange={value => setParam(field, value)} multiple={field === 'properties'} />
-                : <DisplayNumberInput value={String(v.value ?? '')} onChange={e => setParam(field, e.target.value)} />}
+                : <DisplayNumberInput commitOnBlur value={String(v.value ?? '')} onChange={e => setParam(field, e.target.value)} />}
             </div>
           ))}
         </>

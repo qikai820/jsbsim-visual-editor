@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useRef, Component, type ReactNode, Suspense } from 'react';
+import { useState, useCallback, useEffect, useRef, Component, type ReactNode, Suspense, lazy } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
+import RuntimeTuningPanel from './components/RuntimeTuningPanel';
 import XmlDiagnosticDialog from './components/XmlDiagnosticDialog';
 import Palette from './components/Palette';
 import Canvas from './components/Canvas';
@@ -13,13 +14,21 @@ import LogCenter from './components/LogCenter';
 import MultiSimPanel from './components/MultiSimPanel';
 import { useSimSocket, type Telemetry } from './sim/useSimSocket';
 import { resolveNodeOwnedPath, useFlowStore } from './store/flowStore';
+import { cachedEditBaseline } from './utils/modelChanges';
 import type { ComponentType } from './types';
 import './App.css';
+import './components/monitor/monitor.css';
+import ScopeWindow from './components/monitor/ScopeWindow';
+import { useSignalMonitor } from './sim/useSignalMonitor';
+import { sceneSignalKeys, type SceneMonitorTarget } from './sim/sceneSignals';
+import { useSignalMonitorStore } from './store/signalMonitorStore';
 import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simInstanceControl, simInstanceSnapshot, simSyncTime, usbConsoleRead, type SimInstanceSummary } from './utils/tauriApi';
 import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
 import { extractOutputSignal, type ChannelItem } from './utils/signalGraph';
 import { installDialogDragging } from './utils/dialogDragging';
 import { defaultFleetSlots, fleetSlotIds, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, normalizeFleetSlots, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from './utils/fleetModelGroups';
+
+const FlightScene = lazy(() => import('./components/flight-scene/FlightScene'));
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -208,9 +217,6 @@ function AppContent() {
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
   const [showNshPrints, setShowNshPrints] = useState(() => localStorage.getItem('jsbsim-log-show-nsh') === 'true');
   const nshCursor = useRef(0);
-  const [xmlChangeNotice, setXmlChangeNotice] = useState<string[]>([]);
-  const [modifiedXmlFiles, setModifiedXmlFiles] = useState<string[]>([]);
-  const xmlNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [logReservedHeight, setLogReservedHeight] = useState(82);
   const [dragType, setDragType] = useState<ComponentType | null>(null);
   const [paletteCollapsed, setPaletteCollapsed] = useState(() => localStorage.getItem('jsbsim-palette-collapsed') === 'true');
@@ -218,8 +224,10 @@ function AppContent() {
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLogCenter, setShowLogCenter] = useState(false);
-  const [workspace, setWorkspace] = useState<'editor' | 'multi'>(() =>
-    new URLSearchParams(window.location.search).get('workspace') === 'multi' ? 'multi' : 'editor');
+  const [workspace, setWorkspace] = useState<'editor' | 'multi' | 'scene'>(() => {
+    const requested = new URLSearchParams(window.location.search).get('workspace');
+    return requested === 'multi' || requested === 'scene' ? requested : 'editor';
+  });
   const [multiConfigEdited, setMultiConfigEdited] = useState(false);
   const [fleetBusy, setFleetBusy] = useState(false);
   const [fleetError, setFleetError] = useState('');
@@ -237,6 +245,25 @@ function AppContent() {
   const logWindowRef = useRef<HTMLDivElement | null>(null);
   const followLogTailRef = useRef(true);
   const { telemetry, connected } = useSimSocket();
+  const [sceneMonitorTarget, setSceneMonitorTarget] = useState<SceneMonitorTarget | null>(null);
+  useSignalMonitor(sceneMonitorTarget?.instance ?? activeInstance,
+    sceneMonitorTarget ? sceneSignalKeys(sceneMonitorTarget.model) : []);
+  const armedScope = useSignalMonitorStore(state => state.armedScope);
+  const monitorWindow = useSignalMonitorStore(state => state.openScope);
+  const monitorError = useSignalMonitorStore(state => state.error);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = useSignalMonitorStore.subscribe((next, previous) => {
+      if (next.project === previous.project) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const current = useFlowStore.getState();
+        localStorage.setItem('jsbsim-project', JSON.stringify({ nodes: current.nodes, edges: current.edges, aircraft: current.aircraft, subFiles: current.subFiles, xmlFiles: current.xmlFiles, xmlEditBaseline: cachedEditBaseline(current, current.xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
+      }, 250);
+    });
+    return () => { stop(); clearTimeout(timer); };
+  }, []);
+  useEffect(() => { const cancel = (event: KeyboardEvent) => { if (event.key === 'Escape') useSignalMonitorStore.setState({ armedScope: null, openScope: null }); }; window.addEventListener('keydown', cancel); return () => window.removeEventListener('keydown', cancel); }, []);
   const [editorSnapshot, setEditorSnapshot] = useState<SimInstanceSummary | null>(null);
   useEffect(() => {
     if (!isTauri || workspace !== 'editor' || activeInstance === '01') { setEditorSnapshot(null); return; }
@@ -322,13 +349,13 @@ function AppContent() {
 
   const snapshotProject = useCallback(() => {
     const state = useFlowStore.getState();
-    return { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles };
+    return { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles, monitoring: useSignalMonitorStore.getState().project };
   }, []);
 
   useEffect(() => {
     historyCurrent.current = snapshotProject();
     return useFlowStore.subscribe(state => {
-      const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles };
+      const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles, monitoring: useSignalMonitorStore.getState().project };
       if (applyingHistory.current || JSON.stringify(next) === JSON.stringify(historyCurrent.current)) return;
       const previous = historyCurrent.current;
       // Loading another aircraft replaces the whole project in one store
@@ -342,66 +369,16 @@ function AppContent() {
         redoStack.current = [];
         if (historyBurst.current) clearTimeout(historyBurst.current);
         historyBurst.current = null;
-        setModifiedXmlFiles([]);
         return;
       }
-      if (previous) {
-        const mainFile = (state.xmlFiles || []).find(file => file.category === 'main')?.path ||
-          `${state.aircraft.name || 'aircraft'}.xml`;
-        const files = new Set<string>();
-        if (JSON.stringify(previous.aircraft) !== JSON.stringify(next.aircraft) || JSON.stringify(previous.edges) !== JSON.stringify(next.edges)) files.add(mainFile);
-        const previousNodes = new Map((previous.nodes || []).map((node: any) => [node.id, node]));
-        if ((previous.nodes || []).length !== next.nodes.length) files.add(mainFile);
-        for (const node of next.nodes) {
-          const oldNode: any = previousNodes.get(node.id);
-          const xmlData = (data: any) => ({
-            ...data,
-            params: Object.fromEntries(Object.entries(data?.params || {}).filter(([key]) => key !== 'layout')),
-          });
-          if (oldNode && JSON.stringify(xmlData(oldNode.data)) === JSON.stringify(xmlData(node.data))) continue;
-          const type = node.data?.componentType;
-          if (['input', 'output', 'uavcan', 'serial_hil'].includes(type)) files.add(mainFile);
-          if (type === 'serial_sensor') files.add(`config/models/${state.aircraft.name}.serial.xml`);
-          if (type === 'pwm_capture') files.add(`config/models/${state.aircraft.name}.pwm.xml`);
-          const rawSource = resolveNodeOwnedPath(node as any) || node.data?.params?.source?.path;
-          if (rawSource) {
-            const source = String(rawSource).includes('/') ? String(rawSource) :
-              (type === 'system' || type === 'flight_control' ? `systems/${rawSource}` :
-                type === 'engine' || type === 'propeller' ? `engine/${rawSource}` : String(rawSource));
-            files.add(source.toLowerCase().endsWith('.xml') ? source : `${source}.xml`);
-          }
-        }
-        for (const oldNode of previous.nodes || []) {
-          if (next.nodes.some(node => node.id === oldNode.id)) continue;
-          if (oldNode.data?.componentType === 'serial_sensor') files.add(`config/models/${state.aircraft.name}.serial.xml`);
-          if (oldNode.data?.componentType === 'pwm_capture') files.add(`config/models/${state.aircraft.name}.pwm.xml`);
-        }
-        const previousSubFiles = new Map((previous.subFiles || []).map((file: any) => [file.id, file]));
-        for (const file of next.subFiles) {
-          if (JSON.stringify(previousSubFiles.get(file.id)) !== JSON.stringify(file)) files.add(file.fileName.toLowerCase().endsWith('.xml') ? file.fileName : `${file.fileName}.xml`);
-        }
-        if ((previous.subFiles || []).length !== next.subFiles.length) {
-          const currentNames = next.subFiles.map(file => file.fileName.toLowerCase().endsWith('.xml') ? file.fileName : `${file.fileName}.xml`);
-          currentNames.forEach(file => files.add(file));
-          files.add(mainFile);
-        }
-        if (files.size) {
-          const changed = Array.from(files);
-          setXmlChangeNotice(changed);
-          // An external system edit supersedes stale main-file notices left
-          // by an earlier edit in the same session. Otherwise the toast can
-          // keep showing aircraft/F450/F450.xml even though the current edit
-          // belongs to systems/SensorImu.xml.
-          const hasExternalChange = changed.some(file => !file.endsWith(`${mainFile}`) && !file.endsWith(`/${mainFile}`));
-          setModifiedXmlFiles(current => {
-            const cleaned = hasExternalChange
-              ? current.filter(file => !file.endsWith(`${mainFile}`) && !file.endsWith(`/${mainFile}`))
-              : current;
-            return Array.from(new Set([...cleaned, ...changed]));
-          });
-          if (xmlNoticeTimer.current) clearTimeout(xmlNoticeTimer.current);
-          xmlNoticeTimer.current = setTimeout(() => setXmlChangeNotice([]), 3600);
-        }
+      // Upload/readback advances XML source snapshots without changing the
+      // editable model. It must not create an undo step that restores stale
+      // source bytes while leaving parameter values unchanged.
+      const editable = (project: any) => JSON.stringify({ nodes: project.nodes, edges: project.edges,
+        aircraft: project.aircraft, subFiles: project.subFiles, monitoring: project.monitoring });
+      if (previous && editable(previous) === editable(next)) {
+        historyCurrent.current = next;
+        return;
       }
       if (!historyBurst.current && historyCurrent.current) undoStack.current.push(historyCurrent.current);
       redoStack.current = [];
@@ -411,9 +388,23 @@ function AppContent() {
     });
   }, [snapshotProject]);
 
+  useEffect(() => useSignalMonitorStore.subscribe((next, previous) => {
+    if (next.project === previous.project || applyingHistory.current) return;
+    if (!historyBurst.current && historyCurrent.current) {
+      undoStack.current.push(historyCurrent.current);
+      if (undoStack.current.length > 100) undoStack.current.shift();
+    }
+    if (historyBurst.current) clearTimeout(historyBurst.current);
+    historyBurst.current = setTimeout(() => { historyBurst.current = null; }, 250);
+    redoStack.current = [];
+    historyCurrent.current = snapshotProject();
+  }), [snapshotProject]);
+
   const applySnapshot = useCallback((snapshot: any) => {
     applyingHistory.current = true;
-    useFlowStore.setState({ ...snapshot, selectedNodeId: null, focusedNodeId: null });
+    useSignalMonitorStore.setState({ project: snapshot.monitoring || { version: 1, labels: {}, scopes: [] } });
+    const { xmlFiles: _oldSources, ...editable } = snapshot;
+    useFlowStore.setState({ ...editable, selectedNodeId: null, focusedNodeId: null });
     historyCurrent.current = snapshot;
     queueMicrotask(() => { applyingHistory.current = false; });
   }, []);
@@ -582,8 +573,8 @@ function AppContent() {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         try {
-          const { nodes, edges, aircraft, subFiles, xmlFiles } = useFlowStore.getState();
-          localStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles, xmlFiles }));
+          const { nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline } = useFlowStore.getState();
+          localStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline: cachedEditBaseline({ nodes, edges, aircraft, subFiles, xmlFiles }, xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
         } catch (e) {
           console.warn('[AutoSave] Failed:', e);
         }
@@ -606,6 +597,12 @@ function AppContent() {
 
   // Module (flight_control / system) drill-down: when a module node is focused,
   // the main workspace area is replaced by its internal signal-flow canvas.
+  const [, refreshRemoteBaseline] = useState(0);
+  useEffect(() => {
+    const refresh = () => refreshRemoteBaseline(value => value + 1);
+    window.addEventListener('jsbsim-remote-baseline-changed', refresh);
+    return () => window.removeEventListener('jsbsim-remote-baseline-changed', refresh);
+  }, []);
   const focusedNode = useFlowStore((s) => s.nodes.find((n) => n.id === s.focusedNodeId) || null);
   const setFocusedNodeId = useFlowStore((s) => s.setFocusedNodeId);
   const updateNodeParams = useFlowStore((s) => s.updateNodeParams);
@@ -657,6 +654,25 @@ function AppContent() {
     } catch { /* ignore malformed */ }
   }
 
+  let baselineChannels: any[] | null = null;
+  if (focusedModule) {
+    try {
+      const model = localStorage.getItem('jsbsim-remote-model') || useFlowStore.getState().aircraft.name || '';
+      const key = `jsbsim-remote-baseline:${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+      const baseline = JSON.parse(localStorage.getItem(key) || '{}');
+      const old = baseline.nodes?.find((node: any) => node.id === focusedModule.id && node.data?.componentType === focusedModule.data.componentType);
+      if (old) {
+        const params = old.data.params || {};
+        if (focusedAero) baselineChannels = aeroCoefficientsToChannels(JSON.parse(params.coefficients || '[]'));
+        else {
+          const channels = JSON.parse(params.channels || '[]');
+          baselineChannels = focusedModule.data.componentType === 'system'
+            ? systemCanvasChannels(channels, JSON.parse(params.topLevelItems || '[]')) : channels;
+        }
+      }
+    } catch { /* A missing baseline cannot establish that blocks are synced. */ }
+  }
+
   const selectMultiInstanceFromToolbar = (id: string) => {
     if (id !== multiSelectedInstance && multiConfigEdited &&
         !window.confirm('当前模型配置尚未保存，切换实例会丢失本页修改。继续吗？')) return;
@@ -696,8 +712,6 @@ function AppContent() {
   const handleModelContextChange = () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
-    setModifiedXmlFiles([]);
-    setXmlChangeNotice([]);
     undoStack.current = [];
     redoStack.current = [];
     historyCurrent.current = snapshotProject();
@@ -749,20 +763,20 @@ function AppContent() {
         }}
         onModelContextChange={handleModelContextChange}
         onUndo={handleUndo} onRedo={handleRedo} onCopy={handleCopy} onPaste={handlePaste}
-        modifiedXmlFiles={modifiedXmlFiles} onSaveComplete={savedFiles => setModifiedXmlFiles(current => savedFiles ? current.filter(file => !savedFiles.includes(file)) : [])}
         jsbsimLogs={jsbsimLogs}
         onToggleJsbsimLog={() => setShowJsbsimLog(value => !value)}
         hudVisible={hudVisible}
         onToggleHud={() => setHudVisible(value => !value)}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
       {showLogCenter && <LogCenter onClose={() => setShowLogCenter(false)} />}
-      {xmlChangeNotice.length > 0 && <div className="xml-change-notice" role="status">
-        <span className="xml-change-notice-icon">✎</span>
-        <span><strong>编辑内容已修改</strong><small>影响文件：{xmlChangeNotice.join('、')}</small></span>
-        <button onClick={() => setXmlChangeNotice([])} aria-label="关闭提示">×</button>
-      </div>}
       <div className="main-content">
-        {workspace === 'multi' ? (
+        {workspace === 'scene' ? (
+          <Suspense fallback={<div style={{ padding: 24 }}>加载飞行视景…</div>}>
+            <FlightScene slots={instanceSlots} initialSelected={multiSelectedInstance}
+              onMonitorTargetChange={setSceneMonitorTarget}
+              onClose={() => setWorkspace('editor')} />
+          </Suspense>
+        ) : workspace === 'multi' ? (
           <MultiSimPanel connected={connected} singleTelemetry={telemetry} onFleetStateChange={setFleetState}
             selected={multiSelectedInstance} onSelect={setMultiSelectedInstance}
             slots={instanceSlots} onSlotsChange={change => {
@@ -822,6 +836,7 @@ function AppContent() {
               });
             }}
             modelId={focusedModule.id}
+            baselineChannels={baselineChannels}
             initialLayout={focusedLayout}
             onChannelsChange={(chs) => {
               if (focusedAero) {
@@ -881,6 +896,10 @@ function AppContent() {
         </div>
       )}
 
+      {workspace !== 'scene' && <RuntimeTuningPanel />}
+      {monitorWindow && <ScopeWindow key={monitorWindow} />}
+      {monitorError && <div className="monitor-connection-hint" style={{ bottom: 80 }}>{monitorError}<button onClick={() => useSignalMonitorStore.setState({ error: '' })}>关闭</button></div>}
+      {armedScope && <div className="monitor-connection-hint">点击任意信号线，接入示波器通道<button onClick={() => useSignalMonitorStore.setState({ armedScope: null })}>取消 / Esc</button></div>}
       {/* WebGL not available dialog */}
       {webglFail && (
         <div className="viewer3d-overlay" style={{ alignItems: 'center', justifyContent: 'center' }}>

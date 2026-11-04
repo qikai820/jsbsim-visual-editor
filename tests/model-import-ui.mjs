@@ -80,6 +80,7 @@ try {
   }
   await send('Page.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    localStorage.setItem('jsbsim-multi-model-slots-v1', JSON.stringify({'01':'quadrotor_x'}));
     window.__fixture = ${JSON.stringify(fixture)};
     window.__firmwareSelection = ${JSON.stringify(firmwareFixture)};
     window.__calls = []; window.__alerts = [];
@@ -102,9 +103,10 @@ try {
     };
   ` });
   await send('Page.navigate', { url: baseUrl });
-  await until('document.querySelector(".file-menu-trigger")');
+  const fileMenu = `Array.from(document.querySelectorAll('.file-menu-trigger')).find(button => /📁 (File|文件)/.test(button.textContent))`;
+  await until(fileMenu);
   async function openImport(folder = false) {
-    await evaluate('document.querySelector(".file-menu-trigger").click()');
+    await evaluate(`${fileMenu}.click()`);
     await evaluate(`Array.from(document.querySelectorAll('[role="menuitem"]')).find(button => ${folder
       ? '/导入 XML 目录|Import XML folder/.test(button.textContent)'
       : '/自动关联同目录|Import XML with siblings/.test(button.textContent)'}).click()`);
@@ -144,16 +146,17 @@ try {
   await evaluate('document.querySelector(".xml-import-files-dialog footer button").click()');
   await evaluate('window.__fixture = null');
   await openImport();
-  await until('!document.querySelector(".file-menu-trigger").disabled');
+  await until(`!${fileMenu}.disabled`);
   assert.equal(await evaluate('localStorage.getItem("jsbsim-last-model-import-directory")'), directory);
   assert.equal(await evaluate('Boolean(document.querySelector(".model-import-dialog"))'), false);
   await evaluate('window.__reloadMarker = true');
   await send('Page.reload');
-  await until('window.__reloadMarker !== true && document.querySelector(".file-menu-trigger")');
+  await until(`window.__reloadMarker !== true && ${fileMenu}`);
   await openImport();
-  await until('!document.querySelector(".file-menu-trigger").disabled');
+  await until(`!${fileMenu}.disabled`);
   assert.equal(await evaluate('window.__calls.filter(call => call.command === "select_model_import").at(-1).args.initialDirectory'), directory);
   async function openFirmwarePage() {
+    await evaluate(`document.querySelector('.workspace-menu-trigger').click()`);
     await evaluate(`Array.from(document.querySelectorAll('button')).find(button => /⚙ (Simulation|仿真配置)/.test(button.textContent)).click()`);
     await until('document.querySelector(".sim-config-overlay")');
     await evaluate(`Array.from(document.querySelectorAll('.sim-config-overlay button')).find(button => /Upgrade Firmware|升级固件/.test(button.textContent)).click()`);
@@ -171,7 +174,7 @@ try {
   assert.equal(await evaluate('localStorage.getItem("jsbsim-last-firmware-path")'), firmwareFixture.path);
   await evaluate('window.__reloadMarker = true');
   await send('Page.reload');
-  await until('window.__reloadMarker !== true && document.querySelector(".file-menu-trigger")');
+  await until(`window.__reloadMarker !== true && ${fileMenu}`);
   await openFirmwarePage();
   await evaluate('document.querySelector(".firmware-file-picker").click()');
   await until('window.__calls.some(call => call.command === "select_firmware_file")');

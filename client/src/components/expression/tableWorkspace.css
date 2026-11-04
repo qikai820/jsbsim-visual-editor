@@ -1,0 +1,129 @@
+/* Shared LUT workspace and SVG chart. Scoped to avoid changing other dialogs. */
+.lut-preview-overlay.lut-workspace-overlay { z-index: 4100; backdrop-filter: blur(3px); background: #10283d66; padding: 16px; box-sizing: border-box; }
+.lut-preview-dialog.lut-workspace-dialog { width: min(1280px, calc(100vw - 32px)); height: min(820px, calc(100vh - 32px)); max-height: calc(100vh - 32px); border: 1px solid #c9d8e3; border-radius: 14px; background: #fff; color: #22394a; box-shadow: 0 28px 100px #0f24394d; font: 13px 'Inter', 'Noto Sans SC', sans-serif; outline: none; }
+.lut-workspace-dialog button, .lut-workspace-dialog select { font: inherit; }
+.lut-workspace-dialog button { cursor: pointer; }
+.lut-workspace-dialog button:disabled { opacity: .4; cursor: default; }
+.lut-workspace-dialog button:focus-visible, .lut-workspace-dialog summary:focus-visible, .lut-chart-svg:focus-visible { outline: 2px solid #0d9488; outline-offset: 2px; }
+.lut-workspace-header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 15px 22px; border-bottom: 1px solid #e2e9ee; background: #fff; }
+.lut-workspace-header > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lut-header-icon { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid #c6e9e3; border-radius: 9px; background: #edf9f5; color: #0d8b7d; font-size: 25px; }
+.lut-workspace-header b { display: block; color: #143348; font-size: 17px; letter-spacing: .2px; }
+.lut-workspace-header div div { min-width: 0; }
+.lut-workspace-header div div span { display: block; margin-top: 4px; color: #738590; font: 11px ui-monospace, monospace; max-width: min(650px, 68vw); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+.lut-workspace-header > button { flex: none; width: 30px; height: 30px; border: 0; border-radius: 6px; background: #f2f5f7; color: #687d8c; font-size: 23px; line-height: 1; }
+.lut-workspace-header > button:hover { background: #e5edef; }
+.lut-workspace-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.lut-workspace-summary { display: flex; justify-content: space-between; align-items: center; padding: 17px 22px; gap: 12px; background: #f6f9fa; border-bottom: 1px solid #e2e9ee; }
+.lut-workspace-dimension { display: flex; align-items: center; gap: 13px; }
+.lut-workspace-dimension > span { padding: 8px 10px; border-radius: 8px; border: 1px solid #cae6e1; color: #0b877b; background: #fff; font: 700 20px ui-monospace, monospace; }
+.lut-workspace-dimension b { display: block; color: #1d3d50; font-size: 14px; }
+.lut-workspace-dimension small { display: block; margin-top: 5px; color: #7a8c97; font-size: 11px; }
+.lut-workspace-dimension i, .lut-workspace-range i { margin: 0 6px; color: #a2b0b8; font-style: normal; }
+.lut-workspace-range { text-align: right; }
+.lut-workspace-range > span { display: block; margin-bottom: 4px; color: #84939d; font-size: 10px; }
+.lut-workspace-range b { color: #1e5260; font: 600 14px ui-monospace, monospace; }
+.lut-axis-config { padding: 10px 22px; border-bottom: 1px solid #e2e9ee; background: #fff; }
+.lut-axis-config summary { cursor: pointer; color: #456274; font-size: 11px; user-select: none; }
+.lut-axis-config summary span { margin-left: 14px; color: #8a99a2; font: 11px ui-monospace, monospace; overflow-wrap: anywhere; }
+.lut-axis-fields { display: grid; grid-template-columns: 175px repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.lut-axis-fields > label { min-width: 0; display: flex; flex-direction: column; gap: 6px; color: #748693; font-size: 11px; }
+.lut-axis-fields select, .lut-axis-fields input { width: 100%; min-width: 0; height: 32px; box-sizing: border-box; border: 1px solid #d7e2e9; border-radius: 5px; padding: 5px 8px; background: #fff; color: #355367; font-size: 11px; }
+.lut-axis-config p { margin: 10px 0 2px; color: #89959c; font-size: 10px; line-height: 1.6; }
+.lut-workspace-slice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px 22px; border-bottom: 1px solid #e2e9ee; background: #f2f8f7; }
+.lut-workspace-slice > label { display: flex; align-items: center; gap: 8px; color: #678079; font-size: 11px; }
+.lut-workspace-slice select { max-width: 240px; height: 30px; border: 1px solid #cfe1dc; border-radius: 5px; padding: 4px 7px; color: #2c655b; background: #fff; font-size: 11px; }
+.lut-slice-navigation { display: flex; gap: 3px; }
+.lut-slice-navigation button { width: 26px; border: 1px solid #cfe1dc; border-radius: 4px; background: #fff; color: #32796b; font-size: 20px; }
+.lut-workspace-slice > input[type=range] { flex: 1; min-width: 80px; max-width: 240px; accent-color: #168d7a; }
+.lut-slice-count { color: #7c948b; font: 11px ui-monospace, monospace; white-space: nowrap; }
+.lut-slice-value { margin-left: auto; }
+.lut-slice-value input { width: 82px; box-sizing: border-box; border: 1px solid #cfe1dc; border-radius: 5px; background: #fff; color: #2c655b; padding: 6px 8px; font: 12px ui-monospace, monospace; }
+.lut-workspace-content { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); min-height: 365px; }
+.lut-workspace-visual { min-width: 0; padding: 20px 20px 14px; border-right: 1px solid #e2e9ee; background: #fafcfd; }
+.lut-workspace-grid-panel { min-width: 0; padding: 20px 20px 14px; }
+.lut-workspace-panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px; }
+.lut-workspace-panel-heading b { display: block; color: #3a5769; font-size: 12px; }
+.lut-workspace-panel-heading div > span { display: block; color: #91a0aa; font-size: 10px; margin-top: 6px; overflow-wrap: anywhere; }
+.lut-view-tabs { display: flex; flex: none; gap: 2px; border: 1px solid #dce5eb; border-radius: 6px; padding: 2px; background: #eef3f6; }
+.lut-view-tabs button { padding: 5px 8px; border: 0; border-radius: 4px; color: #83949f; background: transparent; font-size: 10px; }
+.lut-view-tabs button[aria-pressed=true] { color: #0a8279; background: #fff; box-shadow: 0 1px 3px #2349561a; }
+.lut-grid-size { color: #9aa8b0; font: 11px ui-monospace, monospace; }
+.lut-chart { width: 100%; min-width: 0; }
+.lut-chart-svg { display: block; width: 100%; height: auto; overflow: hidden; border: 0; background: transparent; }
+.lut-chart-svg text { fill: #7e939f; font: 11px ui-monospace, monospace; user-select: none; pointer-events: none; }
+.lut-chart-svg .lut-chart-axis-title { fill: #46616f; font: 600 12px 'Inter', sans-serif; }
+.lut-chart-gridline { stroke: #dfe8ed; stroke-dasharray: 3 5; stroke-width: 1; }
+.lut-chart-axis { stroke: #98adb9; fill: none; stroke-width: 1.1; }
+.lut-chart-point { fill: #fff; stroke: #0d9488; stroke-width: 2; cursor: pointer; }
+.lut-chart-point:hover { fill: #ccfbf1; stroke: #134e4a; }
+.lut-chart-svg .lut-heat-value { fill: #fff; font-size: 12px; text-shadow: 0 1px 2px #172e3f88; }
+.lut-chart-svg g[role=button] { cursor: pointer; }
+.lut-surface-chart .lut-chart-svg { touch-action: none; cursor: grab; }
+.lut-surface-chart .lut-chart-svg:active { cursor: grabbing; }
+.lut-floor-grid { fill: none; stroke: #dce6eb; stroke-width: .8; }
+.lut-surface-point { cursor: pointer; }
+.lut-chart-svg .lut-surface-tooltip { fill: #fff; font-size: 12px; }
+.lut-camera-tools { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 8px; color: #94a5af; font-size: 10px; }
+.lut-camera-tools button { padding: 4px 6px; border: 1px solid #dbe5ea; border-radius: 5px; color: #6d8593; background: #fff; font: 10px sans-serif; cursor: pointer; white-space: nowrap; }
+.lut-color-legend { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 3px 0 12px; color: #78909e; font: 10px ui-monospace, monospace; flex-wrap: wrap; }
+.lut-color-legend i { width: 120px; height: 5px; border-radius: 3px; }
+.lut-color-legend small { margin-left: 4px; color: #98a8b2; font: 9px sans-serif; }
+.lut-chart-explanation { margin: 8px 6px 0; text-align: center; color: #8a9eaa; font-size: 10px; line-height: 1.7; }
+.lut-chart-empty { display: grid; place-items: center; min-height: 170px; padding: 20px; color: #94a3b8; font-size: 12px; }
+.lut-workspace-grid-scroll { max-height: 325px; min-height: 130px; overflow: auto; border: 1px solid #dbe5eb; border-radius: 7px; overscroll-behavior: contain; scrollbar-width: thin; }
+.lut-edit-grid { width: 100%; border-collapse: separate; border-spacing: 0; text-align: right; font: 11px ui-monospace, monospace; }
+.lut-edit-grid th, .lut-edit-grid td { min-width: 78px; box-sizing: border-box; padding: 0; border-bottom: 1px solid #e5edf2; border-right: 1px solid #e5edf2; height: 34px; }
+.lut-edit-grid th { background: #f2f6f8; color: #5d7b90; padding: 0 4px; }
+.lut-edit-grid thead th { position: sticky; top: 0; z-index: 2; border-bottom-color: #cad9e3; height: 45px; }
+.lut-edit-grid tbody th { position: sticky; left: 0; z-index: 1; border-right-color: #cad9e3; }
+.lut-edit-grid thead .lut-grid-corner { left: 0; z-index: 3; min-width: 120px; max-width: 180px; padding: 8px 10px; text-align: left; background: #edf3f6; }
+.lut-grid-corner b, .lut-grid-corner span { display: block; overflow: hidden; text-overflow: ellipsis; max-width: 160px; white-space: nowrap; font: 10px sans-serif; }
+.lut-grid-corner span { margin-top: 5px; color: #91a5b0; }
+.lut-edit-grid input { display: block; width: 100%; min-width: 75px; box-sizing: border-box; height: 33px; padding: 6px 10px; border: 1px solid transparent; outline: none; border-radius: 0; background: transparent; color: #2d6c71; font: 12px ui-monospace, monospace; text-align: right; }
+.lut-edit-grid th input { color: #557b95; font-weight: 600; }
+.lut-edit-grid input:focus { background: #fff; box-shadow: inset 0 0 0 2px #159584; }
+.lut-edit-grid td[data-selected=true] { box-shadow: inset 0 0 0 2px #159584; }
+.lut-edit-grid input[aria-invalid=true], .lut-slice-value input[aria-invalid=true] { box-shadow: inset 0 0 0 2px #ef6464; background: #fff1f2; }
+.lut-edit-grid td > button { border: 0; padding: 8px 12px; width: 100%; text-align: right; color: #2d6c71; background: transparent; font: inherit; }
+.lut-grid-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 13px; }
+.lut-grid-actions > div { display: flex; align-items: center; gap: 5px; }
+.lut-grid-actions span { color: #879ba8; font-size: 10px; margin-right: 3px; }
+.lut-grid-actions button { width: 25px; height: 24px; padding: 0; border: 1px solid #d9e4ea; border-radius: 4px; background: #fff; color: #56798c; font-size: 14px; }
+.lut-grid-actions button:hover:not(:disabled) { color: #0b8375; background: #ecfdf5; border-color: #83c7b6; }
+.lut-grid-help, .lut-paste-message { color: #97a5ae; font-size: 10px; line-height: 1.7; margin: 10px 0 0; }
+.lut-paste-message { color: #648478; }
+.lut-selected-point { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 24px; padding: 12px 22px; border-top: 1px solid #e2e9ee; background: #f6f9fa; }
+.lut-selected-point > span:first-child { color: #a0adb5; font-size: 10px; }
+.lut-selected-point > span { color: #8296a3; font-size: 10px; overflow-wrap: anywhere; }
+.lut-selected-point b { margin-left: 9px; color: #406174; font: 600 12px ui-monospace, monospace; }
+.lut-selected-output { margin-left: auto; padding-left: 24px; border-left: 1px solid #dbe5eb; }
+.lut-selected-output b { color: #0b8b79; }
+.lut-validation { padding: 10px 22px; background: #fff7ed; color: #b45309; border-top: 1px solid #fed7aa; font-size: 11px; line-height: 1.7; }
+.lut-workspace-footer { flex: none; display: flex; align-items: center; gap: 8px; padding: 13px 22px; border-top: 1px solid #e2e9ee; background: #fff; }
+.lut-workspace-footer > span { flex: 1; min-width: 0; color: #98a6af; font-size: 10px; line-height: 1.6; }
+.lut-workspace-footer button { flex: none; border: 1px solid #d8e3e9; border-radius: 6px; background: #fff; color: #6b8494; padding: 8px 13px; font-size: 11px; }
+.lut-workspace-footer .lut-apply-button { border-color: #0d8d7d; background: #0d8d7d; color: #fff; }
+.lut-table-switcher { flex: none; display: flex; gap: 6px; align-items: center; padding: 10px 22px; overflow: auto; border-bottom: 1px solid #e2e9ee; }
+.lut-table-switcher > span { color: #879ca9; font-size: 10px; flex: none; }
+.lut-table-switcher button { flex: none; padding: 5px 9px; border: 1px solid #dae5eb; border-radius: 5px; color: #668395; background: #fff; font-size: 11px; }
+.lut-table-switcher button[aria-pressed=true] { color: #0c8b7b; background: #edf9f6; border-color: #a8dacc; }
+.lut-compact-summary { padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px; line-height: 1.8; }
+.lut-compact-summary strong { display: block; color: var(--text-primary); }
+.lut-open-editor { padding: 8px 10px; width: 100%; border: 1px solid #b2d8ce; border-radius: 5px; background: #edf9f4; color: #0d8874; font-size: 11px; cursor: pointer; }
+@container dialog-window (max-width: 900px) {
+  .lut-workspace-content { grid-template-columns: minmax(0, 1fr); }
+  .lut-workspace-visual { border-right: 0; border-bottom: 1px solid #e2e9ee; }
+  .lut-axis-fields { grid-template-columns: 1fr 1fr; }
+  .lut-workspace-visual .lut-chart { max-width: 640px; margin-inline: auto; }
+}
+@container dialog-window (max-width: 550px) {
+  .lut-workspace-summary { flex-wrap: wrap; }
+  .lut-workspace-range { text-align: left; }
+  .lut-axis-fields { grid-template-columns: minmax(0, 1fr); }
+  .lut-workspace-slice > input[type=range] { max-width: none; }
+  .lut-workspace-footer { flex-wrap: wrap; }
+  .lut-workspace-footer > span { flex-basis: 100%; }
+  .lut-workspace-panel-heading { flex-wrap: wrap; }
+  .lut-selected-output { margin-left: 0; }
+}

@@ -175,6 +175,7 @@ export default function AeroEditor() {
     return (
       <ExpressionEditor
         expression={current.expression}
+        monitorOwner={current.name}
         onChange={(expr) => updateExpression(editIdx, expr)}
         onBack={() => setShowExprEditor(false)}
       />

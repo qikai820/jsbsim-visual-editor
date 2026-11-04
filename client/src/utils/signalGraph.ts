@@ -10,6 +10,7 @@
 //     (component name). We reconstruct those edges by signal name.
 
 import type { ExprNode, ExprTable } from '../types';
+import { expressionMonitorKey } from '../sim/monitorIdentity';
 import dagre from 'dagre';
 import { BLOCK_DEFS } from './expressionConverter';
 import { exprToFormula } from './exprToFormula';
@@ -369,6 +370,7 @@ export function insertProductTables(nodes: any[], edges: any[], previousNodes: a
         position: old?.position || { x: owner.position.x - 150, y: owner.position.y },
         ...(old?.data?.manualSize ? { style: old.style, width: old.width, height: old.height } : {}),
         data: {
+          monitorKey: expressionMonitorKey(owner.data.name, [0, factorIndex]),
           kind: 'tablePreview', itemType: 'aero_table', ownerId: owner.id,
           factorIndex, inputIndices, inputs: inputIndices.map(index => owner.data.inputs[index]),
           expression: table, name: `${table.tableType} 插值表`,
@@ -388,7 +390,7 @@ export function insertProductTables(nodes: any[], edges: any[], previousNodes: a
       edges.push({
         id: `e-${id}-${owner.id}-${first}`, source: id, sourceHandle: 'out',
         target: owner.id, targetHandle: `in-${first}`, type: 'signal',
-        data: { signal: owner.data.inputs[first], tableResult: true },
+        data: { signal: owner.data.inputs[first], tableResult: true, monitorKey: expressionMonitorKey(owner.data.name, [0, factorIndex]), monitorKind: 'table' },
       });
     }
     owner.data = { ...owner.data, diagramInputIndices: owner.data.inputs.map((_: string, index: number) => index)

@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import FloatInput from '../FloatInput';
+import LutTablePreview from './LutTablePreview';
+import { axisCount, formatTableNumber, tableRange } from '../../utils/tableData';
 import type { ExprNode } from '../../types';
 import { BLOCK_DEFS } from '../../utils/expressionConverter';
 import TableChart from './TableChart';
@@ -108,73 +111,14 @@ interface TableEditorProps {
 }
 
 export function TableEditor({ expr, onChange }: TableEditorProps) {
-  const update = (patch: Partial<typeof expr>) => onChange({ ...expr, ...patch });
-
-  return (
-    <div className="expr-table-editor">
-      <div className="expr-bp-field">
-        <label>表格维度</label>
-        <select value={expr.tableType} onChange={e => update({ tableType: e.target.value as any })}>
-          <option value="1D">一维表 (行)</option>
-          <option value="2D">二维表 (行×列)</option>
-          <option value="3D">三维表 (行×列×表)</option>
-        </select>
-      </div>
-      <div className="expr-bp-field">
-        <label>自变量 1 (行)</label>
-        <SignalPathInput value={expr.var1} onChange={var1 => update({ var1 })} />
-      </div>
-      {(expr.tableType === '2D' || expr.tableType === '3D') && (
-        <div className="expr-bp-field">
-          <label>自变量 2 (列)</label>
-          <SignalPathInput value={expr.var2} onChange={var2 => update({ var2 })} />
-        </div>
-      )}
-      {expr.tableType === '3D' && (
-        <div className="expr-bp-field">
-          <label>自变量 3 (表)</label>
-          <SignalPathInput value={expr.var3} onChange={var3 => update({ var3 })} />
-        </div>
-      )}
-
-      {/* Compact table data display */}
-      <div className="expr-table-data">
-        <label>数据 ({expr.breakpoints1.length} 行)</label>
-        <div className="expr-table-scroll">
-          <table className="expr-mini-table">
-            <tbody>
-              {expr.data.map((row, ri) => (
-                <tr key={ri}>
-                  <td className="expr-mini-bp">
-                    <FloatInput value={expr.breakpoints1[ri] ?? 0}
-                      onValueChange={value => {
-                        const bp = [...expr.breakpoints1]; bp[ri] = value;
-                        update({ breakpoints1: bp });
-                      }} />
-                  </td>
-                  {row.map((val, ci) => (
-                    <td key={ci}>
-                      <FloatInput value={val}
-                        onValueChange={value => {
-                          const data = expr.data.map(r => [...r]);
-                          data[ri][ci] = value;
-                          update({ data });
-                        }} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <button className="expr-bp-add-row" onClick={() => {
-          const cols = expr.data[0]?.length || 1;
-          update({
-            data: [...expr.data, new Array(cols).fill(0)],
-            breakpoints1: [...expr.breakpoints1, 0],
-          });
-        }}>+ 行</button>
-      </div>
+  const [open, setOpen] = useState(false);
+  const [min, max] = tableRange(expr);
+  return <div className="expr-table-editor">
+    <div className="lut-compact-summary"><strong>{expr.tableType} · {axisCount(expr)} 个自变量</strong>
+      {expr.breakpoints1.length} 行{expr.tableType !== '1D' && ` × ${expr.breakpoints2.length} 列`}{expr.tableType === '3D' && ` × ${expr.breakpoints3.length} 层`}<br />
+      输出 {formatTableNumber(min)} ～ {formatTableNumber(max)}
     </div>
-  );
+    <button type="button" className="lut-open-editor" onClick={() => setOpen(true)}>▦ 3D 预览与编辑数据</button>
+    {open && <LutTablePreview title="插值表" expression={expr} onChange={onChange} onClose={() => setOpen(false)} />}
+  </div>;
 }

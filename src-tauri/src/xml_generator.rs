@@ -332,6 +332,11 @@ fn table_to_xml(expr: &Value, level: usize) -> String {
                 indent(level + 1),
                 escape_xml(var2_disp)
             ));
+            lines.push(format!(
+                "{}<independentVar lookup=\"table\">{}</independentVar>",
+                indent(level + 1),
+                escape_xml(expr.get("var3").and_then(|v| v.as_str()).unwrap_or(""))
+            ));
             lines.push(table_data_3d_to_xml(expr, level + 1));
             lines.push(format!("{}</table>", ind));
             lines.join("\n")
@@ -534,19 +539,19 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
     // function / fcs_function with expression tree
     if (it_type == "function" || it_type == "fcs_function") && it.get("expression").is_some() {
         let body = expr_to_xml(&it["expression"], level + 1);
-        let clip_min = it.get("cliptoMin").and_then(|v| v.as_f64());
-        let clip_max = it.get("cliptoMax").and_then(|v| v.as_f64());
+        let clip_min = it.get("cliptoMin").map(val_to_str).filter(|s| !s.trim().is_empty());
+        let clip_max = it.get("cliptoMax").map(val_to_str).filter(|s| !s.trim().is_empty());
         let has_clip = clip_min.is_some() || clip_max.is_some();
 
         if it_type == "fcs_function" {
             let mut inner = vec![];
             if has_clip {
                 let mut ci = vec![];
-                if let Some(mn) = clip_min {
-                    ci.push(xml_element("min", &[], Some(&fmt_num(mn)), level + 2));
+                if let Some(ref mn) = clip_min {
+                    ci.push(xml_element("min", &[], Some(mn), level + 2));
                 }
-                if let Some(mx) = clip_max {
-                    ci.push(xml_element("max", &[], Some(&fmt_num(mx)), level + 2));
+                if let Some(ref mx) = clip_max {
+                    ci.push(xml_element("max", &[], Some(mx), level + 2));
                 }
                 inner.push(xml_element_raw("clipto", &[], Some(&ci.join("\n")), level + 1));
             }
@@ -562,11 +567,11 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
         // Bare <function>
         let func_content = if has_clip {
             let mut ci = vec![];
-            if let Some(mn) = clip_min {
-                ci.push(xml_element("min", &[], Some(&fmt_num(mn)), level + 2));
+            if let Some(ref mn) = clip_min {
+                ci.push(xml_element("min", &[], Some(mn), level + 2));
             }
-            if let Some(mx) = clip_max {
-                ci.push(xml_element("max", &[], Some(&fmt_num(mx)), level + 2));
+            if let Some(ref mx) = clip_max {
+                ci.push(xml_element("max", &[], Some(mx), level + 2));
             }
             let clip_xml = xml_element_raw("clipto", &[], Some(&ci.join("\n")), level + 1);
             format!("{}\n{}", body, clip_xml)
@@ -1206,6 +1211,23 @@ fn build_propulsion(
     for eng in &engine_nodes {
         let p = get_params(eng);
         let mut eng_lines = vec![];
+
+        // Mounting vectors belong to the aircraft's engine declaration, even
+        // when the engine's scalar parameters live in a referenced file.
+        for (tag, fields, unit) in [
+            ("location", ["x", "y", "z"], "IN"),
+            ("orient", ["roll", "pitch", "yaw"], "DEG"),
+        ] {
+            if let Some(vector) = p.get(tag).and_then(Value::as_object) {
+                let fallback = ["x", "y", "z"];
+                let values = fields.iter().enumerate().map(|(index, field)| {
+                    let value = vector.get(*field).or_else(|| vector.get(fallback[index]))
+                        .and_then(Value::as_f64).unwrap_or(0.0);
+                    xml_simple(field, &fmt_num(value), None, 3)
+                }).collect::<Vec<_>>().join("\n");
+                eng_lines.push(xml_element_raw(tag, &[("unit", vector.get("unit").and_then(Value::as_str).unwrap_or(unit))], Some(&values), 2));
+            }
+        }
 
         // Feed tanks
         if let Some(feed) = p.get("feed") {

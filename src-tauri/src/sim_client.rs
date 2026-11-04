@@ -130,6 +130,7 @@ pub struct SimClient {
 }
 
 struct SimClientInner {
+    observations: crate::signal_monitor::ObservationQueue,
     /// Most recent UDP payload, including auxiliary frames such as task_top.
     latest: Option<Value>,
     /// Most recent complete visual telemetry frame.  Only these packets carry
@@ -417,6 +418,13 @@ impl SimClient {
         }
     }
 
+    pub fn send_monitor_packet(&self, packet: &[u8]) -> std::io::Result<()> {
+        if matches!(std::env::var("SIM_EXTERNAL").ok().as_deref(), Some("0" | "false" | "no" | "FALSE" | "NO")) {
+            return self.send_socket.send_to(packet, "127.0.0.1:5803").map(|_| ());
+        }
+        self.send_to_control_addresses(packet)
+    }
+
     fn send_to_control_addresses(&self, packet: &[u8]) -> std::io::Result<()> {
         let mode = crate::transport::mode();
         let mut last_error = None;
@@ -504,6 +512,7 @@ impl SimClient {
         let ctrl_addr = Arc::new(Mutex::new(initial_ctrl_addr));
         let configured_ctrl_addr = Arc::new(Mutex::new(initial_ctrl_addr));
         let inner = Arc::new(Mutex::new(SimClientInner {
+                observations: crate::signal_monitor::ObservationQueue::default(),
                 latest: None,
                 latest_sim_status: None,
                 instance_frames: HashMap::new(),
@@ -563,6 +572,16 @@ impl SimClient {
                                               }
                                             }
                                             let mut state = inner.lock().unwrap();
+                                            crate::runtime_tuning::ingest(&val);
+                                            state.observations.push(&val);
+                                            crate::scene_telemetry::ingest(&val);
+                                            if val.get("kind").and_then(Value::as_str) == Some("signal_samples") {
+                                                let SimClientInner { instance_frames, instance_rtf, .. } = &mut *state;
+                                                merge_instance_frame(instance_frames, instance_rtf, &val);
+                                                state.last_packet_time = Instant::now(); state.connected = true; state.packets += 1;
+                                                continue;
+                                            }
+
                                             let xml_diagnostic = val.get("kind").and_then(Value::as_str) == Some("xml_diagnostic");
                                             let flight_controller = val.get("kind").and_then(Value::as_str) == Some("flight_controller");
                                             if flight_controller {
@@ -885,6 +904,11 @@ impl SimClient {
         }).collect();
         result.sort_by(|a, b| a["instance_id"].as_str().cmp(&b["instance_id"].as_str()));
         result
+    }
+
+    pub fn monitor_snapshot(&self, id: u8) -> Vec<Value> {
+        let Ok(mut state) = self.inner.lock() else { return Vec::new() };
+        state.observations.drain(id)
     }
 
     pub fn instance_snapshot(&self, id: u8) -> Option<Value> {

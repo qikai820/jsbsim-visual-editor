@@ -28,6 +28,7 @@
 .usb-fm button { cursor: pointer; }
 .usb-fm button:disabled { cursor: wait; opacity: .55; }
 .usb-fm-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -38,21 +39,35 @@
   user-select: none;
   touch-action: none;
 }
-.usb-fm-header div { display: flex; align-items: baseline; gap: 12px; }
+.usb-fm-header div { display: flex; min-width: 0; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
 .usb-fm-header strong { font-size: 17px; }
 .usb-fm-header small { color: #718398; }
 .usb-fm-header button { border: 0; background: none; color: #6f8195; font-size: 24px; }
-.usb-fm-volumes { display: flex; gap: 8px; padding: 12px 18px 0; background: #fff; }
+.usb-fm-volumes { display: flex; flex-shrink: 0; gap: 10px; padding: 12px 18px 0; background: #fff; }
 .usb-fm-volumes button {
-  min-width: 100px;
-  padding: 9px 18px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 14px;
   border: 1px solid #d5dee7;
   border-radius: 8px 8px 0 0;
   background: #f5f8fa;
   color: #52677d;
   font-weight: 600;
+  text-align: left;
 }
 .usb-fm-volumes button.active { border-bottom-color: #fff; background: #fff; color: #087f7b; }
+.usb-fm-volumes button:hover:not(:disabled) { border-color: #0ea5a4; }
+.usb-fm-volume-title { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.usb-fm-volume-title strong { font-size: 14px; }
+.usb-fm-volume-title small { font-size: 11px; font-weight: 500; }
+.usb-fm-volume-capacity { color: #40546b; font-size: 12px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.usb-fm-volume-meter { display: block; height: 5px; overflow: hidden; border-radius: 4px; background: #dce5ed; }
+.usb-fm-volume-meter i { display: block; height: 100%; border-radius: inherit; background: #7e93a8; transition: width .2s; }
+.usb-fm-volumes button.active .usb-fm-volume-meter i { background: #0a8984; }
+.usb-fm-volume-free { color: #718398; font-size: 11px; font-weight: 400; }
 .usb-fm-breadcrumb {
   display: flex;
   align-items: center;

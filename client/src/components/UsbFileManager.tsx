@@ -5,8 +5,8 @@ import {
   isTauri, usbFileDelete, usbFileDeleteDirectory, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
   listenUsbFolderUploadProgress, usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn,
   usbFileOpenEditor, usbFilePing, usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer,
-  usbFileUploadFolder, usbFileUploadLocal, usbFileWrite,
-  type UsbBuiltInDocument, type UsbEditorSession, type UsbFileEntry,
+  usbFileUploadFolder, usbFileUploadLocal, usbFileWrite, usbFileStorage,
+  type UsbBuiltInDocument, type UsbEditorSession, type UsbFileEntry, type UsbStorageUsage,
 } from '../utils/tauriApi';
 import './UsbFileManager.css';
 
@@ -100,6 +100,9 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [storage, setStorage] = useState<UsbStorageUsage[]>([]);
+  const [storageLoading, setStorageLoading] = useState(true);
+  const [storageError, setStorageError] = useState('');
   const [windowRect, setWindowRect] = useState<WindowRect | null>(null);
   const windowRef = useRef<HTMLDivElement>(null);
   const windowGesture = useRef<WindowGesture | null>(null);
@@ -194,6 +197,17 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     refreshNotice.current = notice;
     setRevision(value => value + 1);
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setStorageLoading(true);
+    setStorageError('');
+    void usbFileStorage().then(result => {
+      if (!cancelled) setStorage(result);
+    }).catch(error => {
+      if (!cancelled) { setStorage([]); setStorageError(errorText(error)); }
+    }).finally(() => { if (!cancelled) setStorageLoading(false); });
+    return () => { cancelled = true; };
+  }, [revision]);
   useEffect(() => {
     let cancelled = false;
     const notice = refreshNotice.current;
@@ -599,12 +613,30 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   return createPortal(<div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
     <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
     <header className="usb-fm-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
-      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 data · 拖动标题栏移动，右下角缩放' : 'Manage SD and data over USB · Drag title to move, corner to resize'}</small></div>
+      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 eMMC · 拖动标题栏移动，右下角缩放' : 'Manage SD and eMMC over USB · Drag title to move, corner to resize'}</small></div>
       <button onClick={closeManager} disabled={busy || savingBuiltIn} aria-label={isZh ? '关闭' : 'Close'}>×</button>
     </header>
-    <div className="usb-fm-volumes">
-      <button className={volume === 'sd' ? 'active' : ''} onClick={() => chooseVolume('sd')} disabled={busy}>SD</button>
-      <button className={volume === 'data' ? 'active' : ''} onClick={() => chooseVolume('data')} disabled={busy}>data</button>
+    <div className="usb-fm-volumes" aria-label={isZh ? '存储容量' : 'Storage capacity'} aria-busy={storageLoading}>
+      {(['sd', 'data'] as const).map(key => {
+        const usage = storage.find(item => item.volume === key);
+        const known = usage?.totalBytes != null && usage.totalBytes > 0 && usage.usedBytes != null && usage.availableBytes != null;
+        const percent = known ? Math.min(100, Math.max(0, usage.usedBytes! / usage.totalBytes! * 100)) : null;
+        const unavailable = storageLoading ? (isZh ? '正在读取容量…' : 'Loading capacity…')
+          : storageError ? (isZh ? '容量读取失败，点击刷新重试' : 'Capacity unavailable; refresh to retry')
+          : (isZh ? '未挂载或存储不可用' : 'Not mounted or unavailable');
+        return <button key={key} className={volume === key ? 'active' : ''} onClick={() => chooseVolume(key)} disabled={busy}
+          aria-pressed={volume === key} title={storageError || usage?.mountPath}>
+          <span className="usb-fm-volume-title"><strong>{key === 'sd' ? 'SD' : 'eMMC (data)'}</strong>
+            {percent !== null && <small>{percent.toFixed(1)}% {isZh ? '已用' : 'used'}</small>}</span>
+          <span className="usb-fm-volume-capacity">{known
+            ? `${isZh ? '已用' : 'Used'} ${formatSize(usage.usedBytes!)} / ${isZh ? '总容量' : 'Total'} ${formatSize(usage.totalBytes!)}`
+            : unavailable}</span>
+          <span className="usb-fm-volume-meter" aria-hidden="true"><i style={{ width: `${percent ?? 0}%` }} /></span>
+          <small className="usb-fm-volume-free">{known
+            ? `${isZh ? '可用' : 'Free'} ${formatSize(usage.availableBytes!)}${storageLoading ? (isZh ? ' · 刷新中…' : ' · Refreshing…') : ''}`
+            : key === 'sd' ? '/mnt/sdcard' : '/data'}</small>
+        </button>;
+      })}
     </div>
     <nav className="usb-fm-breadcrumb" aria-label={isZh ? '当前路径' : 'Current path'}>
       <button onClick={() => setSegments([])} disabled={busy}>{volume}</button>

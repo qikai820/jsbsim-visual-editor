@@ -9,7 +9,7 @@ function tableToXml(table: ExprTable, depth: number): string {
   const p = indent(depth), q = indent(depth + 1);
   const vars = [`${q}<independentVar${table.tableType === '1D' ? '' : ' lookup="row"'}>${xmlEscape(table.var1)}</independentVar>`];
   if (table.tableType !== '1D') vars.push(`${q}<independentVar lookup="column">${xmlEscape(table.var2)}</independentVar>`);
-  if (table.tableType === '3D' && table.var3) vars.push(`${q}<independentVar lookup="z">${xmlEscape(table.var3)}</independentVar>`);
+  if (table.tableType === '3D' && table.var3) vars.push(`${q}<independentVar lookup="table">${xmlEscape(table.var3)}</independentVar>`);
   const dataBlock = (rows: number[][], breakPoint?: number) => {
     const attr = breakPoint === undefined ? '' : ` breakPoint="${breakPoint}"`;
     return `${q}<tableData${attr}>\n${rows.map(row => `${indent(depth + 2)}${row.join('  ')}`).join('\n')}\n${q}</tableData>`;
@@ -66,7 +66,8 @@ function tableFromXml(element: Element): ExprTable {
   if (!vars.length || !data.length) throw new Error('查表需要 independentVar 和 tableData');
   const named = (lookup: string, index: number) => text(vars.find(v => v.getAttribute('lookup') === lookup) || vars[index] || vars[0]);
   const var1 = named('row', 0), var2 = vars.length > 1 ? named('column', 1) : '';
-  const var3 = vars.length > 2 ? named('z', 2) : '';
+  const var3Element = vars.find(v => ['table', 'axis3', 'z'].includes(v.getAttribute('lookup') || ''));
+  const var3 = vars.length > 2 ? text(var3Element || vars[2]) : '';
   if (data.length > 1 || data.some(block => block.hasAttribute('breakPoint'))) {
     const breakpoints3 = data.map(block => number(block.getAttribute('breakPoint') || ''));
     const first = rows(data[0]);

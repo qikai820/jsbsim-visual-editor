@@ -1,397 +1,193 @@
-import { useMemo } from 'react';
-import { displayNumber } from '../../utils/displayNumber';
-import type { ExprNode } from '../../types';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { ExprTable } from '../../types';
+import { axisLabel, formatTableNumber, tableRange, tableSlice, valueColor, type TableAxis, type TablePoint } from '../../utils/tableData';
+import './tableWorkspace.css';
 
 interface TableChartProps {
-  expr: ExprNode & { kind: 'table' };
+  expr: ExprTable;
   width?: number;
   height?: number;
+  fixedAxis?: TableAxis;
+  slice?: number;
+  mode?: 'surface' | 'heatmap';
+  selected?: TablePoint;
+  onSelect?: (point: TablePoint) => void;
 }
 
-// Color interpolation for heatmap
-function valueToColor(val: number | undefined | null, min: number, max: number): string {
-  const v = (val !== undefined && val !== null && !isNaN(val)) ? val : 0;
-  const range = max - min || 1;
-  const t = Math.max(0, Math.min(1, (v - min) / range));
-  // Blue → Cyan → Green → Yellow → Red
-  const r = t < 0.5 ? Math.round(t * 2 * 100) : Math.round(100 + (t - 0.5) * 2 * 155);
-  const g = t < 0.25 ? Math.round(100 + t * 4 * 155) : t < 0.75 ? 255 : Math.round(255 - (t - 0.75) * 4 * 200);
-  const b = t < 0.5 ? Math.round(255 - t * 2 * 255) : 0;
-  return `rgb(${r},${g},${b})`;
-}
+const fmt = (n: number | undefined) => n === undefined || !Number.isFinite(n) ? '—' : formatTableNumber(n);
+const tick = (n: number) => Number.isFinite(n) ? String(Number(n.toPrecision(5))) : '—';
+const samePoint = (a: TablePoint | undefined, b: TablePoint) => a?.every((v, i) => v === b[i]);
+const normalize = (value: number, min: number, max: number) => max === min ? .5 : (value - min) / (max - min);
+const spaced = (length: number, count = 4) => Array.from(new Set(Array.from({ length: Math.min(length, count) },
+  (_, i) => Math.round(i * (length - 1) / Math.max(1, Math.min(length, count) - 1)))));
 
-function formatNum(n: number | undefined | null): string {
-  if (n === undefined || n === null || isNaN(n)) return '0';
-  return displayNumber(n);
-}
-
-// ── 1D Line Chart ───────────────────────────────────────────────────────────
-
-function LineChart1D({ expr, width = 300, height = 200 }: TableChartProps) {
-  const padding = { top: 20, right: 15, bottom: 35, left: 50 };
-  const chartW = width - padding.left - padding.right;
-  const chartH = height - padding.top - padding.bottom;
-
-  const { points, xMin, xMax, yMin, yMax, xTicks, yTicks } = useMemo(() => {
-    const bp = expr.breakpoints1 || [];
-    const data = expr.data || [];
-    if (bp.length === 0 || data.length === 0) {
-      return { points: [], xMin: 0, xMax: 1, yMin: 0, yMax: 1, xTicks: [0, 1], yTicks: [0, 1] };
-    }
-    const vals = data.map(r => {
-      const v = r?.[0];
-      return (v !== undefined && v !== null && !isNaN(v)) ? v : 0;
-    });
-
-    const xMin = Math.min(...bp);
-    const xMax = Math.max(...bp);
-    const yMin = Math.min(...vals);
-    const yMax = Math.max(...vals);
-    const xRange = xMax - xMin || 1;
-    const yRange = yMax - yMin || 1;
-
-    const points = bp.map((x, i) => {
-      const rawVal = data[i]?.[0];
-      const val = (rawVal !== undefined && rawVal !== null && !isNaN(rawVal)) ? rawVal : 0;
-      return {
-        x: padding.left + ((x - xMin) / xRange) * chartW,
-        y: padding.top + chartH - ((val - yMin) / yRange) * chartH,
-        val,
-        bp: x,
-      };
-    });
-
-    // Generate tick marks
-    const xTicks = generateTicks(xMin, xMax, 5);
-    const yTicks = generateTicks(yMin, yMax, 4);
-
-    return { points, xMin, xMax, yMin, yMax, xTicks, yTicks };
-  }, [expr, chartW, chartH, padding.left, padding.top]);
-
-  const xRange = xMax - xMin || 1;
-  const yRange = yMax - yMin || 1;
-
-  // Build SVG path
-  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
-
-  // Area fill path
-  const areaD = pathD +
-    ` L${points[points.length - 1]?.x ?? 0},${padding.top + chartH}` +
-    ` L${points[0]?.x ?? 0},${padding.top + chartH} Z`;
-
-  const varLabel = expr.var1.split('/').pop() || 'x';
-
-  return (
-    <svg width={width} height={height} className="table-chart-svg">
-      {/* Grid lines */}
-      {yTicks.map((t, i) => {
-        const y = padding.top + chartH - ((t - yMin) / yRange) * chartH;
-        return (
-          <g key={`yt-${i}`}>
-            <line x1={padding.left} y1={y} x2={padding.left + chartW} y2={y}
-              stroke="#e2e8f0" strokeWidth={0.5} />
-            <text x={padding.left - 5} y={y + 3} textAnchor="end"
-              className="chart-tick-text">{formatNum(t)}</text>
-          </g>
-        );
-      })}
-      {xTicks.map((t, i) => {
-        const x = padding.left + ((t - xMin) / xRange) * chartW;
-        return (
-          <g key={`xt-${i}`}>
-            <line x1={x} y1={padding.top} x2={x} y2={padding.top + chartH}
-              stroke="#e2e8f0" strokeWidth={0.5} />
-            <text x={x} y={padding.top + chartH + 14} textAnchor="middle"
-              className="chart-tick-text">{formatNum(t)}</text>
-          </g>
-        );
-      })}
-
-      {/* Axes */}
-      <line x1={padding.left} y1={padding.top} x2={padding.left} y2={padding.top + chartH}
-        stroke="#94a3b8" strokeWidth={1} />
-      <line x1={padding.left} y1={padding.top + chartH} x2={padding.left + chartW} y2={padding.top + chartH}
-        stroke="#94a3b8" strokeWidth={1} />
-
-      {/* Area fill */}
-      <path d={areaD} fill="url(#areaGrad)" opacity={0.3} />
-
-      {/* Line */}
-      <path d={pathD} fill="none" stroke="#3b82f6" strokeWidth={2} strokeLinejoin="round" />
-
-      {/* Data points */}
-      {points.map((p, i) => (
-        <g key={i}>
-          <circle cx={p.x} cy={p.y} r={3.5} fill="#fff" stroke="#3b82f6" strokeWidth={1.5} />
-          <title>{`${varLabel}=${formatNum(p.bp)}, f(x)=${formatNum(p.val)}`}</title>
-        </g>
-      ))}
-
-      {/* Axis labels */}
-      <text x={padding.left + chartW / 2} y={height - 3} textAnchor="middle"
-        className="chart-axis-label">{varLabel}</text>
-      <text x={12} y={padding.top + chartH / 2} textAnchor="middle"
-        className="chart-axis-label" transform={`rotate(-90, 12, ${padding.top + chartH / 2})`}>f(x)</text>
-
-      {/* Gradient definition */}
-      <defs>
-        <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4} />
-          <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-        </linearGradient>
-      </defs>
-    </svg>
-  );
-}
-
-// ── 2D Heatmap ──────────────────────────────────────────────────────────────
-
-function Heatmap2D({ expr, width = 300, height = 200 }: TableChartProps) {
-  const padding = { top: 25, right: 60, bottom: 35, left: 55 };
-  const chartW = width - padding.left - padding.right;
-  const chartH = height - padding.top - padding.bottom;
-
-  const { bp1, bp2, data, vMin, vMax, cellW, cellH } = useMemo(() => {
-    const bp1 = expr.breakpoints1 || [];
-    const bp2 = expr.breakpoints2 || [];
-    const data = expr.data || [];
-    if (data.length === 0 || bp1.length === 0 || bp2.length === 0) {
-      return { bp1: [], bp2: [], data: [], vMin: 0, vMax: 1, cellW: 0, cellH: 0 };
-    }
-    const allVals = data.flat().filter(v => v !== undefined && v !== null);
-    const vMin = allVals.length > 0 ? Math.min(...allVals) : 0;
-    const vMax = allVals.length > 0 ? Math.max(...allVals) : 1;
-    const cellW = chartW / Math.max(bp2.length, 1);
-    const cellH = chartH / Math.max(bp1.length, 1);
-    return { bp1, bp2, data, vMin, vMax, cellW, cellH };
-  }, [expr, chartW, chartH]);
-
-  const var1Label = expr.var1.split('/').pop() || 'row';
-  const var2Label = expr.var2.split('/').pop() || 'col';
-
-  return (
-    <svg width={width} height={height} className="table-chart-svg">
-      {/* Title */}
-      <text x={padding.left + chartW / 2} y={14} textAnchor="middle" className="chart-title-text">
-        {var1Label} ↓ / {var2Label} →
-      </text>
-
-      {/* Heatmap cells */}
-      {data.map((row, ri) =>
-        row.map((val, ci) => {
-          const safeVal = (val !== undefined && val !== null && !isNaN(val)) ? val : 0;
-          return (
-            <g key={`${ri}-${ci}`}>
-              <rect
-                x={padding.left + ci * cellW}
-                y={padding.top + ri * cellH}
-                width={cellW - 1}
-                height={cellH - 1}
-                fill={valueToColor(safeVal, vMin, vMax)}
-                rx={2}
-              />
-              {cellW > 30 && cellH > 18 && (
-                <text
-                  x={padding.left + ci * cellW + cellW / 2}
-                  y={padding.top + ri * cellH + cellH / 2 + 3}
-                  textAnchor="middle"
-                  className="chart-cell-text"
-                >
-                  {formatNum(safeVal)}
-                </text>
-              )}
-              <title>{`${var1Label}=${formatNum(bp1[ri])}, ${var2Label}=${formatNum(bp2[ci])}: ${formatNum(safeVal)}`}</title>
-            </g>
-          );
-        })
-      )}
-
-      {/* Row labels (breakpoints1) */}
-      {bp1.map((bp, i) => (
-        <text key={`rl-${i}`}
-          x={padding.left - 5}
-          y={padding.top + i * cellH + cellH / 2 + 3}
-          textAnchor="end" className="chart-tick-text">
-          {formatNum(bp)}
-        </text>
-      ))}
-
-      {/* Column labels (breakpoints2) */}
-      {bp2.map((bp, i) => (
-        <text key={`cl-${i}`}
-          x={padding.left + i * cellW + cellW / 2}
-          y={padding.top + bp1.length * cellH + 14}
-          textAnchor="middle" className="chart-tick-text">
-          {formatNum(bp)}
-        </text>
-      ))}
-
-      {/* Color legend */}
-      <defs>
-        <linearGradient id="heatGrad" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0%" stopColor={valueToColor(0, 0, 1)} />
-          <stop offset="50%" stopColor={valueToColor(0.5, 0, 1)} />
-          <stop offset="100%" stopColor={valueToColor(1, 0, 1)} />
-        </linearGradient>
-      </defs>
-      <rect x={width - 45} y={padding.top} width={12} height={chartH}
-        fill="url(#heatGrad)" rx={3} stroke="#e2e8f0" strokeWidth={0.5} />
-      <text x={width - 39} y={padding.top - 5} textAnchor="middle"
-        className="chart-tick-text">{formatNum(vMax)}</text>
-      <text x={width - 39} y={padding.top + chartH + 14} textAnchor="middle"
-        className="chart-tick-text">{formatNum(vMin)}</text>
-    </svg>
-  );
-}
-
-// ── 3D Multi-Heatmap ────────────────────────────────────────────────────────
-
-function Heatmap3D({ expr, width = 300, height = 200 }: TableChartProps) {
-  const bp1 = expr.breakpoints1 || [];
-  const bp2 = expr.breakpoints2 || [];
-  const bp3 = expr.breakpoints3 || [];
-  const data = expr.data || [];
-  const rowsPerTable = bp1.length || 1;
-  const cols = bp2.length || 1;
-
-  // Split data into sub-tables
-  const tables = useMemo(() => {
-    const result = [];
-    for (let t = 0; t < bp3.length; t++) {
-      const startRow = t * rowsPerTable;
-      const tableData = data.slice(startRow, startRow + rowsPerTable);
-      result.push({ bp3: bp3[t], data: tableData });
-    }
-    return result;
-  }, [data, bp3, rowsPerTable]);
-
-  const allVals = data.flat().filter(v => v !== undefined && v !== null);
-  const vMin = allVals.length > 0 ? Math.min(...allVals) : 0;
-  const vMax = allVals.length > 0 ? Math.max(...allVals) : 1;
-
-  const var3Label = expr.var3.split('/').pop() || 'table';
-  const var1Label = expr.var1.split('/').pop() || 'row';
-  const var2Label = expr.var2.split('/').pop() || 'col';
-
-  // Layout: arrange sub-tables in a grid
-  const tablesPerRow = Math.min(tables.length, 3);
-  const tableRows = Math.ceil(tables.length / tablesPerRow);
-  const gap = 8;
-  const labelH = 18;
-  const singleW = (width - gap * (tablesPerRow - 1)) / tablesPerRow;
-  const singleH = (height - labelH * tableRows - gap * (tableRows - 1)) / tableRows;
-
-  const cellW = (singleW - 40) / Math.max(cols, 1);
-  const cellH = (singleH - 25) / Math.max(rowsPerTable, 1);
-
-  return (
-    <svg width={width} height={height} className="table-chart-svg">
-      {tables.map((tbl, ti) => {
-        const col = ti % tablesPerRow;
-        const row = Math.floor(ti / tablesPerRow);
-        const offsetX = col * (singleW + gap);
-        const offsetY = row * (singleH + gap + labelH);
-
-        return (
-          <g key={ti} transform={`translate(${offsetX}, ${offsetY})`}>
-            {/* Sub-table title */}
-            <text x={singleW / 2} y={12} textAnchor="middle" className="chart-subtitle-text">
-              {var3Label} = {formatNum(tbl.bp3)}
-            </text>
-
-            {/* Heatmap cells */}
-            {tbl.data.map((dataRow, ri) =>
-              dataRow.map((val, ci) => {
-                const safeVal = (val !== undefined && val !== null && !isNaN(val)) ? val : 0;
-                return (
-                  <g key={`${ri}-${ci}`}>
-                    <rect
-                      x={35 + ci * cellW}
-                      y={18 + ri * cellH}
-                      width={Math.max(cellW - 1, 1)}
-                      height={Math.max(cellH - 1, 1)}
-                      fill={valueToColor(safeVal, vMin, vMax)}
-                      rx={1}
-                    />
-                    {cellW > 25 && cellH > 14 && (
-                      <text
-                        x={35 + ci * cellW + cellW / 2}
-                        y={18 + ri * cellH + cellH / 2 + 3}
-                        textAnchor="middle"
-                        className="chart-cell-text-sm"
-                      >
-                        {formatNum(safeVal)}
-                      </text>
-                    )}
-                    <title>{`${var3Label}=${formatNum(tbl.bp3)}, ${var1Label}=${formatNum(bp1[ri])}, ${var2Label}=${formatNum(bp2[ci])}: ${formatNum(safeVal)}`}</title>
-                  </g>
-                );
-              })
-            )}
-
-            {/* Row labels */}
-            {bp1.map((bp, i) => (
-              <text key={`rl-${i}`} x={32} y={18 + i * cellH + cellH / 2 + 3}
-                textAnchor="end" className="chart-tick-text-sm">
-                {formatNum(bp)}
-              </text>
-            ))}
-
-            {/* Column labels */}
-            {bp2.map((bp, i) => (
-              <text key={`cl-${i}`} x={35 + i * cellW + cellW / 2}
-                y={18 + rowsPerTable * cellH + 11}
-                textAnchor="middle" className="chart-tick-text-sm">
-                {formatNum(bp)}
-              </text>
-            ))}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-// ── Tick generation ─────────────────────────────────────────────────────────
-
-function generateTicks(min: number, max: number, count: number): number[] {
-  if (min === max) return [min];
-  const range = max - min;
-  const step = niceStep(range / count);
-  const start = Math.ceil(min / step) * step;
-  const ticks: number[] = [];
-  for (let t = start; t <= max + step * 0.01; t += step) {
-    ticks.push(Math.round(t * 1e10) / 1e10);
+export default function TableChart({ expr, width = 640, height = 390, fixedAxis = 2, slice = 0,
+  mode = 'surface', selected, onSelect }: TableChartProps) {
+  const view = useMemo(() => tableSlice(expr, fixedAxis, slice), [expr, fixedAxis, slice]);
+  const [min, max] = useMemo(() => tableRange(expr), [expr]);
+  const [camera, setCamera] = useState({ yaw: -.65, elevation: .58, zoom: 1 });
+  const drag = useRef<{ x: number; y: number; yaw: number; elevation: number; moved: boolean }>();
+  const surfaceSvg = useRef<SVGSVGElement>(null);
+  useEffect(() => {
+    const element = surfaceSvg.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      event.preventDefault(); event.stopPropagation();
+      setCamera(current => ({ ...current, zoom: Math.max(.55, Math.min(1.8, current.zoom - event.deltaY * .001)) }));
+    };
+    element.addEventListener('wheel', wheel, { passive: false });
+    return () => element.removeEventListener('wheel', wheel);
+  }, [expr, mode]);
+  const id = useId().replace(/:/g, '');
+  const w = Math.max(340, width), h = Math.max(230, height);
+  const rowLabel = axisLabel(expr, view.rowAxis ?? 0);
+  const colLabel = view.columnAxis === undefined ? '' : axisLabel(expr, view.columnAxis);
+  const selectedInView = selected && (expr.tableType !== '3D' || selected[fixedAxis] === slice);
+  const description = (r: number, c: number) => `${rowLabel} = ${fmt(view.rows[r])}${colLabel ? `, ${colLabel} = ${fmt(view.columns[c])}` : ''}; 输出 = ${fmt(view.values[r]?.[c])}`;
+  const choose = (r: number, c: number) => onSelect?.(view.pointAt(r, c));
+  const finiteValues = view.values.flat().filter((v): v is number => v !== undefined && Number.isFinite(v));
+  if (!view.rows.length || !view.columns.length || !finiteValues.length) {
+    return <div className="lut-chart-empty">暂无可显示的数据，请添加断点和数值。</div>;
   }
-  return ticks;
-}
 
-function niceStep(rough: number): number {
-  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
-  const frac = rough / pow;
-  if (frac <= 1.5) return pow;
-  if (frac <= 3) return 2 * pow;
-  if (frac <= 7) return 5 * pow;
-  return 10 * pow;
-}
+  const chartSvgProps = { viewBox: `0 0 ${w} ${h}`, className: 'lut-chart-svg', role: 'img',
+    'aria-label': expr.tableType === '1D' ? '一维插值曲线' : mode === 'surface' ? '可旋转的三维插值曲面' : '当前切片的热力图' };
+  const left = 64, right = w - 28, top = 28, bottom = h - 55;
+  const legend = <div className="lut-color-legend"><span>{tick(min)}</span>
+    <i style={{ background: `linear-gradient(90deg, ${[0, .25, .5, .75, 1].map(t => valueColor(min + t * (max - min), min, max)).join(',')})` }} />
+    <span>{tick(max)}</span><small>输出值 · 全表统一色标</small></div>;
 
-// ── Main Component ──────────────────────────────────────────────────────────
-
-export default function TableChart({ expr, width = 320, height = 200 }: TableChartProps) {
-  try {
-    if (!expr || expr.kind !== 'table') return null;
-    if (expr.tableType === '1D') {
-      return <LineChart1D expr={expr} width={width} height={height} />;
-    }
-    if (expr.tableType === '2D') {
-      return <Heatmap2D expr={expr} width={width} height={height} />;
-    }
-    if (expr.tableType === '3D') {
-      return <Heatmap3D expr={expr} width={width} height={Math.max(height, 250)} />;
-    }
-    return null;
-  } catch (e) {
-    console.warn('[TableChart] render error:', e);
-    return <div style={{ padding: 8, color: '#999', fontSize: 11 }}>图表渲染错误</div>;
+  if (expr.tableType === '1D') {
+    const xMin = Math.min(...view.rows), xMax = Math.max(...view.rows);
+    const point = (r: number) => [left + normalize(view.rows[r], xMin, xMax) * (right - left),
+      bottom - normalize(view.values[r][0]!, min, max) * (bottom - top)];
+    const path = view.rows.map((_, r) => {
+      const [x, y] = point(r); return `${r ? 'L' : 'M'} ${x} ${y}`;
+    }).join(' ');
+    return <div className="lut-chart"><svg {...chartSvgProps}>
+      {Array.from({ length: 5 }, (_, i) => {
+        const y = top + i * (bottom - top) / 4;
+        return <g key={i}><line x1={left} x2={right} y1={y} y2={y} className="lut-chart-gridline" />
+          <text x={left - 9} y={y + 4} textAnchor="end">{tick(max - i * (max - min) / 4)}</text></g>;
+      })}
+      <path d={`M${left},${top}V${bottom}H${right}`} className="lut-chart-axis" />
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop stopColor="#0d9488" stopOpacity=".23" /><stop offset="1" stopColor="#0d9488" stopOpacity=".02" /></linearGradient></defs>
+      <path d={`${path} L${point(view.rows.length - 1)[0]} ${bottom} L${point(0)[0]} ${bottom} Z`} fill={`url(#${id})`} />
+      <path d={path} fill="none" stroke="#0d9488" strokeWidth="2.5" />
+      {view.rows.map((_, r) => { const [x, y] = point(r); return <circle key={r} cx={x} cy={y}
+        r={samePoint(selected, view.pointAt(r, 0)) ? 6 : 4} className="lut-chart-point" tabIndex={onSelect ? 0 : undefined}
+        role={onSelect ? 'button' : undefined} aria-label={description(r, 0)}
+        onClick={() => choose(r, 0)} onKeyDown={e => { if (e.key === 'Enter') choose(r, 0); }}><title>{description(r, 0)}</title></circle>; })}
+      {spaced(view.rows.length, 6).map(r => <text key={r} x={point(r)[0]} y={bottom + 20} textAnchor="middle">{tick(view.rows[r])}</text>)}
+      <text x={(left + right) / 2} y={h - 8} textAnchor="middle" className="lut-chart-axis-title">{rowLabel}</text>
+      <text x={left} y={17} className="lut-chart-axis-title">输出 f(x)</text>
+    </svg>{legend}</div>;
   }
+
+  if (mode === 'heatmap') {
+    const cw = (right - left) / view.columns.length, ch = (bottom - top) / view.rows.length;
+    return <div className="lut-chart"><svg {...chartSvgProps}>
+      {view.values.map((row, r) => row.map((value, c) => <g key={`${r}-${c}`}
+        tabIndex={onSelect ? 0 : undefined} role={onSelect ? 'button' : undefined} aria-label={description(r, c)}
+        onClick={() => choose(r, c)} onKeyDown={e => { if (e.key === 'Enter') choose(r, c); }}>
+        <rect x={left + c * cw} y={top + r * ch} width={cw} height={ch}
+          fill={value === undefined || !Number.isFinite(value) ? '#e2e8f0' : valueColor(value, min, max)}
+          stroke={samePoint(selected, view.pointAt(r, c)) ? '#0f172a' : '#ffffff88'}
+          strokeWidth={samePoint(selected, view.pointAt(r, c)) ? 3 : 1} />
+        {cw > 48 && ch > 24 && <text x={left + (c + .5) * cw} y={top + (r + .5) * ch + 4}
+          textAnchor="middle" className="lut-heat-value">{tick(value!)}</text>}
+        <title>{description(r, c)}</title>
+      </g>))}
+      {spaced(view.rows.length, Math.floor((bottom - top) / 24)).map(r => <text key={r} x={left - 9} y={top + (r + .5) * ch + 4} textAnchor="end">{tick(view.rows[r])}</text>)}
+      {spaced(view.columns.length, Math.floor((right - left) / 65)).map(c => <text key={c} x={left + (c + .5) * cw} y={bottom + 20} textAnchor="middle">{tick(view.columns[c])}</text>)}
+      <text x={(left + right) / 2} y={h - 8} textAnchor="middle" className="lut-chart-axis-title">列 → {colLabel}</text>
+      <text x={left} y={17} className="lut-chart-axis-title">行 ↓ {rowLabel}</text>
+    </svg>{legend}</div>;
+  }
+
+  const xMin = Math.min(...view.columns), xMax = Math.max(...view.columns);
+  const yMin = Math.min(...view.rows), yMax = Math.max(...view.rows);
+  const scale = Math.min(w / 4.5, h / 3.5) * camera.zoom;
+  const project = (x: number, y: number, z: number) => {
+    const a = x * Math.cos(camera.yaw) - y * Math.sin(camera.yaw);
+    const b = x * Math.sin(camera.yaw) + y * Math.cos(camera.yaw);
+    return { x: w / 2 + a * scale, y: h * .58 + (b * Math.sin(camera.elevation) - z * Math.cos(camera.elevation)) * scale, depth: b * Math.cos(camera.elevation) + z * Math.sin(camera.elevation) };
+  };
+  const world = (r: number, c: number, value: number) => project(
+    2 * normalize(c, xMin, xMax) - 1, 1 - 2 * normalize(r, yMin, yMax), 1.5 * normalize(value, min, max));
+  const vertices = view.values.flatMap((row, r) => row.flatMap((value, c) => value === undefined || !Number.isFinite(value) ? [] :
+    [{ ...world(view.rows[r], view.columns[c], value), r, c, value }]));
+  const surfaces: { points: string; depth: number; value: number; r: number; c: number }[] = [];
+  const subdivisions = view.rows.length * view.columns.length < 1600 ? 2 : 1;
+  for (let r = 0; r < view.rows.length - 1; r++) for (let c = 0; c < view.columns.length - 1; c++) {
+    const values = [view.values[r][c], view.values[r][c + 1], view.values[r + 1][c + 1], view.values[r + 1][c]];
+    if (!values.every(v => v !== undefined && Number.isFinite(v))) continue;
+    const sample = (u: number, v: number) => {
+      const value = values[0]! * (1 - u) * (1 - v) + values[1]! * u * (1 - v) + values[2]! * u * v + values[3]! * (1 - u) * v;
+      return { ...world(view.rows[r] + v * (view.rows[r + 1] - view.rows[r]),
+        view.columns[c] + u * (view.columns[c + 1] - view.columns[c]), value), value };
+    };
+    for (let i = 0; i < subdivisions; i++) for (let j = 0; j < subdivisions; j++) {
+      const u = i / subdivisions, v = j / subdivisions, step = 1 / subdivisions;
+      const corners = [sample(u, v), sample(u + step, v), sample(u + step, v + step), sample(u, v + step)];
+      surfaces.push({ points: corners.map(p => `${p.x},${p.y}`).join(' '),
+        depth: corners.reduce((s, p) => s + p.depth, 0) / 4,
+        value: corners.reduce((s, p) => s + p.value, 0) / 4, r, c });
+    }
+  }
+  surfaces.sort((a, b) => a.depth - b.depth);
+  const origin = project(-1, 1, 0), xEnd = project(1, 1, 0), yEnd = project(-1, -1, 0), zOrigin = project(-1, -1, 0), zEnd = project(-1, -1, 1.6);
+  const reset = () => setCamera({ yaw: -.65, elevation: .58, zoom: 1 });
+  return <div className="lut-chart lut-surface-chart">
+    <div className="lut-camera-tools"><span>拖动旋转 · 滚轮缩放 · 点击数据点定位</span><button type="button" onClick={reset}>复位视角</button></div>
+    <svg {...chartSvgProps} ref={surfaceSvg} tabIndex={0}
+      onPointerDown={e => { if (e.button !== 0) return; e.currentTarget.focus(); drag.current = { x: e.clientX, y: e.clientY, yaw: camera.yaw, elevation: camera.elevation, moved: false }; e.currentTarget.setPointerCapture(e.pointerId); }}
+      onPointerMove={e => { const start = drag.current; if (!start || !e.buttons) return;
+        const dx = e.clientX - start.x, dy = e.clientY - start.y;
+        if (Math.abs(dx) + Math.abs(dy) < 4 && !start.moved) return;
+        start.moved = true; setCamera(current => ({ ...current, yaw: start.yaw + dx * .008,
+          elevation: Math.max(.12, Math.min(1.4, start.elevation + dy * .006)) })); }}
+      onPointerUp={e => {
+        if (drag.current && !drag.current.moved && onSelect) {
+          const rect = e.currentTarget.getBoundingClientRect(), x = (e.clientX - rect.left) * w / rect.width, y = (e.clientY - rect.top) * h / rect.height;
+          const nearest = vertices.reduce((best, p) => (p.x - x) ** 2 + (p.y - y) ** 2 < (best.x - x) ** 2 + (best.y - y) ** 2 ? p : best);
+          if (Math.hypot(nearest.x - x, nearest.y - y) < 24) onSelect(view.pointAt(nearest.r, nearest.c));
+        }
+        e.currentTarget.releasePointerCapture(e.pointerId); }}
+      onPointerCancel={() => { drag.current = undefined; }}
+      onKeyDown={e => { if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '-', '0'].includes(e.key)) return;
+        e.preventDefault(); if (e.key === '0') reset();
+        else setCamera(current => ({ yaw: current.yaw + (e.key === 'ArrowLeft' ? -.1 : e.key === 'ArrowRight' ? .1 : 0),
+          elevation: Math.max(.12, Math.min(1.4, current.elevation + (e.key === 'ArrowUp' ? .1 : e.key === 'ArrowDown' ? -.1 : 0))),
+          zoom: Math.max(.55, Math.min(1.8, current.zoom + (e.key === '+' ? .1 : e.key === '-' ? -.1 : 0))) })); }}>
+      <defs><radialGradient id={id}><stop stopColor="#dce9ed" stopOpacity=".6" /><stop offset="1" stopColor="#f8fafc" stopOpacity="0" /></radialGradient></defs>
+      <ellipse cx={w / 2} cy={h * .76} rx={w * .35} ry={h * .19} fill={`url(#${id})`} />
+      {Array.from({ length: 5 }, (_, i) => {
+        const t = -1 + i / 2, a = project(t, -1, 0), b = project(t, 1, 0), c = project(-1, t, 0), d = project(1, t, 0);
+        return <g key={i} className="lut-floor-grid"><line x1={a.x} y1={a.y} x2={b.x} y2={b.y} /><line x1={c.x} y1={c.y} x2={d.x} y2={d.y} /></g>;
+      })}
+      <g className="lut-chart-axis"><path d={`M${xEnd.x},${xEnd.y}L${origin.x},${origin.y}L${yEnd.x},${yEnd.y} M${zOrigin.x},${zOrigin.y}L${zEnd.x},${zEnd.y}`} /></g>
+      {surfaces.map((face, i) => <polygon key={i} data-surface-face="true" points={face.points}
+        fill={valueColor(face.value, min, max)} stroke="#ffffff50" strokeWidth=".65"><title>{description(face.r, face.c)}</title></polygon>)}
+      {/* Degenerate single-row/column tables remain visible as a curve. */}
+      {!surfaces.length && <polyline points={vertices.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#189faa" strokeWidth="2" />}
+      {vertices.length < 1600 && vertices.map(p => <circle key={`${p.r}-${p.c}`} cx={p.x} cy={p.y} r={samePoint(selected, view.pointAt(p.r, p.c)) ? 6 : 2.5}
+        fill={samePoint(selected, view.pointAt(p.r, p.c)) ? '#fff' : valueColor(p.value, min, max)} stroke={samePoint(selected, view.pointAt(p.r, p.c)) ? '#0f172a' : '#ffffffb0'}
+        strokeWidth={samePoint(selected, view.pointAt(p.r, p.c)) ? 2.5 : .8} className="lut-surface-point"
+        aria-label={description(p.r, p.c)}><title>{description(p.r, p.c)}</title></circle>)}
+      {selectedInView && vertices.filter(p => samePoint(selected, view.pointAt(p.r, p.c))).map(p => <g key="selected" pointerEvents="none">
+        <circle cx={p.x} cy={p.y} r={10} fill="none" stroke="#0f172a" strokeWidth="1" opacity=".45" />
+        <rect x={p.x + 10} y={p.y - 25} width={Math.max(62, fmt(p.value).length * 8 + 16)} height={23} rx={5} fill="#0f172a" />
+        <text x={p.x + 18} y={p.y - 9} className="lut-surface-tooltip">{fmt(p.value)}</text>
+      </g>)}
+      {spaced(view.columns.length).map(c => { const p = project(2 * normalize(view.columns[c], xMin, xMax) - 1, 1, 0);
+        return <text key={`c${c}`} x={p.x + 4} y={p.y + 18} textAnchor="middle">{tick(view.columns[c])}</text>; })}
+      {spaced(view.rows.length).map(r => { const p = project(-1, 1 - 2 * normalize(view.rows[r], yMin, yMax), 0);
+        return <text key={`r${r}`} x={p.x - 10} y={p.y + 4} textAnchor="end">{tick(view.rows[r])}</text>; })}
+      {[0, .5, 1].map(t => { const p = project(-1, -1, t * 1.5); return <text key={t} x={p.x - 10} y={p.y - 6} textAnchor="end">{tick(min + t * (max - min))}</text>; })}
+      <text x={xEnd.x + 12} y={xEnd.y + 39} textAnchor="middle" className="lut-chart-axis-title">{colLabel}</text>
+      <text x={yEnd.x - 12} y={yEnd.y + 26} textAnchor="middle" className="lut-chart-axis-title">{rowLabel}</text>
+      <text x={zEnd.x - 7} y={zEnd.y - 13} textAnchor="middle" className="lut-chart-axis-title">输出 f(x)</text>
+    </svg>{legend}
+  </div>;
 }

@@ -693,6 +693,17 @@ fn parse_table_1d(rows: &[Vec<f64>], var1: &str) -> ExprNode {
     }
 }
 
+// The blank top-left corner is whitespace and disappears during tokenization.
+// Only skip a numeric corner placeholder when the header is as wide as a data row.
+fn table_column_breakpoints(rows: &[Vec<f64>]) -> Vec<f64> {
+    let Some(header) = rows.first() else { return vec![]; };
+    if !header.is_empty() && rows.get(1).is_some_and(|row| row.len() == header.len()) {
+        header[1..].to_vec()
+    } else {
+        header.clone()
+    }
+}
+
 fn parse_table_2d(rows: &[Vec<f64>], var1: &str, var2: &str) -> ExprNode {
     if rows.is_empty() {
         return ExprNode::Table {
@@ -706,7 +717,7 @@ fn parse_table_2d(rows: &[Vec<f64>], var1: &str, var2: &str) -> ExprNode {
             breakpoints3: vec![],
         };
     }
-    let breakpoints2 = rows[0][1..].to_vec();
+    let breakpoints2 = table_column_breakpoints(rows);
     let mut breakpoints1 = Vec::new();
     let mut data = Vec::new();
     for row in &rows[1..] {
@@ -733,7 +744,7 @@ fn parse_table_3d(table_data_elems: &[&XmlElement], var1: &str, var2: &str, var3
     let mut breakpoints2 = Vec::new();
     let mut all_data = Vec::new();
 
-    for td_elem in table_data_elems {
+    for (layer, td_elem) in table_data_elems.iter().enumerate() {
         let bp = get_attr(td_elem, "breakPoint")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
@@ -743,14 +754,12 @@ fn parse_table_3d(table_data_elems: &[&XmlElement], var1: &str, var2: &str, var3
         let rows = parse_table_text(&text);
 
         if !rows.is_empty() {
-            if breakpoints2.is_empty() {
-                breakpoints2 = rows[0][1..].to_vec();
+            if layer == 0 {
+                breakpoints2 = table_column_breakpoints(&rows);
+                breakpoints1 = rows[1..].iter().filter_map(|row| row.first().copied()).collect();
             }
             for row in &rows[1..] {
                 if !row.is_empty() {
-                    if breakpoints1.len() < all_data.len() / breakpoints2.len().max(1) + 1 {
-                        breakpoints1.push(row[0]);
-                    }
                     all_data.push(row[1..].to_vec());
                 }
             }
@@ -804,7 +813,7 @@ pub fn parse_table(table_obj: &XmlElement) -> ExprNode {
             if table_type == "1D" {
                 table_type = "2D".to_string();
             }
-        } else if lookup == "z" {
+        } else if lookup == "table" || lookup == "axis3" || lookup == "z" {
             var3 = text;
             table_type = "3D".to_string();
         }
@@ -829,7 +838,7 @@ pub fn parse_table(table_obj: &XmlElement) -> ExprNode {
         let text = get_text(td);
         let rows = parse_table_text(&text);
 
-        if table_type == "2D" && rows.len() > 1 && !rows.is_empty() && rows[0].len() > 1 {
+        if table_type == "2D" && rows.len() > 1 {
             return parse_table_2d(&rows, &var1, &var2);
         } else {
             return parse_table_1d(&rows, &var1);
@@ -974,7 +983,7 @@ fn table_to_xml(expr: &ExprNode, level: usize) -> String {
         table_type,
         var1,
         var2,
-        var3: _,
+        var3,
         data,
         breakpoints1,
         breakpoints2,
@@ -1007,6 +1016,11 @@ fn table_to_xml(expr: &ExprNode, level: usize) -> String {
                     "{}<independentVar lookup=\"column\">{}</independentVar>",
                     indent(level + 1),
                     escape_xml(var2)
+                ));
+                lines.push(format!(
+                    "{}<independentVar lookup=\"table\">{}</independentVar>",
+                    indent(level + 1),
+                    escape_xml(var3)
                 ));
                 lines.push(table_data_to_xml_3d(
                     breakpoints1,

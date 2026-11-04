@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { cachedEditBaseline, changedModelPaths, compactModelBaseline, mainXmlPath, readRemoteBaseline, remoteBaselineKey, restoreModelBaseline, type ModelProject } from '../utils/modelChanges';
+import { environmentFromProject, environmentFields } from '../sim/runtimeParameters';
+import { getComponentDef } from '../utils/componentDefs';
+import { ftpDownloadSimConfig, ftpUploadSimConfig } from '../utils/tauriApi';
+import { prepareModelXml, compareModelXml, type RemoteXmlChange } from '../utils/modelXmlSync';
 import { useFlowStore } from '../store/flowStore';
-import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, loadAircraft, simListModels, ftpDownloadModel, ftpDownloadXml, ftpUploadModel, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, ftpListSystems, ftpListEngines, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
+import { generateXml, generateSubfile, parseXml, saveProject, getProjectPath, loadProject as loadProjectApi, loadAircraft, simListModels, ftpDownloadXml, ftpUploadFile, ftpUploadModelAssets, checkModelAssets, listRemoteXmlParent, isRemoteUploadEnabled } from '../utils/tauriApi';
 import { parseSerialSensors, serializeSerialSensors } from '../utils/serialSensorXml';
 import { parsePwmCaptures, serializePwmCaptures } from '../utils/pwmCaptureXml';
 import AircraftWizard from './AircraftWizard';
@@ -15,9 +20,8 @@ import NshConsoleDialog from './NshConsoleDialog';
 import SerialAssistantDialog from './SerialAssistantDialog';
 import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
-import { patchExistingSubfileXml } from '../utils/sourcePreservingXml';
-import { xmlContentEqual } from '../utils/xmlContentEqual';
-import { prepareInertiaUpdate } from '../utils/inertiaSync';
+import ModelSyncBar from './ModelSyncBar';
+import { useSignalMonitorStore } from '../store/signalMonitorStore';
 import { isTauri, selectModelImport, getSimulatorTransportMode, getPlotJugglerRate, setPlotJugglerRate, startPlotJuggler } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLanguage } from '../i18n';
@@ -33,8 +37,8 @@ interface ToolbarProps {
   hudVisible?: boolean;
   onShowLogCenter?: () => void;
   fleetControls?: FleetControls;
-  workspace?: 'editor' | 'multi';
-  onSelectWorkspace?: (workspace: 'editor' | 'multi') => void;
+  workspace?: 'editor' | 'multi' | 'scene';
+  onSelectWorkspace?: (workspace: 'editor' | 'multi' | 'scene') => void;
   activeInstance?: string;
   instanceSlots?: Record<string, string>;
   editorSwitchRequest?: string | null;
@@ -50,8 +54,6 @@ interface ToolbarProps {
   onRedo?: () => void;
   onCopy?: () => void;
   onPaste?: () => void;
-  modifiedXmlFiles?: string[];
-  onSaveComplete?: (savedFiles?: string[]) => void;
 }
 
 type ImportFileCategory = 'initialization' | 'model-config' | 'system' | 'engine' | 'companion';
@@ -79,41 +81,13 @@ function projectFingerprint(project: { aircraft: any; nodes: any[]; edges: any[]
   });
 }
 
-function serialSensorFingerprint(project: { nodes?: any[]; edges?: any[] }): string {
-  const sensors = (project.nodes || []).filter(node => node.data?.componentType === 'serial_sensor');
-  const sensorIds = new Set(sensors.map(node => node.id));
-  return JSON.stringify({
-    sensors: sensors.map(node => ({ id: node.id, data: node.data })),
-    connections: (project.edges || []).filter(edge => sensorIds.has(edge.target))
-      .map(edge => ({ source: edge.source, target: edge.target })),
-  });
+function modelSyncFingerprint(project: ModelProject): string {
+  return JSON.stringify({ model: compactModelBaseline(project), sources: project.xmlFiles?.map(file => [file.path, file.originalXml, file.currentXml]) });
 }
 
-function serialHilFingerprint(project: { nodes?: any[] }): string {
-  return JSON.stringify((project.nodes || [])
-    .filter(node => node.data?.componentType === 'serial_hil')
-    .map(node => ({ id: node.id, data: node.data })));
-}
-
-function mainIoFingerprint(project: { nodes?: any[] }): string {
-  return JSON.stringify((project.nodes || [])
-    .filter(node => ['input', 'output', 'uavcan'].includes(node.data?.componentType))
-    .map(node => ({
-      id: node.id,
-      componentType: node.data.componentType,
-      params: Object.fromEntries(Object.entries(node.data.params || {})
-        .filter(([key]) => key !== 'layout')),
-    })));
-}
-
-function pwmCaptureFingerprint(project: { nodes?: any[] }): string {
-  return JSON.stringify((project.nodes || [])
-    .filter(node => node.data?.componentType === 'pwm_capture')
-    .map(node => ({ id: node.id, data: node.data })));
-}
-
-function remoteBaselineKey(model: string): string {
-  return `jsbsim-remote-baseline:${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+function setRemoteBaseline(model: string, value: string) {
+  localStorage.setItem(remoteBaselineKey(model), JSON.stringify(compactModelBaseline(JSON.parse(value))));
+  window.dispatchEvent(new Event('jsbsim-remote-baseline-changed'));
 }
 
 function serialSensorPath(model: string): string {
@@ -124,7 +98,30 @@ function pwmCapturePath(model: string): string {
   return `config/models/${model}.pwm.xml`;
 }
 
+async function readEnvironmentConfig(path: string): Promise<string | null> {
+  try { return (await ftpDownloadSimConfig(path)).content; }
+  catch (error) {
+    const parent = await listRemoteXmlParent('config/models');
+    if (!parent.exists || !parent.files.includes(path.split('/').pop()!)) return null;
+    throw error;
+  }
+}
+async function withEnvironment(data: any, model: string) {
+  const content = await readEnvironmentConfig(`config/models/${model}.json`);
+  if (!content) return data;
+  const environment = JSON.parse(content).environment;
+  if (!environment || typeof environment !== 'object') return data;
+  const def = getComponentDef('environment')!;
+  const params = Object.fromEntries(Object.entries(def.params).map(([key, value]) => [key, value.default]));
+  for (const [field, configKey] of environmentFields) if (Number.isFinite(environment[configKey])) params[field] = environment[configKey];
+  return { ...data, nodes: [...data.nodes.filter((node: any) => node.data.componentType !== 'environment'), {
+    id: 'runtime-environment', type: 'aircraftComponent', position: { x: 40, y: 40 },
+    data: { label: def.label, componentType: 'environment', params },
+  }] };
+}
+
 async function loadRemoteXmlForReview(path: string): Promise<string | null> {
+  if (path.endsWith('.json')) return readEnvironmentConfig(path);
   try {
     return (await ftpDownloadXml(path)).content;
   } catch (error) {
@@ -190,25 +187,6 @@ async function withSerialSensors(data: any, model: string): Promise<any> {
       target: node.id, targetHandle: 'sensor', type: 'smoothstep' }] : [];
   });
   return { ...data, nodes: [...existing, ...serialNodes], edges: [...(data.edges || []), ...serialEdges] };
-}
-
-function subFileRemotePath(file: any): string {
-  const name = String(file.fileName || '').replace(/^\/+/, '').replace(/\.xml$/i, '') + '.xml';
-  return `${file.fileType === 'system' ? 'systems' : 'engine'}/${name}`;
-}
-
-function nodeOwnedPath(node: any): string {
-  const type = node?.data?.componentType;
-  const params = node?.data?.params || {};
-  const raw = String(params.referencePath || params._source_file || params.file || '').trim();
-  if (!raw) return '';
-  const withExt = raw.toLowerCase().endsWith('.xml') ? raw : `${raw}.xml`;
-  if (withExt.includes('/')) return withExt;
-  return type === 'system' || type === 'flight_control'
-    ? `systems/${withExt}`
-    : type === 'engine' || type === 'propeller'
-      ? `engine/${withExt}`
-      : withExt;
 }
 
 function comparableXml(xml: string): string {
@@ -293,360 +271,10 @@ function importCategoryLabel(category: ImportFileCategory | 'main', isZh: boolea
   return (isZh ? zh : en)[category];
 }
 
-/**
- * Apply editor changes to the original top-level I/O tags without rebuilding
- * the aircraft document. generateXml() operates on the expanded visual graph,
- * so using it for an imported model serializes referenced engine/system files
- * into the main aircraft XML.
- */
-function isViztraUdpType(type: unknown): boolean {
-  return type === 'VIZTRA_UDP_JSON' || type === 'VIZTRA_UDP_QGC';
-}
-
-function patchMainIoAttributes(sourceXml: string, nodes: any[]): string {
-  const ioNodes = nodes.filter(node => ['input', 'output', 'uavcan'].includes(node?.data?.componentType) &&
-    !isViztraUdpType(node?.data?.params?.type));
-  const used = new Set<number>();
-
-  // Top-level JSBSim transport declarations have both name and type
-  // attributes. Nested FCS expression tags such as <input>property</input>
-  // do not; excluding them prevents an I/O edit from touching control logic.
-  return sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>/gi, (tag, tagName: string) => {
-    if (isViztraUdpType(getXmlAttribute(tag, 'type'))) return tag;
-    if (getXmlAttribute(tag, 'transport') === 'SERIAL' && !getXmlAttribute(tag, 'editor_module') &&
-        ['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].includes(getXmlAttribute(tag, 'type'))) return tag;
-    const expectedTypes = tagName.toLowerCase() === 'input' ? new Set(['input']) : new Set(['output', 'uavcan']);
-    const originalName = getXmlAttribute(tag, 'name');
-    const originalType = getXmlAttribute(tag, 'type');
-    const compatible = (node: any, index: number) => !used.has(index) && expectedTypes.has(node?.data?.componentType);
-    let index = ioNodes.findIndex((node, candidateIndex) => {
-      if (!compatible(node, candidateIndex)) return false;
-      const params = node.data?.params || {};
-      return String(params.name ?? '') === originalName &&
-        String(node.data.componentType === 'uavcan' ? 'UAVCAN' : params.type ?? '') === originalType;
-    });
-    if (index < 0) {
-      index = ioNodes.findIndex((node, candidateIndex) =>
-        compatible(node, candidateIndex) && String(node.data?.params?.name ?? '') === originalName
-      );
-    }
-    if (index < 0) index = ioNodes.findIndex(compatible);
-    if (index < 0) return tag;
-
-    used.add(index);
-    const node = ioNodes[index];
-    const params = node.data?.params || {};
-    const attributes = node.data.componentType === 'uavcan'
-      ? ['name', 'interface', 'node_id', 'subject_id', 'rate', 'dsdl_path', 'dsdl_type', 'sensor_type']
-      : ['name', 'type', 'port', 'rate'];
-    let patched = tag;
-    if (node.data.componentType === 'uavcan') patched = setXmlAttribute(patched, 'type', 'UAVCAN');
-    for (const attribute of attributes) patched = setXmlAttribute(patched, attribute, params[attribute]);
-    if (['input', 'output'].includes(node.data.componentType)) {
-      const hil = node.data.componentType === 'input'
-        ? params.type === 'HIL_ACTUATOR_CONTROLS'
-        : ['HIL_SENSOR', 'HIL_GPS'].includes(params.type);
-      const serial = hil && params.transport === 'SERIAL';
-      if (hil || getXmlAttribute(tag, 'editor_module') === node.data.componentType) {
-        for (const attribute of ['transport', 'device', 'baud', 'editor_module']) {
-          patched = removeXmlAttribute(patched, attribute);
-        }
-        if (serial) {
-          patched = setXmlAttribute(patched, 'transport', 'SERIAL');
-          patched = setXmlAttribute(patched, 'editor_module', node.data.componentType);
-          patched = setXmlAttribute(patched, 'device', params.device || '/dev/ttyS1');
-          patched = setXmlAttribute(patched, 'baud', params.baud || '921600');
-        }
-        if (node.data.componentType === 'output') {
-          patched = removeXmlAttribute(patched, 'host');
-          if (hil && !serial && String(params.host || '').trim()) {
-            patched = setXmlAttribute(patched, 'host', String(params.host).trim());
-          }
-        }
-      }
-    }
-    return patched;
-  });
-}
-
-/** Update only Viztra JSON declarations; preserve every other model section. */
-function patchMainViztraUdpOutputs(sourceXml: string, nodes: any[], previousNodes: any[] = []): string {
-  const unsafe = (message: string) => Object.assign(new Error(message), { name: 'XmlPatchUnsafeError' });
-  const outputs = nodes.filter(node => node?.data?.componentType === 'output' &&
-    isViztraUdpType(node?.data?.params?.type));
-  const otherOutputNames = new Set(nodes.filter(node => node?.data?.componentType === 'output' &&
-    !isViztraUdpType(node?.data?.params?.type))
-    .map(node => String(node.data.params?.name || '').trim()));
-  const names = new Set<string>();
-  for (const node of outputs) {
-    const p = node.data.params || {};
-    const name = String(p.name || '').trim();
-    const host = String(p.host || '').trim();
-    const port = Number(p.port);
-    const rate = Number(p.rate);
-    if (!name || names.has(name) || otherOutputNames.has(name)) {
-      throw unsafe('Viztra UDP 输出名称须与其他输出不同且不能为空。');
-    }
-    names.add(name);
-    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.split('.').some(part => Number(part) > 255)) {
-      throw unsafe(`${name}：目标 IP 须为有效的 IPv4 地址。`);
-    }
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw unsafe(`${name}：UDP 端口须为 1～65535。`);
-    if (!Number.isFinite(rate) || rate <= 0 || rate > 250) throw unsafe(`${name}：频率须大于 0 且不超过 250 Hz。`);
-    for (const key of ['viztra_north', 'viztra_east', 'viztra_down']) {
-      if (!String(p[key] || '').trim()) throw unsafe(`${name}：${key} 属性不能为空。`);
-    }
-  }
-
-  const escaped = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const used = new Set<string>();
-  const previousById = new Map(previousNodes.map(node => [node.id, node]));
-  const blockFor = (node: any, indent: string) => {
-    const p = node.data.params;
-    const attributes = `name="${escaped(String(p.name))}" type="${escaped(String(p.type))}" host="${escaped(String(p.host).trim())}" port="${Number(p.port)}" rate="${Number(p.rate)}" editor_module="output"`;
-    const properties = ['viztra_north', 'viztra_east', 'viztra_down']
-      .map(key => `${indent}  <property>${escaped(String(p[key]).trim())}</property>`).join('\n');
-    return `${indent}<output ${attributes}>\n${properties}\n${indent}</output>`;
-  };
-  const otherBlockFor = (node: any, indent: string) => {
-    const p = node.data.params || {};
-    const type = String(p.type || 'SOCKET');
-    const attributes = [`name="${escaped(String(p.name || ''))}"`, `type="${escaped(type)}"`];
-    if (p.port != null) attributes.push(`port="${escaped(String(p.port))}"`);
-    if (p.rate != null) attributes.push(`rate="${escaped(String(p.rate))}"`);
-    if (['HIL_SENSOR', 'HIL_GPS'].includes(type)) {
-      if (p.transport === 'SERIAL') {
-        attributes.push('transport="SERIAL"', 'editor_module="output"',
-          `device="${escaped(String(p.device || '/dev/ttyS1'))}"`,
-          `baud="${escaped(String(p.baud || '921600'))}"`);
-      } else if (String(p.host || '').trim()) {
-        attributes.push(`host="${escaped(String(p.host).trim())}"`);
-      }
-    }
-    const groups = ['simulation', 'atmosphere', 'massprops', 'rates', 'velocities',
-      'forces', 'moments', 'position', 'propulsion', 'aerosurfaces', 'fcs',
-      'ground_reactions', 'coefficients'];
-    const lines = groups.filter(key => p[key] === 'ON')
-      .map(key => `${indent}  <${key}>ON</${key}>`);
-    const keys = type === 'HIL_SENSOR'
-      ? ['hil_imu_accel_x', 'hil_imu_accel_y', 'hil_imu_accel_z', 'hil_imu_gyro_x',
-          'hil_imu_gyro_y', 'hil_imu_gyro_z', 'hil_imu_mag_x', 'hil_imu_mag_y',
-          'hil_imu_mag_z', 'hil_pressure_abs', 'hil_pressure_diff', 'hil_pressure_alt', 'hil_temperature']
-      : type === 'HIL_GPS'
-        ? ['hil_gps_lat', 'hil_gps_lon', 'hil_gps_alt', 'hil_gps_vn', 'hil_gps_ve',
-            'hil_gps_vn', 'hil_gps_ve', 'hil_gps_vd'] : [];
-    const properties = keys.length
-      ? keys.map(key => String(p[key] || '').trim()).filter(Boolean)
-      : String(p.properties || '').split(',').map(value => value.trim()).filter(Boolean);
-    lines.push(...properties.map(value => `${indent}  <property>${escaped(value)}</property>`));
-    return `${indent}<output ${attributes.join(' ')}>\n${lines.join('\n')}\n${indent}</output>`;
-  };
-
-  // Match by the existing output name so an output node can be changed from
-  // SOCKET/HIL to this protocol without leaving a second declaration behind.
-  let xml = sourceXml.replace(/([ \t]*)<output\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>[\s\S]*?<\/output\s*>/gi,
-    (block, indent: string) => {
-      const tag = block.slice(block.indexOf('<output'), block.indexOf('>') + 1);
-      const oldName = getXmlAttribute(tag, 'name');
-      const oldType = getXmlAttribute(tag, 'type');
-      const candidate = outputs.find(node => {
-        const previous = previousById.get(node.id) as any;
-        return previous?.data?.componentType === 'output' &&
-          String(previous.data.params?.name || '').trim() === oldName;
-      }) || outputs.find(node =>
-        String(node.data.params?.name || '').trim() === oldName &&
-        (!previousNodes.length || previousById.has(node.id)));
-      if (!candidate && isViztraUdpType(oldType)) {
-        const replacement = nodes.find(node => {
-          const previous = previousById.get(node.id) as any;
-          return node.data?.componentType === 'output' && !isViztraUdpType(node.data?.params?.type) &&
-            (isViztraUdpType(previous?.data?.params?.type) &&
-             String(previous.data.params?.name || '').trim() === oldName ||
-             !previousNodes.length && String(node.data?.params?.name || '').trim() === oldName);
-        });
-        return replacement ? otherBlockFor(replacement, indent) : '';
-      }
-      if (!candidate) return block;
-      if (!isViztraUdpType(oldType) &&
-          outputs.some(node => node !== candidate && String(node.data.params?.name || '').trim() === oldName)) {
-        throw unsafe(`Viztra UDP 输出名称 ${oldName} 与现有输出冲突。`);
-      }
-      if (used.has(oldName)) throw unsafe(`主模型中有多个名为 ${oldName} 的输出，无法安全写入 Viztra UDP JSON。`);
-      used.add(oldName);
-      used.add(String(candidate.data.params?.name || '').trim());
-      return blockFor(candidate, indent);
-    });
-  const pending = outputs.filter(node => !used.has(String(node.data.params?.name || '').trim()));
-  if (pending.length) {
-    const end = xml.lastIndexOf('</fdm_config>');
-    if (end < 0) throw unsafe('主模型缺少 fdm_config 结束标签，无法添加 Viztra UDP JSON 输出。');
-    xml = `${xml.slice(0, end).replace(/\s*$/, '')}\n\n${pending.map(node => blockFor(node, '  ')).join('\n\n')}\n${xml.slice(end)}`;
-  }
-  return xml;
-}
-
-function savedRemoteNodes(model: string): any[] {
-  try {
-    const nodes = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}').nodes;
-    return Array.isArray(nodes) ? nodes : [];
-  } catch { return []; }
-}
-
-/** Patch the three legacy serial HIL declarations in place so unrelated model XML survives. */
-function patchMainSerialHil(sourceXml: string, nodes: any[]): string {
-  const unsafe = (message: string) => Object.assign(new Error(message), { name: 'XmlPatchUnsafeError' });
-  const serialNodes = nodes.filter(node => node.data?.componentType === 'serial_hil');
-  if (!serialNodes.length) throw unsafe('PX4 串口 HIL 节点已删除；主模型串口声明无法安全更新。');
-  const counts = new Map<string, Set<string>>();
-  const xml = sourceXml.replace(/<(input|output)\b(?=[^>]*\bname\s*=)(?=[^>]*\btype\s*=)[^>]*>[\s\S]*?<\/\1\s*>/gi, block => {
-    const tag = block.slice(0, block.indexOf('>') + 1);
-    const type = getXmlAttribute(tag, 'type');
-    if (getXmlAttribute(tag, 'transport') !== 'SERIAL' || getXmlAttribute(tag, 'editor_module') ||
-        !['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].includes(type)) return block;
-    const oldName = getXmlAttribute(tag, 'name');
-    const candidates = serialNodes.filter(node => String(node.data.params?.name || '') === oldName);
-    const serial = candidates.length === 1 ? candidates[0] : serialNodes.length === 1 ? serialNodes[0] : null;
-    if (!serial) throw unsafe(`无法确定串口 HIL 声明 ${oldName} 对应的图形节点，已取消上传。`);
-    const found = counts.get(serial.id) || new Set<string>();
-    if (found.has(type)) throw unsafe(`串口 HIL ${oldName} 存在重复的 ${type} 声明，已取消上传。`);
-    found.add(type);
-    counts.set(serial.id, found);
-    const params = serial.data.params || {};
-    let patched = tag;
-    const attributes = ['name', 'device', 'baud', 'data_bits', 'parity', 'stop_bits', 'flow_control', 'mavlink_version'];
-    if (type !== 'HIL_ACTUATOR_CONTROLS') attributes.push('system_id', 'component_id');
-    for (const attribute of attributes) {
-      patched = params[attribute] === undefined || params[attribute] === null || String(params[attribute]).trim() === ''
-        ? removeXmlAttribute(patched, attribute)
-        : setXmlAttribute(patched, attribute, params[attribute]);
-    }
-    if (type !== 'HIL_ACTUATOR_CONTROLS') {
-      const rate = params[type === 'HIL_SENSOR' ? 'sensor_rate' : 'gps_rate'];
-      patched = rate === undefined || rate === null || String(rate).trim() === ''
-        ? removeXmlAttribute(patched, 'rate') : setXmlAttribute(patched, 'rate', rate);
-    }
-    const propertyKey = type === 'HIL_SENSOR' ? 'sensor_properties'
-      : type === 'HIL_GPS' ? 'gps_properties' : 'actuator_properties';
-    const desired = String(params[propertyKey] || '').split(',').map(value => value.trim()).filter(Boolean);
-    const body = block.slice(tag.length, block.lastIndexOf('</'));
-    const propertyPattern = /<property(?:\s[^>]*)?>[\s\S]*?<\/property\s*>/gi;
-    const existing = Array.from(body.matchAll(propertyPattern), match => match[0].replace(/^<property(?:\s[^>]*)?>|<\/property\s*>$/gi, '').trim());
-    let patchedBody = body;
-    if (JSON.stringify(existing) !== JSON.stringify(desired)) {
-      if (/<(?!\/?property\b)[A-Za-z][^>]*>/.test(body)) {
-        throw unsafe(`串口 HIL ${type} 含有未识别的子元素，已取消属性映射修改。`);
-      }
-      const indent = body.match(/\n([ \t]*)<property\b/i)?.[1] || '    ';
-      const properties = desired.map(value => `<property>${value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</property>`);
-      patchedBody = body.replace(propertyPattern, '').replace(/\s*$/, '') +
-        (properties.length ? `\n${indent}${properties.join(`\n${indent}`)}` : '') + '\n';
-    }
-    return patched + patchedBody + block.slice(block.lastIndexOf('</'));
-  });
-  for (const serial of serialNodes) {
-    const found = counts.get(serial.id);
-    if (!found || ['HIL_SENSOR', 'HIL_GPS', 'HIL_ACTUATOR_CONTROLS'].some(type => !found.has(type))) {
-      throw unsafe('主模型缺少完整的 PX4 串口 HIL 声明，已取消上传以保护原始 XML。');
-    }
-  }
-  return xml;
-}
-
-async function patchInlineSerialLogic(sourceXml: string, nodes: any[], edges: any[]): Promise<string> {
-  const priorNames = new Set(Array.from(sourceXml.matchAll(/<!-- SERIAL_SENSOR_LOGIC_BEGIN ([A-Za-z0-9_.-]+) -->/g),
-    match => match[1]));
-  const marker = /\s*<!-- SERIAL_SENSOR_LOGIC_BEGIN [A-Za-z0-9_.-]+ -->[\s\S]*?<!-- SERIAL_SENSOR_LOGIC_END [A-Za-z0-9_.-]+ -->/g;
-  let xml = sourceXml.replace(marker, '');
-  const sourceIds = new Set(edges.filter(edge =>
-    nodes.some(node => node.id === edge.target && node.data?.componentType === 'serial_sensor'))
-    .map(edge => edge.source));
-  const blocks: string[] = [];
-  for (const source of nodes.filter(node => node.data?.componentType === 'system' &&
-      (sourceIds.has(node.id) || priorNames.has(String(node.data.params?.name || ''))))) {
-    const params = source.data.params || {};
-    if (String(params.file || '').trim()) continue;
-    const name = String(params.name || '').trim();
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) throw new Error('新传感器系统需要有效的系统名称');
-    if (new RegExp(`<system\\b[^>]*\\bname=["']${name}["']`, 'i').test(xml)) {
-      throw new Error(`系统 ${name} 已在主模型中存在，请先从仿真机重新加载该模型`);
-    }
-    const systemXml = (await generateSubfile('system', name, params))
-      .replace(/^\s*<\?xml[^?]*\?>\s*/i, '').trim();
-    blocks.push(`  <!-- SERIAL_SENSOR_LOGIC_BEGIN ${name} -->\n  ${systemXml}\n  <!-- SERIAL_SENSOR_LOGIC_END ${name} -->`);
-  }
-  if (!blocks.length) return xml;
-  const anchor = /\n(?=\s*<(?:system|flight_control|aerodynamics|input|output)\b)/i.exec(xml);
-  const index = anchor ? anchor.index : xml.lastIndexOf('</fdm_config>');
-  if (index < 0) throw new Error('主模型缺少 fdm_config 结束标签');
-  xml = `${xml.slice(0, index)}\n${blocks.join('\n')}\n${xml.slice(index)}`;
-  return xml;
-}
-
-function originalMainXml(mainFile: any): string {
-  // originalXml is the immutable import/download snapshot. currentXml may
-  // contain output produced by an older, lossy regeneration path.
-  return mainFile?.originalXml?.trim()
-    ? mainFile.originalXml
-    : mainFile?.currentXml?.trim()
-      ? mainFile.currentXml
-      : localStorage.getItem('jsbsim-raw-xml') || '';
-}
-
-function childFileType(componentType: string): 'engine' | 'thruster' | 'system' {
-  if (componentType === 'system' || componentType === 'flight_control') return 'system';
-  return componentType === 'propeller' ? 'thruster' : 'engine';
-}
-
-async function buildChildUploadXml(current: any, path: string): Promise<string> {
-  const tracked = (current.xmlFiles || []).find((file: any) => file.path === path);
-  const owners = (current.nodes || []).filter((node: any) => nodeOwnedPath(node) === path &&
-    ['engine', 'propeller', 'system', 'flight_control'].includes(node.data?.componentType));
-  const subFile = (current.subFiles || []).find((item: any) => subFileRemotePath(item) === path);
-  const firstOwner = owners[0];
-  const fileType = firstOwner
-    ? childFileType(firstOwner.data.componentType)
-    : subFile?.fileType === 'system' ? 'system' : subFile?.fileType === 'thruster' ? 'thruster' : 'engine';
-  const fileName = path.replace(/^.*\//, '').replace(/\.xml$/i, '');
-  // originalXml is the last complete import/upload snapshot. A dirty currentXml
-  // may have been produced by an older lossy generator, so never choose it in
-  // preference to the complete source.
-  const source = tracked?.originalXml?.trim()
-    ? tracked.originalXml
-    : tracked?.currentXml?.trim() ? tracked.currentXml : '';
-
-  if (source.trim()) {
-    const patches = owners.length ? owners.map((node: any) => node.data?.params || {}) : subFile ? [subFile.data || {}] : [];
-    if (!patches.length) {
-      throw new Error(`子文件 ${path} 没有对应的图形模块，已取消覆盖以保护原始 XML。`);
-    }
-    let content = source;
-    for (const params of patches) {
-      // The System's XML name can differ from its filename (for example the
-      // H7 barometer file). Generating with the filename changes that name.
-      const systemPatch = fileType === 'system'
-        ? await generateSubfile('system', String(params.name || '').trim() || fileName, params)
-        : undefined;
-      content = patchExistingSubfileXml(content, fileType, params, systemPatch);
-    }
-    // A graph round-trip can rewrite only indentation/blank lines. Keep the
-    // downloaded source verbatim when its XML content has not changed.
-    return xmlContentEqual(source, content) ? source : content;
-  }
-
-  // Full generation is permitted only for an explicitly-created subfile. An
-  // imported reference with missing source is unsafe because unknown fields,
-  // comments and lookup tables cannot be reconstructed from node parameters.
-  if (!subFile) {
-    throw new Error(`子文件 ${path} 缺少原始 XML。为防止丢失未建模字段、查表或注释，本次上传已取消；请重新导入完整目录。`);
-  }
-  return generateSubfile(subFile.fileType, subFile.fileName, subFile.data);
-}
-
 export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, fleetControls, workspace = 'editor', onSelectWorkspace, activeInstance = '01', instanceSlots = {}, editorSwitchRequest,
-  onEditorSwitchHandled, onSelectInstance, onSelectMultiInstance, onAssignInstanceModel, initialOverrides, networkOverrides, onLoadFleetGroup, onModelContextChange, onUndo, onRedo, onCopy, onPaste, modifiedXmlFiles = [], onSaveComplete }: ToolbarProps) {
+  onEditorSwitchHandled, onSelectInstance, onSelectMultiInstance, onAssignInstanceModel, initialOverrides, networkOverrides, onLoadFleetGroup, onModelContextChange, onUndo, onRedo, onCopy, onPaste }: ToolbarProps) {
   const { isZh } = useLanguage();
-  const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, loadProject, clearAll } = useFlowStore();
+  const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, xmlEditBaseline, loadProject, clearAll } = useFlowStore();
   const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
   const loadedModelDirectory = (() => {
     const mainPath = xmlFiles.find(file => file.category === 'main')?.path || '';
@@ -699,18 +327,68 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const editMenuRef = useRef<HTMLDivElement>(null);
   const displayMenuRef = useRef<HTMLDivElement>(null);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
-  const xmlSourceDocuments: XmlSourceDocument[] = [...xmlFiles
-    .filter(file => file.currentXml?.trim() || file.originalXml?.trim())
-    .map(file => ({
-      path: file.path,
-      content: file.currentXml?.trim() ? file.currentXml : file.originalXml,
-      category: file.category,
-      dirty: file.dirty,
-    }))];
-  if (!xmlSourceDocuments.some(file => file.category === 'main')) {
-    const rawXml = localStorage.getItem('jsbsim-raw-xml') || '';
-    if (rawXml.trim()) xmlSourceDocuments.unshift({ path: `${aircraft.name || 'model'}.xml`, content: rawXml, category: 'main' });
-  }
+  const [, refreshSyncBaseline] = useState(0);
+  useEffect(() => {
+    const refresh = () => refreshSyncBaseline(value => value + 1);
+    window.addEventListener('jsbsim-remote-baseline-changed', refresh);
+    return () => window.removeEventListener('jsbsim-remote-baseline-changed', refresh);
+  }, []);
+  const syncModel = loadedModelDirectory || remoteModelDirectory || aircraft.name;
+  const remoteBaseline = readRemoteBaseline(syncModel);
+  const editBaseline = remoteBaseline || xmlEditBaseline;
+  const currentProject = { aircraft, nodes, edges, subFiles, xmlFiles };
+  const modifiedXmlFiles = hasLoadedModel && editBaseline ? changedModelPaths(currentProject, editBaseline, syncModel) : [];
+  const environmentPending = hasLoadedModel && environmentFromProject(currentProject) && JSON.stringify(environmentFromProject(currentProject)) !== JSON.stringify(editBaseline && environmentFromProject(editBaseline))
+    ? [`config/models/${syncModel}.json`] : [];
+  const needsInitialUpload = hasLoadedModel && !remoteBaseline;
+  const pendingPaths = needsInitialUpload
+    ? [...new Set([mainXmlPath(currentProject, syncModel), ...modifiedXmlFiles])]
+    : [...modifiedXmlFiles, ...environmentPending];
+  const pendingRevision = pendingPaths.length ? JSON.stringify([syncModel, compactModelBaseline(currentProject),
+    editBaseline ? compactModelBaseline(editBaseline) : null,
+    xmlFiles.filter(file => file.currentXml !== file.originalXml).map(file => [file.path, file.currentXml])]) : '';
+  const [pendingPreparation, setPendingPreparation] = useState<{ revision: string; paths: string[]; error?: string }>({ revision: '', paths: [] });
+  useEffect(() => {
+    if (!pendingRevision || !editBaseline) return;
+    let canceled = false;
+    const timer = setTimeout(() => {
+      void prepareModelXml(currentProject, editBaseline, syncModel, { generateXml, generateSubfile,
+        originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' }).then(documents => {
+        if (canceled) return;
+        const paths = [...documents.filter(file => file.dirty).map(file => file.path), ...environmentPending];
+        if (needsInitialUpload) paths.push(mainXmlPath(currentProject, syncModel));
+        setPendingPreparation({ revision: pendingRevision, paths: [...new Set(paths)] });
+      }).catch(error => {
+        if (!canceled) setPendingPreparation({ revision: pendingRevision, paths: pendingPaths, error: error.message || String(error) });
+      });
+    }, 160);
+    return () => { canceled = true; clearTimeout(timer); };
+  }, [pendingRevision]);
+  // A completed empty result is authoritative. While preparing a new revision,
+  // candidate graph/string changes must not flash a false unsaved-model notice.
+  const visiblePendingPaths = pendingPreparation.revision === pendingRevision
+    ? pendingPreparation.paths : needsInitialUpload ? pendingPaths : [];
+  const resolvePendingModelPaths = async (): Promise<string[]> => {
+    if (!pendingRevision) return [];
+    if (pendingPreparation.revision === pendingRevision && !pendingPreparation.error) return pendingPreparation.paths;
+    if (!editBaseline) return pendingPaths;
+    const documents = await prepareModelXml(currentProject, editBaseline, syncModel, { generateXml, generateSubfile,
+      originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' });
+    if (modelSyncFingerprint(useFlowStore.getState()) !== modelSyncFingerprint(currentProject)) {
+      throw new Error('核对期间模型已变化，请重新操作。');
+    }
+    return [...new Set([...documents.filter(file => file.dirty).map(file => file.path), ...environmentPending,
+      ...(needsInitialUpload ? [mainXmlPath(currentProject, syncModel)] : [])])];
+  };
+  const [xmlSourceDocuments, setXmlSourceDocuments] = useState<XmlSourceDocument[]>([]);
+  const [syncError, setSyncError] = useState('');
+  useEffect(() => setSyncError(''), [syncModel, hasLoadedModel]);
+  const syncInFlight = useRef(false);
+  const [syncReview, setSyncReview] = useState<{
+    changes: RemoteXmlChange[]; assets: Array<{ name: string; size: number }>;
+    resolve: (accepted: boolean) => void;
+  } | null>(null);
+
   const windowAction = async (action: 'min' | 'max' | 'close') => {
     if (!isTauri) return;
     const window = getCurrentWindow();
@@ -926,12 +604,15 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const filename = `${safeModel}.project.json`;
     let targetPath = filename;
     try { targetPath = await getProjectPath(filename); } catch { /* filename remains a safe fallback */ }
-    const fileList = modifiedXmlFiles.length ? modifiedXmlFiles.map(file => `  • ${file}`).join('\n') : '  • 无 XML 内容变更';
+    let changes: string[];
+    try { changes = await resolvePendingModelPaths(); }
+    catch (error: any) { setSyncError(error.message || String(error)); return; }
+    const fileList = changes.length ? changes.map(file => `  • ${file}`).join('\n') : '  • 无 XML 内容变更';
     if (!confirm(`即将保存模型工程：${filename}\n\n保存路径：\n${targetPath}\n\n变更的 XML 文件：\n${fileList}\n\n工程将包含模型数据、XML 内容、布局和用户设置。确认继续吗？`)) return;
     try {
       const project = {
         format: 'jsbsim-model-project', version: 3, model, savedAt: new Date().toISOString(),
-        project: { aircraft, nodes, edges, subFiles, xmlFiles },
+        project: { aircraft, nodes, edges, subFiles, xmlFiles, xmlEditBaseline: editBaseline ? compactModelBaseline(editBaseline) : undefined, monitoring: useSignalMonitorStore.getState().project },
         files: {
           main: { name: `${model}.xml`, xml: localStorage.getItem('jsbsim-raw-xml') || '' },
           references: JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]'),
@@ -953,290 +634,199 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const saved = await saveProject(filename, project);
       const savedPath = saved.path || filename;
       rememberProject(filename, savedPath);
-      onSaveComplete?.();
       alert(`工程已保存：\n${savedPath}`);
     } catch (err: any) {
       alert('保存失败: ' + err.message);
     }
   };
 
-  const handleSaveToSimulator = async () => {
-    const model = localStorage.getItem('jsbsim-remote-model') || aircraft.name;
-    if (!model || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(model)) {
-      alert('无法确定有效的仿真机模型名称，请先导入或从仿真机加载模型。');
-      return;
+  const prepareSync = async (model: string, force = false) => {
+    const state = useFlowStore.getState();
+    const snapshot: ModelProject = { aircraft: state.aircraft, nodes: state.nodes, edges: state.edges,
+      subFiles: state.subFiles, xmlFiles: state.xmlFiles };
+    const main = snapshot.xmlFiles?.find(file => file.category === 'main');
+    const directory = main?.path.match(/^aircraft\/([^/]+)\//)?.[1];
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(model) || directory && directory !== model ||
+        !main && snapshot.aircraft.name !== model && localStorage.getItem('jsbsim-remote-model') !== model) {
+      throw new Error(`当前模型与目标目录 ${model} 不匹配，请先加载对应模型。`);
     }
-    const target = `/mnt/sdcard/jsbsim/aircraft/${model}/${model}.xml`;
-    const stateBeforeSave = useFlowStore.getState();
-    let serialHilChanged = false;
-    let mainIoChanged = false;
-    let inertiaUpdate: ReturnType<typeof prepareInertiaUpdate>;
-    try {
-      inertiaUpdate = prepareInertiaUpdate(stateBeforeSave, originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main')));
-    } catch (error) {
-      alert(`无法准备惯量 XML：${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    try {
-      const baseline = localStorage.getItem(remoteBaselineKey(model));
-      if (baseline) {
-        const previous = JSON.parse(baseline);
-        serialHilChanged = serialHilFingerprint(stateBeforeSave) !== serialHilFingerprint(previous);
-        mainIoChanged = mainIoFingerprint(stateBeforeSave) !== mainIoFingerprint(previous);
-      }
-    } catch { /* The visible dirty-file list remains available. */ }
-    const serialPath = serialSensorPath(model);
-    const serialTarget = `/mnt/sdcard/jsbsim/${serialPath}`;
-    const pwmPath = pwmCapturePath(model);
-    const pwmTarget = `/mnt/sdcard/jsbsim/${pwmPath}`;
-    let serialXml: string | null = null;
-    let pwmXml: string | null = null;
-    try {
-      serialXml = serializeSerialSensors(stateBeforeSave.nodes, stateBeforeSave.edges);
-      const previous = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}');
-      if (serialXml === null && Array.isArray(previous.nodes) &&
-          previous.nodes.some((node: any) => node?.data?.componentType === 'serial_sensor')) {
-        serialXml = '<?xml version="1.0"?>\n<serial_outputs version="1"/>\n';
-      }
-      pwmXml = serializePwmCaptures(stateBeforeSave.nodes);
-      if (pwmXml === null && Array.isArray(previous.nodes) &&
-          previous.nodes.some((node: any) => node?.data?.componentType === 'pwm_capture')) {
-        pwmXml = '<?xml version="1.0"?>\n<pwm_inputs version="1"/>\n';
-      }
-    } catch (error) {
-      alert(`硬件关联配置无效：${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    // Without a baseline, upload the main file and the files explicitly
-    // selected at import. Indexed global references are not owned by this
-    // model and must not be regenerated or overwritten automatically.
-    const hasBaseline = !!localStorage.getItem(remoteBaselineKey(model));
-    const dirtyRecords = (stateBeforeSave.xmlFiles || []).filter(file => file.dirty);
-    let packageFiles: Array<{ path: string; xml: string }> = [];
-    let assetFiles: Array<{ name: string; size: number }> = [];
+    const saved = readRemoteBaseline(model);
+    const baseline = saved || state.xmlEditBaseline || snapshot;
+    const documents = await prepareModelXml(snapshot, baseline, model, { generateXml, generateSubfile,
+      originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' });
+    const candidates = new Map(documents.filter(file => force || !saved && ['main', 'hardware'].includes(file.category || '') || file.dirty)
+      .map(file => [file.path, file]));
+    let assets: Array<{ name: string; size: number }> = [];
     let assetSource = '';
-    if (!hasBaseline) {
-      try {
-        const references: ImportFile[] = JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]');
-        if (!Array.isArray(references)) throw new Error('关联文件清单格式无效');
-        const seen = new Set<string>();
-        packageFiles = references.map(file => {
-          const name = String(file.name || '').replace(/\\/g, '/');
-          const parts = name.split('/');
-          if (parts.length > 4 || !parts.every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
-              !name.toLowerCase().endsWith('.xml') || !String(file.xml || '').trim() || name.toLowerCase() === `${model.toLowerCase()}.xml` || seen.has(name.toLowerCase())) {
-            throw new Error(`关联 XML 的路径或内容无效：${name}`);
-          }
-          seen.add(name.toLowerCase());
-          return { path: `aircraft/${model}/${name}`, xml: file.xml };
-        });
-        assetFiles = JSON.parse(localStorage.getItem('jsbsim-import-assets') || '[]');
-        assetSource = localStorage.getItem('jsbsim-import-directory') || '';
-        if (!Array.isArray(assetFiles) || (assetFiles.length && !assetSource.startsWith('/')) ||
-            assetFiles.some(file => !file.name || !file.name.split('/').every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
-              !Number.isSafeInteger(file.size) || file.size < 0)) {
-          throw new Error('模型资源清单或源目录无效，请重新导入');
-        }
-      } catch (error) {
-        alert(`无法准备关联 XML，未开始上传：${error instanceof Error ? error.message : String(error)}`);
-        return;
+    if (!saved) {
+      const references: ImportFile[] = JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]');
+      if (!Array.isArray(references)) throw new Error('关联文件清单格式无效');
+      for (const reference of references) {
+        const name = String(reference.name || '').replace(/\\/g, '/');
+        if (!name.split('/').every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
+            !/\.xml$/i.test(name) || !reference.xml?.trim()) throw new Error(`关联 XML 无效：${name}`);
+        const path = name.startsWith(`aircraft/${model}/`) || name.startsWith('systems/') || name.startsWith('engine/')
+          ? name : `aircraft/${model}/${name}`;
+        const prepared = documents.find(file => file.path === path) || documents.find(file => file.path === name);
+        candidates.set(path, { path, content: prepared?.content || reference.xml, dirty: true, category: prepared?.category });
       }
-    }
-    const trackedFiles = dirtyRecords.map(file => file.path);
-    const connectedSystemIds = new Set(stateBeforeSave.edges.filter(edge =>
-      stateBeforeSave.nodes.some(node => node.id === edge.target && node.data.componentType === 'serial_sensor'))
-      .map(edge => edge.source));
-    const hasInlineSerialLogic = stateBeforeSave.nodes.some(node => connectedSystemIds.has(node.id) &&
-      node.data.componentType === 'system' && !String(node.data.params?.file || '').trim());
-    const hadInlineSerialLogic = originalMainXml((stateBeforeSave.xmlFiles || []).find(file => file.category === 'main'))
-      .includes('SERIAL_SENSOR_LOGIC_BEGIN');
-    const changesList = Array.from(new Set([...modifiedXmlFiles, ...trackedFiles, ...packageFiles.map(file => file.path),
-      ...(inertiaUpdate ? [inertiaUpdate.path] : []),
-      ...(serialHilChanged || mainIoChanged ? [`aircraft/${model}/${model}.xml`] : []),
-      ...(serialXml !== null ? [serialPath] : []),
-      ...(pwmXml !== null ? [pwmPath] : []),
-      ...(hasInlineSerialLogic || hadInlineSerialLogic ? [`aircraft/${model}/${model}.xml`] : [])]));
-    const changes = changesList.length
-      ? changesList.map(file => `  • ${file}`).join('\n')
-      : hasBaseline ? '  • 当前未记录到 XML 修改' : `  • 全量上传：${model} 尚无同步基线`;
-    const mainDirty = hasBaseline
-      ? inertiaUpdate?.path === `aircraft/${model}/${model}.xml` || dirtyRecords.some(file => file.category === 'main') ||
-        modifiedXmlFiles.some(file => file === `${model}.xml` || file.endsWith(`/${model}.xml`)) ||
-        hasInlineSerialLogic || hadInlineSerialLogic || serialHilChanged || mainIoChanged
-      : true;
-    const externalPaths = new Set(dirtyRecords.filter(file => ['engine', 'thruster', 'system'].includes(file.category)).map(file => {
-      const path = file.path.toLowerCase().endsWith('.xml') ? file.path : `${file.path}.xml`;
-      if (path.includes('/')) return path;
-      return file.category === 'system' ? `systems/${path}` : `engine/${path}`;
-    }));
-    if (inertiaUpdate && inertiaUpdate.path !== `aircraft/${model}/${model}.xml`) {
-      const packaged = packageFiles.find(file => file.path === inertiaUpdate!.path);
-      if (packaged) packaged.xml = inertiaUpdate.content;
-      else externalPaths.add(inertiaUpdate.path);
-    }
-    for (const file of modifiedXmlFiles) {
-      if (file.startsWith('systems/') || file.startsWith('engine/')) externalPaths.add(file);
-    }
-    const writes = [...(mainDirty ? [target] : []), ...(serialXml !== null ? [serialTarget] : []),
-      ...(pwmXml !== null ? [pwmTarget] : []),
-      ...Array.from(externalPaths).map(path => `/mnt/sdcard/jsbsim/${path}`),
-      ...packageFiles.map(file => `/mnt/sdcard/jsbsim/${file.path}`),
-      ...assetFiles.map(file => `/mnt/sdcard/jsbsim/aircraft/${model}/${file.name}`)];
-    if (!writes.length) {
-      alert('当前没有需要写入仿真机的 XML 修改。');
-      return;
-    }
-    if (!isRemoteUploadEnabled()) {
-      alert(isZh ? '仿真机模型上传当前已关闭。请在「本地配置」中开启后再试。' : 'Model upload is disabled. Enable it in Local Settings first.');
-      return;
-    }
-    try {
-      if (externalPaths.size) {
-        const [systems, engines] = await Promise.all([ftpListSystems(), ftpListEngines()]);
-        // Listing both directories ensures the remote file service is available.
-        void systems;
-        void engines;
+      assets = JSON.parse(localStorage.getItem('jsbsim-import-assets') || '[]');
+      assetSource = localStorage.getItem('jsbsim-import-directory') || '';
+      if (!Array.isArray(assets) || assets.some(file => !file.name ||
+          !file.name.split('/').every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
+          !Number.isSafeInteger(file.size) || file.size < 0) || assets.length && !assetSource.startsWith('/')) {
+        throw new Error('模型资源清单或源目录无效，请重新导入');
       }
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error || '未知错误');
-      // Do not continue when the preflight listing failed.  Continuing here
-      // made a network outage look like a harmless name conflict and could
-      // leave the upload half-completed on NuttX.
-      const mode = getSimulatorTransportMode();
-      const hint = mode === 'usb'
-        ? '当前为 USB 模式：请检查 USB 文件服务是否响应，并确认没有其他程序占用设备；无需启动 FTP。'
-        : mode === 'network'
-          ? '当前为网络模式：请确认网络连接和 FTP 服务正常。'
-          : '当前为自动模式：请检查 USB 文件服务或网络 FTP 连接。';
-      alert(`无法读取仿真机现有子文件列表，已取消上传，未写入模型。\n\n${hint}\n${detail}`);
-      return;
+      if (assets.length) await checkModelAssets(assetSource, assets.map(file => file.name));
     }
-    if (!confirm(`即将保存到仿真机。\n\n检测到的变更：\n${changes}\n\n本次实际写入：\n${writes.map(path => `  • ${path}`).join('\n')}\n\n已有文件会被覆盖。确认一次后将上传全部文件，是否继续？`)) return;
+    // Resolve every local source and read every remote candidate before showing
+    // approval. A failed read is never treated as a missing or unchanged file.
+    const changes = await compareModelXml([...candidates.values()], loadRemoteXmlForReview);
+    const environment = environmentFromProject(snapshot);
+    if (environment && (force || JSON.stringify(environment) !== JSON.stringify(environmentFromProject(baseline)))) {
+      const path = `config/models/${model}.json`, remote = await readEnvironmentConfig(path);
+      const previous = remote ? JSON.parse(remote) : { version: 1 };
+      const content = JSON.stringify({ ...previous, environment: { ...previous.environment, ...environment } }, null, 2);
+      if (content !== remote) changes.push({ path, content, remote, dirty: true, category: 'environment' });
+    }
+    return { model, snapshot, documents, changes, assets, assetSource };
+  };
+
+  const runModelSync = async (model: string, force = false): Promise<boolean> => {
+    if (syncInFlight.current) throw new Error('模型 XML 对比或保存正在进行，请先完成当前操作。');
+    syncInFlight.current = true;
+    setSyncError('');
     setLoading(true);
     try {
-      const current = useFlowStore.getState();
-      const mainFile = (current.xmlFiles || []).find(file => file.category === 'main');
-      const mainSource = originalMainXml(mainFile);
-      let xml = mainSource;
-      if (mainDirty) {
-        if (!mainSource.trim()) {
-          throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次上传已取消。请重新从仿真机加载模型。');
+      const plan = await prepareSync(model, force);
+      if (plan.changes.length || plan.assets.length) {
+        setLoading(false);
+        const accepted = await new Promise<boolean>(resolve => setSyncReview({ changes: plan.changes, assets: plan.assets, resolve }));
+        setSyncReview(null);
+        if (!accepted) throw Object.assign(new Error('已取消保存，本地修改尚未同步到仿真机。'), { name: 'ModelSyncCancelledError' });
+        setLoading(true);
+        if (!isRemoteUploadEnabled()) throw Object.assign(new Error('请在本地配置中开启“允许写入仿真机模型”。'), { name: 'ModelSyncRequiredError' });
+        if (modelSyncFingerprint(useFlowStore.getState()) !== modelSyncFingerprint(plan.snapshot)) {
+          throw new Error('对比期间模型已变化，请重新对比后保存。');
         }
-        const patchedSource = inertiaUpdate && inertiaUpdate.path === mainFile?.path ? inertiaUpdate.content : mainSource;
-        const ioXml = patchMainViztraUdpOutputs(
-          patchMainIoAttributes(patchedSource, current.nodes), current.nodes, savedRemoteNodes(model));
-        xml = await patchInlineSerialLogic(
-          serialHilChanged ? patchMainSerialHil(ioXml, current.nodes) : ioXml,
-          current.nodes, current.edges);
-      }
-      const uploadedChildren = new Map<string, string>();
-      for (const path of externalPaths) {
-        const content = path === inertiaUpdate?.path ? inertiaUpdate.content : await buildChildUploadXml(current, path);
-        uploadedChildren.set(path, content);
-      }
-      if (assetFiles.length) await checkModelAssets(assetSource, assetFiles.map(file => file.name));
-      // Every local source must be ready before the first remote write.
-      const written: string[] = [];
-      const verified: string[] = [];
-      if (mainDirty) {
-        const result = await ftpUploadModel(model, xml, { batchConfirmed: true });
-        const remote = await ftpDownloadModel(model);
-        if (comparableXml(remote.xml) !== comparableXml(xml)) throw new Error(`主模型回读不一致：${target}`);
-        verified.push(target);
-        if (result.uploaded) written.push(target);
-      }
-      if (serialXml !== null) {
-        const result = await ftpUploadFile(serialPath, serialXml, { batchConfirmed: true });
-        const remote = await ftpDownloadXml(serialPath);
-        if (comparableXml(remote.content) !== comparableXml(serialXml)) {
-          throw new Error(`串口传感器 XML 回读不一致：${serialTarget}`);
+        // Recheck all reviewed files before the first write so another writer
+        // cannot silently invalidate the comparison the user approved.
+        for (const file of plan.changes) {
+          if (await loadRemoteXmlForReview(file.path) !== file.remote) throw new Error(`${file.path} 在对比后已变化，请重新对比。`);
         }
-        verified.push(serialTarget);
-        if (result.uploaded) written.push(serialTarget);
       }
-      if (pwmXml !== null) {
-        const result = await ftpUploadFile(pwmPath, pwmXml, { batchConfirmed: true });
-        const remote = await ftpDownloadXml(pwmPath);
-        if (comparableXml(remote.content) !== comparableXml(pwmXml)) {
-          throw new Error(`PWM 捕获 XML 回读不一致：${pwmTarget}`);
-        }
-        verified.push(pwmTarget);
-        if (result.uploaded) written.push(pwmTarget);
+      const verified = new Map<string, string>();
+      let uploaded = false;
+      for (const file of plan.changes) {
+        const result = file.path.endsWith('.json')
+          ? { uploaded: (await ftpUploadSimConfig(file.path, file.content)).saved }
+          : await ftpUploadFile(file.path, file.content, { batchConfirmed: true });
+        const remote = file.path.endsWith('.json') ? await ftpDownloadSimConfig(file.path) : await ftpDownloadXml(file.path);
+        if (file.path.endsWith('.json') ? remote.content !== file.content : comparableXml(remote.content) !== comparableXml(file.content)) throw new Error(`${file.path} 回读不一致，仍保留待保存状态。`);
+        verified.set(file.path, file.content);
+        uploaded ||= result.uploaded;
       }
-      for (const [path, content] of uploadedChildren) {
-        const result = await ftpUploadFile(path, content, { batchConfirmed: true });
-        const remote = await ftpDownloadXml(path);
-        if (comparableXml(remote.content) !== comparableXml(content)) throw new Error(`子文件回读不一致：/mnt/sdcard/jsbsim/${path}`);
-        const fullPath = `/mnt/sdcard/jsbsim/${path}`;
-        verified.push(fullPath);
-        if (result.uploaded) written.push(fullPath);
-      }
-      for (const file of packageFiles) {
-        const result = await ftpUploadFile(file.path, file.xml, { batchConfirmed: true });
-        const remote = await ftpDownloadXml(file.path);
-        if (comparableXml(remote.content) !== comparableXml(file.xml)) throw new Error(`关联文件回读不一致：/mnt/sdcard/jsbsim/${file.path}`);
-        const fullPath = `/mnt/sdcard/jsbsim/${file.path}`;
-        verified.push(fullPath);
-        if (result.uploaded) written.push(fullPath);
-      }
-      const xmlWritten = written.length;
-      if (assetFiles.length) {
-        const result = await ftpUploadModelAssets(assetSource, model, assetFiles.map(file => file.name));
-        const expected = assetFiles.map(file => `/mnt/sdcard/jsbsim/aircraft/${model}/${file.name}`);
+      if (plan.assets.length) {
+        const result = await ftpUploadModelAssets(plan.assetSource, model, plan.assets.map(file => file.name));
+        const expected = plan.assets.map(file => `/mnt/sdcard/jsbsim/aircraft/${model}/${file.name}`);
         if (JSON.stringify(result.files) !== JSON.stringify(expected)) throw new Error('模型资源上传结果与源目录不一致');
-        verified.push(...result.files);
-        written.push(...result.files);
+        uploaded = true;
       }
-      // A pathname read can succeed while FAT directory enumeration is already
-      // damaged. Check the same directory view that NSH's ls command uses.
-      const directoryEntries = new Map<string, string[]>();
-      for (const fullPath of verified) {
-        const relative = fullPath.replace(/^\/mnt\/sdcard\/jsbsim\//, '');
-        const separator = relative.lastIndexOf('/');
-        if (separator < 0) throw new Error(`无法验证仿真机目录：${fullPath}`);
-        const parent = relative.slice(0, separator);
-        const name = relative.slice(separator + 1);
-        if (!directoryEntries.has(parent)) {
+      const directories = new Map<string, string[]>();
+      for (const path of [...verified.keys(), ...plan.assets.map(file => `aircraft/${model}/${file.name}`)]) {
+        const split = path.lastIndexOf('/'), parent = path.slice(0, split), name = path.slice(split + 1);
+        if (!directories.has(parent)) {
           const listing = await listRemoteXmlParent(parent);
-          if (!listing.exists) throw new Error(`仿真机目录不存在或目录项异常：/mnt/sdcard/jsbsim/${parent}`);
-          directoryEntries.set(parent, listing.files);
+          if (!listing.exists) throw new Error(`仿真机目录不存在：${parent}`);
+          directories.set(parent, listing.files);
         }
-        const names = directoryEntries.get(parent)!;
-        if (!names.includes(name)) {
-          throw new Error(`文件回读成功，但目录列表中找不到 ${fullPath}；当前目录项：${names.join(', ') || '空'}。请停止写入 SD 并检查文件系统。`);
-        }
+        if (!directories.get(parent)!.includes(name)) throw new Error(`回读成功但目录中找不到 ${path}，请检查 SD 文件系统。`);
       }
-      useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file =>
-        file.category === 'main'
-          ? { ...file, originalXml: mainDirty ? xml : file.originalXml, currentXml: mainDirty ? xml : file.currentXml, dirty: false }
-          : uploadedChildren.has(file.path)
-            ? { ...file, originalXml: uploadedChildren.get(file.path)!, currentXml: uploadedChildren.get(file.path)!, dirty: false }
-            : file
-      ) });
-      if (mainDirty) localStorage.setItem('jsbsim-raw-xml', xml);
+      // Only a fully verified batch advances the baseline. Edits made while
+      // uploading remain in live nodes and are compared with this snapshot.
+      const prepared = new Map(plan.documents.map(file => [file.path, file.content]));
+      for (const file of plan.changes) prepared.set(file.path, file.content);
+      const cleanFiles = (plan.snapshot.xmlFiles || []).map(file => prepared.has(file.path)
+        ? { ...file, originalXml: prepared.get(file.path)!, currentXml: prepared.get(file.path)!, dirty: false } : file);
+      for (const document of plan.documents) {
+        if (document.category === 'hardware' || cleanFiles.some(file => file.path === document.path)) continue;
+        const category = document.category === 'main' ? 'main' : document.path.startsWith('engine/') ? 'engine' : 'system';
+        cleanFiles.push({ id: `${category}:${document.path}`, path: document.path, category,
+          originalXml: document.content, currentXml: document.content, dirty: false });
+      }
+      const baseline = { ...plan.snapshot, xmlFiles: cleanFiles };
+      const live = useFlowStore.getState();
+      const liveFiles = live.xmlFiles.map(file => {
+        const clean = cleanFiles.find(item => item.path === file.path);
+        if (!clean) return file;
+        const atStart = plan.snapshot.xmlFiles?.find(item => item.path === file.path);
+        return { ...clean, currentXml: file.currentXml !== atStart?.currentXml ? file.currentXml : clean.currentXml };
+      });
+      for (const file of cleanFiles) if (!liveFiles.some(item => item.path === file.path)) liveFiles.push(file);
+      useFlowStore.setState({ xmlEditBaseline: baseline, xmlFiles: liveFiles });
+      const main = cleanFiles.find(file => file.category === 'main');
+      if (main) localStorage.setItem('jsbsim-raw-xml', main.currentXml);
       localStorage.setItem('jsbsim-remote-model', model);
       onAssignInstanceModel?.(activeInstance, model);
-      localStorage.setItem(remoteBaselineKey(model), projectFingerprint({ aircraft: current.aircraft, nodes: current.nodes, edges: current.edges, subFiles: current.subFiles }));
-      onSaveComplete?.(changesList);
-      const status = written.length > 0
-        ? `已写入 ${xmlWritten} 个 XML、${written.length - xmlWritten} 个资源文件并回读确认`
-        : '仿真机上的文件与本地一致，本次未写入';
-      onLog?.(`[${new Date().toLocaleTimeString()}] ${status}: ${verified.join(', ')}`);
-      alert(`${status}：\n${verified.join('\n')}`);
-    } catch (err: any) {
-      alert(`保存到仿真机失败：${err?.message || err}`);
+      setRemoteBaseline(model, projectFingerprint(baseline));
+      onLog?.(`[${new Date().toLocaleTimeString()}] ${uploaded ? `已写入并回读确认 ${verified.size} 个 XML` : '本机 XML 与仿真机一致'}：${model}`);
+      return uploaded;
+    } catch (error: any) {
+      setSyncError(error?.name === 'ModelSyncCancelledError' ? '' : error?.message || String(error));
+      throw error;
     } finally {
       setLoading(false);
+      syncInFlight.current = false;
     }
+  };
+
+  const handleSaveToSimulator = async () => {
+    try { await runModelSync(syncModel); }
+    catch (error: any) { if (error.name !== 'ModelSyncCancelledError') alert(`保存到仿真机失败：${error.message || error}`); }
+  };
+
+  const handleDiscardLocalChanges = (): string | null => {
+    if (loading || syncInFlight.current || !editBaseline) return '当前无法恢复模型，请先完成正在进行的操作。';
+    try {
+      const state = useFlowStore.getState();
+      const restored = restoreModelBaseline(state, editBaseline);
+      // Persist before replacing the canvas so a storage failure leaves the
+      // editable model intact. Keep monitor settings with the cached project.
+      localStorage.setItem('jsbsim-project', JSON.stringify({ ...restored,
+        xmlEditBaseline: cachedEditBaseline(restored, editBaseline), monitoring: useSignalMonitorStore.getState().project }));
+      const main = restored.xmlFiles?.find(file => file.category === 'main');
+      if (main) localStorage.setItem('jsbsim-raw-xml', main.originalXml);
+      state.restoreModelContent(restored);
+      setSyncError('');
+      onLog?.(`[${new Date().toLocaleTimeString()}] 已取消本地模型更改：${syncModel}`);
+      return null;
+    } catch (error: any) {
+      setSyncError(error.message || String(error));
+      return error.message || String(error);
+    }
+  };
+
+  const openXmlSource = async () => {
+    setLoading(true);
+    try {
+      const state = useFlowStore.getState();
+      const baseline = readRemoteBaseline(syncModel) || state.xmlEditBaseline || state;
+      setXmlSourceDocuments(await prepareModelXml(state, baseline, syncModel, { generateXml, generateSubfile,
+        originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' }));
+      setShowXmlSourceBrowser(true);
+      setSyncError('');
+    } catch (error: any) { setSyncError(error.message || String(error)); }
+    finally { setLoading(false); }
   };
 
   // Unload the model currently held by the editor and return to a blank
   // project. The simulator binding (jsbsim-remote-model) is deliberately kept
   // so the same model can be re-downloaded afterwards.
-  const handleCloseModel = () => {
+  const handleCloseModel = async () => {
     const current = useFlowStore.getState();
-    const dirtyPaths = (current.xmlFiles || []).filter(file => file.dirty).map(file => file.path);
-    const changes = Array.from(new Set([...modifiedXmlFiles, ...dirtyPaths].filter(Boolean)));
+    let changes: string[];
+    try { changes = await resolvePendingModelPaths(); }
+    catch (error: any) { setSyncError(error.message || String(error)); return; }
     if (changes.length && !confirm(
       `当前模型存在未保存的修改：\n\n${changes.map(file => `  • ${file}`).join('\n')}\n\n关闭后会丢失这些修改。确认关闭吗？`
     )) return;
@@ -1254,9 +844,6 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     Object.keys(localStorage)
       .filter(key => key.startsWith('jsbsim-remote-baseline:'))
       .forEach(key => localStorage.removeItem(key));
-    // App owns the dirty-file list; without this the closed model's pending
-    // changes would leak into whatever is imported next.
-    onSaveComplete?.();
     onLog?.(`[${new Date().toLocaleTimeString()}] 已关闭模型: ${closedName || '未命名'}`);
   };
 
@@ -1308,7 +895,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const handleOpenRemoteModel = async (model: string, bindInstance = activeInstance) => {
     // The aircraft XML consists mostly of file references. Fetch the whole
     // reference tree before replacing the current canvas.
-    const data = await withPwmCaptures(await withSerialSensors(await loadAircraft(model), model), model);
+    const data = await withEnvironment(await withPwmCaptures(await withSerialSensors(await loadAircraft(model), model), model), model);
     clearAll();
     // Commit the selected directory before loadProject updates the parsed
     // display name, preventing a render from briefly reusing the prior model.
@@ -1326,7 +913,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     // makes switching c172x -> 737 look like a local edit and can upload the
     // previous aircraft into the newly selected aircraft directory.
     const snapshot = projectFingerprint(useFlowStore.getState());
-    localStorage.setItem(remoteBaselineKey(model), snapshot);
+    setRemoteBaseline(model, snapshot);
     localStorage.setItem('jsbsim-project', snapshot);
     localStorage.setItem('jsbsim-raw-xml', data.sourceXml || '');
     localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
@@ -1340,11 +927,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const currentModel = localStorage.getItem('jsbsim-remote-model') || loadedModelDirectory;
     const replacesCanvas = !model || model !== currentModel || !hasLoadedModel;
     if (replacesCanvas) {
-      const current = useFlowStore.getState();
-      const changes = Array.from(new Set([
-        ...modifiedXmlFiles,
-        ...(current.xmlFiles || []).filter(file => file.dirty).map(file => file.path),
-      ].filter(Boolean)));
+      let changes: string[];
+      try { changes = await resolvePendingModelPaths(); }
+      catch (error: any) { setSyncError(error.message || String(error)); return; }
       if (changes.length && !confirm(`当前模型有未保存的修改：\n${changes.join('\n')}\n切换实例会丢弃这些修改。继续吗？`)) return;
       setLoading(true);
       try {
@@ -1362,8 +947,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
           setLibrarySimulationModel('');
         }
         onModelContextChange?.();
-        onSaveComplete?.();
-      } catch (error) {
+          } catch (error) {
         alert(`实例 ${id} 模型加载失败：${String(error)}`);
         return;
       } finally {
@@ -1392,246 +976,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     }
   };
 
-  const syncRemoteModel = async (model: string, force: boolean): Promise<boolean> => {
-    if (!isRemoteUploadEnabled()) {
-      const current = useFlowStore.getState();
-      const dirtyFiles = (current.xmlFiles || []).filter(file => file.dirty).map(file => file.path);
-      const inertiaUpdate = prepareInertiaUpdate(current, originalMainXml((current.xmlFiles || []).find(file => file.category === 'main')));
-      if (inertiaUpdate) dirtyFiles.push(inertiaUpdate.path);
-      const mainPath = (current.xmlFiles || []).find(file => file.category === 'main')?.path || `aircraft/${model}/${model}.xml`;
-      const baseline = localStorage.getItem(remoteBaselineKey(model));
-      if (baseline) {
-        try {
-          const previous = JSON.parse(baseline);
-          if (serialSensorFingerprint(current) !== serialSensorFingerprint(previous)) {
-            dirtyFiles.push(serialSensorPath(model));
-          }
-          if (pwmCaptureFingerprint(current) !== pwmCaptureFingerprint(previous)) {
-            dirtyFiles.push(pwmCapturePath(model));
-          }
-          if (serialHilFingerprint(current) !== serialHilFingerprint(previous)) {
-            dirtyFiles.push(mainPath);
-          }
-          if (mainIoFingerprint(current) !== mainIoFingerprint(previous)) {
-            dirtyFiles.push(mainPath);
-          }
-        } catch { /* Existing XML dirty flags remain available for the warning. */ }
-      } else {
-        dirtyFiles.push(...modifiedXmlFiles);
-        if (current.nodes.some(node => node.data?.componentType === 'serial_sensor')) {
-          dirtyFiles.push(serialSensorPath(model));
-        }
-        if (current.nodes.some(node => node.data?.componentType === 'output' &&
-          isViztraUdpType(node.data?.params?.type))) {
-          dirtyFiles.push(mainPath);
-        }
-      }
-      const changedPaths = Array.from(new Set(dirtyFiles));
-      if (changedPaths.length && !force) {
-        const list = `\n\n${changedPaths.map(path => `  • ${path}`).join('\n')}`;
-        const error = new Error(isZh
-          ? `本地模型修改尚未同步到仿真机${list}\n\n请在“本地配置”中开启“允许写入仿真机模型”，然后重新运行。`
-          : `Local model changes are not synced to the simulator${list}\n\nEnable model uploads in Local Settings, then run again.`);
-        error.name = 'ModelSyncRequiredError';
-        throw error;
-      }
-      onLog?.(`[${new Date().toLocaleTimeString()}] 已保护模型文件，跳过上传到 NuttX: ${model}`);
-      return false;
-    }
-    const current = useFlowStore.getState();
-    const project = {
-      aircraft: current.aircraft,
-      nodes: current.nodes,
-      edges: current.edges,
-      subFiles: current.subFiles,
-      xmlFiles: current.xmlFiles,
-    };
-    const sourceMain = (current.xmlFiles || []).find(file => file.category === 'main');
-    const sourceDirectory = sourceMain?.path.match(/^aircraft\/([^/]+)\//)?.[1];
-    if (sourceDirectory && sourceDirectory !== model) {
-      throw new Error(`当前工程属于 ${sourceDirectory}，无法同步到 ${model}；请先加载对应模型。`);
-    }
-    if (!sourceMain && current.aircraft.name !== model) {
-      throw new Error(`当前工程为 ${current.aircraft.name}，无法同步到 ${model}；请先加载对应模型。`);
-    }
-    const fingerprint = projectFingerprint(project);
-    const inertiaUpdate = prepareInertiaUpdate(current, originalMainXml(sourceMain));
-    if (!force && !inertiaUpdate && localStorage.getItem(remoteBaselineKey(model)) === fingerprint) {
-      onLog?.(`[${new Date().toLocaleTimeString()}] 未检测到本地修改，跳过 NuttX 模型同步`);
-      return false;
-    }
-    const mainFile = (current.xmlFiles || []).find(file => file.category === 'main');
-    const mainPath = mainFile?.path || `aircraft/${model}/${model}.xml`;
-    let serialHilChanged = false;
-    let mainIoChanged = false;
-    try {
-      const baseline = localStorage.getItem(remoteBaselineKey(model));
-      if (baseline) {
-        const previous = JSON.parse(baseline);
-        serialHilChanged = serialHilFingerprint(current) !== serialHilFingerprint(previous);
-        mainIoChanged = mainIoFingerprint(current) !== mainIoFingerprint(previous);
-      }
-    } catch { /* The tracked main-file dirty flag remains available. */ }
-    const mainCandidate = inertiaUpdate?.path === mainPath || serialHilChanged || mainIoChanged || !!mainFile?.dirty || modifiedXmlFiles.some(file =>
-      file === `${model}.xml` || file.endsWith(`/${model}.xml`)
-    );
-    const mainSource = originalMainXml(mainFile);
-    if (mainCandidate && !mainSource.trim()) {
-      throw new Error('主 XML 原始源码缺失。为防止把子文件展开进主文件，本次同步已取消。请重新从仿真机加载模型。');
-    }
-    let candidateMainXml = mainCandidate
-      ? serialHilChanged
-        ? patchMainSerialHil(patchMainViztraUdpOutputs(patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model)), current.nodes)
-        : patchMainViztraUdpOutputs(patchMainIoAttributes(mainSource, current.nodes), current.nodes, savedRemoteNodes(model))
-      : mainSource;
-    if (inertiaUpdate?.path === mainPath) {
-      candidateMainXml = prepareInertiaUpdate(current, candidateMainXml)?.content || candidateMainXml;
-    }
-    const childCandidates = (current.xmlFiles || []).filter(file => (file.dirty || file.path === inertiaUpdate?.path) && file.category !== 'main');
-    const childContent = new Map<string, string>();
-    for (const file of childCandidates) {
-      childContent.set(file.path, file.path === inertiaUpdate?.path ? inertiaUpdate.content : await buildChildUploadXml(current, file.path));
-    }
-    const serialPath = serialSensorPath(model);
-    const pwmPath = pwmCapturePath(model);
-    let serialXml = serializeSerialSensors(current.nodes, current.edges);
-    let pwmXml = serializePwmCaptures(current.nodes);
-    try {
-      const baseline = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || '{}');
-      if (Array.isArray(baseline.nodes)) {
-        if (serialXml === null && baseline.nodes.some((node: any) => node.data?.componentType === 'serial_sensor')) {
-          serialXml = '<?xml version="1.0"?>\n<serial_outputs version="1"/>\n';
-        }
-        if (pwmXml === null && baseline.nodes.some((node: any) => node.data?.componentType === 'pwm_capture')) {
-          pwmXml = '<?xml version="1.0"?>\n<pwm_inputs version="1"/>\n';
-        }
-      }
-    } catch { /* No usable baseline: leave unrelated remote sidecars untouched. */ }
-    const candidatePaths = Array.from(new Set([
-      ...(mainCandidate ? [mainPath] : []),
-      ...childCandidates.map(file => file.path),
-      ...(serialXml !== null ? [serialPath] : []),
-      ...(pwmXml !== null ? [pwmPath] : []),
-    ]));
-    const unchangedPaths: string[] = [];
-    const pendingFiles: string[] = [];
-    for (const path of candidatePaths) {
-      const localContent = path === mainPath
-        ? candidateMainXml
-        : path === serialPath ? serialXml || ''
-          : path === pwmPath ? pwmXml || '' : childContent.get(path) || '';
-      if (!localContent.trim()) {
-        pendingFiles.push(path);
-        continue;
-      }
-      try {
-        const remote = await ftpDownloadXml(path);
-        if (comparableXml(localContent) === comparableXml(remote.content)) unchangedPaths.push(path);
-        else pendingFiles.push(path);
-      } catch {
-        // A missing remote file is a real upload candidate. A transient FTP
-        // failure is reported again by the review/upload path and must never
-        // be interpreted as equality.
-        pendingFiles.push(path);
-      }
-    }
-    if (unchangedPaths.length) {
-      const unchanged = new Set(unchangedPaths);
-      useFlowStore.setState({ xmlFiles: (current.xmlFiles || []).map(file => {
-        if (!unchanged.has(file.path)) return file;
-        const content = file.path === mainPath ? candidateMainXml : childContent.get(file.path);
-        return { ...file, ...(content ? { originalXml: content, currentXml: content } : {}), dirty: false };
-      }) });
-      onSaveComplete?.(unchangedPaths);
-    }
-    const mainDirty = pendingFiles.includes(mainPath);
-    const changedFiles = childCandidates.filter(file => pendingFiles.includes(file.path));
-    if (!pendingFiles.length) {
-      const cleanProject = {
-        ...project,
-        xmlFiles: useFlowStore.getState().xmlFiles,
-      };
-      localStorage.setItem(remoteBaselineKey(model), projectFingerprint(cleanProject));
-      onLog?.(`[${new Date().toLocaleTimeString()}] 本机 XML 与仿真机一致，跳过上传`);
-      return false;
-    }
-    if (pendingFiles.length > 0) {
-      const isZh = !/^en(?:-|$)/i.test(navigator.language || '');
-      const fileList = pendingFiles.map(file => `  • ${file}`).join('\n');
-      const message = isZh
-        ? `检测到本地修改，点击“确定”后将上传以下文件到仿真机：\n\n${fileList}\n\n上传后会覆盖仿真机对应文件，是否继续？`
-        : `Local changes detected. The following files will be uploaded to the simulator:\n\n${fileList}\n\nExisting simulator files may be overwritten. Continue?`;
-      if (!window.confirm(message)) {
-        const error = new Error(`已取消上传，${model} 的本地修改尚未同步到仿真机。`);
-        error.name = 'ModelSyncCancelledError';
-        throw error;
-      }
-    }
-    let uploadedMainXml = candidateMainXml;
-    let uploaded = false;
-
-    // Starting a simulation must not regenerate the aircraft merely because
-    // layout/subfile state changed.  Regeneration expands file-backed top-level
-    // sections (Metrics/Mass/Propulsion/Aero) and child thruster tables into the
-    // main XML. Only rebuild when the main file itself was edited.
-    if (mainDirty) {
-      const result = await ftpUploadModel(model, uploadedMainXml, { batchConfirmed: true });
-      const remote = await ftpDownloadModel(model);
-      if (comparableXml(remote.xml) !== comparableXml(uploadedMainXml)) throw new Error(`主模型回读不一致：${mainPath}`);
-      uploaded ||= result.uploaded;
-    }
-    for (const file of changedFiles) {
-      const content = childContent.get(file.path);
-      if (!content?.trim()) throw new Error(`子文件 ${file.path} 的安全补丁为空，已取消上传。`);
-      const result = await ftpUploadFile(file.path, content, { batchConfirmed: true });
-      const remote = await ftpDownloadXml(file.path);
-      if (comparableXml(remote.content) !== comparableXml(content)) throw new Error(`子文件回读不一致：${file.path}`);
-      uploaded ||= result.uploaded;
-    }
-    if (serialXml !== null && pendingFiles.includes(serialPath)) {
-      const result = await ftpUploadFile(serialPath, serialXml, { batchConfirmed: true });
-      const remote = await ftpDownloadXml(serialPath);
-      if (comparableXml(remote.content) !== comparableXml(serialXml)) {
-        throw new Error(`串口传感器 XML 回读不一致：/mnt/sdcard/jsbsim/${serialPath}`);
-      }
-      uploaded ||= result.uploaded;
-    }
-    if (pwmXml !== null && pendingFiles.includes(pwmPath)) {
-      const result = await ftpUploadFile(pwmPath, pwmXml, { batchConfirmed: true });
-      const remote = await ftpDownloadXml(pwmPath);
-      if (comparableXml(remote.content) !== comparableXml(pwmXml)) {
-        throw new Error(`PWM 捕获 XML 回读不一致：/mnt/sdcard/jsbsim/${pwmPath}`);
-      }
-      uploaded ||= result.uploaded;
-    }
-    useFlowStore.setState({ xmlFiles: (useFlowStore.getState().xmlFiles || []).map(file =>
-      file.category === 'main'
-        ? {
-            ...file,
-            originalXml: mainDirty && uploadedMainXml ? uploadedMainXml : file.originalXml,
-            currentXml: mainDirty && uploadedMainXml ? uploadedMainXml : file.currentXml,
-            dirty: mainDirty ? false : file.dirty,
-          }
-        : childContent.has(file.path) && pendingFiles.includes(file.path)
-          ? { ...file, originalXml: childContent.get(file.path)!, currentXml: childContent.get(file.path)!, dirty: false }
-          : unchangedPaths.includes(file.path) ? { ...file, dirty: false } : file
-    ) });
-    if (uploadedMainXml.trim()) localStorage.setItem('jsbsim-raw-xml', uploadedMainXml);
-    localStorage.setItem('jsbsim-remote-model', model);
-    localStorage.setItem(remoteBaselineKey(model), fingerprint);
-    onSaveComplete?.(pendingFiles);
-    onLog?.(`[${new Date().toLocaleTimeString()}] ${uploaded ? '已同步模型变更到' : '主模型未修改，跳过写入'} NuttX: ${model}`);
-    return uploaded;
-  };
-
-  const handleSyncRemoteModel = (model: string) => syncRemoteModel(model, false);
-  const handleForceSyncRemoteModel = async (model: string) => {
-    if (!isRemoteUploadEnabled()) {
-      onLog?.(`[${new Date().toLocaleTimeString()}] 模型上传保护已启用，未修改 NuttX 文件: ${model}`);
-      return;
-    }
-    await syncRemoteModel(model, true);
-  };
+  const handleSyncRemoteModel = (model: string) => runModelSync(model);
+  const handleForceSyncRemoteModel = (model: string) => runModelSync(model, true);
 
   const handleDownloadXml = () => {
     const blob = new Blob([xmlContent], { type: 'application/xml' });
@@ -1658,8 +1004,13 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             </button>
             {showWorkspaceMenu && <div className="file-menu-dropdown workspace-menu-dropdown" role="menu">
               <button role="menuitem" onClick={() => { onSelectWorkspace?.('editor'); setShowWorkspaceMenu(false); }}>✎ {isZh ? '模型编辑' : 'Model Editor'}{workspace === 'editor' ? ' ✓' : ''}</button>
+              <button role="menuitem" onClick={() => { onSelectWorkspace?.('scene'); setShowWorkspaceMenu(false); }}>◈ {isZh ? '飞行视景' : 'Flight Scene'}{workspace === 'scene' ? ' ✓' : ''}</button>
               <button role="menuitem" onClick={() => { onSelectWorkspace?.('multi'); setShowWorkspaceMenu(false); }}>◫ {isZh ? '多机仿真' : 'Multi-Aircraft'}{workspace === 'multi' ? ' ✓' : ''}</button>
               <button role="menuitem" onClick={() => { onShowLogCenter?.(); setShowWorkspaceMenu(false); }}>▤ {isZh ? '日志中心' : 'Log Center'}</button>
+              <div className="file-menu-separator" />
+              <button role="menuitem" onClick={() => { setShowLibrary(true); setShowWorkspaceMenu(false); }} disabled={loading}>📚 {isZh ? '模型库' : 'Models'}</button>
+              <button role="menuitem" onClick={() => { setShowSimulationConfig(true); setShowWorkspaceMenu(false); }} disabled={loading || !instanceSlots[activeInstance]} title={!instanceSlots[activeInstance] ? (isZh ? '先给当前实例绑定模型' : 'Assign a model to this instance first') : undefined}>⚙ {isZh ? '仿真配置' : 'Simulation'}</button>
+              <button role="menuitem" onClick={() => { setShowLocalSettings(true); setShowWorkspaceMenu(false); }} title={isZh ? '本地配置' : 'Local Settings'} aria-label={isZh ? '本地配置' : 'Local Settings'}>🔧 {isZh ? '本地' : 'Settings'}</button>
             </div>}
           </div>
           {workspace === 'editor' && <div className="file-menu-anchor" ref={instanceMenuRef}>
@@ -1731,7 +1082,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
                 <button role="menuitem" onClick={() => void beginModelImport(false)} title={isZh ? '选择主模型，自动扫描同目录及子目录 XML' : 'Select main XML and scan sibling XML files'}>📥 {isZh ? '导入 XML（自动关联同目录）' : 'Import XML with siblings'}</button>
                 <button role="menuitem" onClick={() => void beginModelImport(true)} title={isZh ? '扫描整个模型目录，自动保留目录结构' : 'Scan an XML directory'}>📂 {isZh ? '导入 XML 目录' : 'Import XML folder'}</button>
                 <button role="menuitem" onClick={() => { void handleExportXml(); setShowFileMenu(false); }}>📤 {isZh ? '导出 XML' : 'Export XML'}</button>
-                <button role="menuitem" disabled={!xmlSourceDocuments.length} onClick={() => { setShowXmlSourceBrowser(true); setShowFileMenu(false); }}>🧾 {isZh ? 'XML 源码浏览器' : 'XML Source Browser'}</button>
+                <button role="menuitem" disabled={!hasLoadedModel || loading} onClick={() => { void openXmlSource(); setShowFileMenu(false); }}>🧾 {isZh ? 'XML 源码浏览器' : 'XML Source Browser'}</button>
               </div>
             )}
           </div>
@@ -1775,9 +1126,6 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               <button role="menuitem" onClick={() => { setShowJ23Guide(true); setShowToolsMenu(false); }}>📖 {isZh ? '使用说明' : 'User Guide'}</button>
             </div>}
           </div>
-          <button onClick={() => setShowLibrary(true)} disabled={loading}>📚 {isZh ? '模型库' : 'Models'}</button>
-          <button onClick={() => setShowSimulationConfig(true)} disabled={loading || !instanceSlots[activeInstance]} title={!instanceSlots[activeInstance] ? (isZh ? '先给当前实例绑定模型' : 'Assign a model to this instance first') : undefined}>⚙ {isZh ? '仿真配置' : 'Simulation'}</button>
-          <button onClick={() => setShowLocalSettings(true)} title={isZh ? '本地配置' : 'Local Settings'} aria-label={isZh ? '本地配置' : 'Local Settings'}>🔧 {isZh ? '本地' : 'Settings'}</button>
           {workspace === 'editor' && activeInstance === '01' ? <SimMenu loading={loading} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}
@@ -1810,6 +1158,22 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} toolbarAppearance={toolbarAppearance} onToolbarAppearanceChange={updateToolbarAppearance} />}
       {showJ23Guide && <J23GuideDialog onClose={() => setShowJ23Guide(false)} />}
 
+      {visiblePendingPaths.length > 0 && <ModelSyncBar key={syncModel} paths={visiblePendingPaths}
+        initialUpload={needsInitialUpload} busy={loading || !!syncReview}
+        canDiscard={!!editBaseline && (modifiedXmlFiles.length > 0 || environmentPending.length > 0)}
+        onSave={() => void handleSaveToSimulator()} onDiscard={handleDiscardLocalChanges} />}
+      {(syncError || pendingPreparation.revision === pendingRevision && pendingPreparation.error) &&
+        <div className="model-sync-error" role="alert">{syncError || pendingPreparation.error}</div>}
+      {syncReview && <XmlSourceBrowser documents={syncReview.changes}
+        title="对比并保存到仿真机" subtitle={`${syncReview.changes.length} 个 XML 将写入；请逐项查看本机编辑结果与仿真机版本的差异`}
+        remoteContents={Object.fromEntries(syncReview.changes.map(file => [file.path, file.remote]))}
+        onClose={() => syncReview.resolve(false)}
+        footer={<footer className="model-sync-review-footer">
+          <div>{syncReview.assets.length > 0 && <span>另将上传 {syncReview.assets.length} 个资源：{syncReview.assets.map(file => file.name).join('、')}。 </span>}
+            <span>{isRemoteUploadEnabled() ? '保存后将回读确认，成功后清除待保存提示。' : '写入已关闭，请先在本地配置中开启“允许写入仿真机模型”。'}</span></div>
+          <button onClick={() => syncReview.resolve(false)}>取消</button>
+          <button className="primary" disabled={!isRemoteUploadEnabled()} onClick={() => syncReview.resolve(true)}>确认保存到仿真机</button>
+        </footer>} />}
       {showXmlSourceBrowser && <XmlSourceBrowser documents={xmlSourceDocuments} loadRemoteContent={loadRemoteXmlForReview} onClose={() => setShowXmlSourceBrowser(false)} />}
 
 
@@ -1944,7 +1308,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
           }}
           onLoad={async (loaded, signal) => {
             const modelName = String(loaded?.model || loaded?.aircraft?.name || '').trim();
-            const data = modelName ? await withPwmCaptures(await withSerialSensors(loaded, modelName), modelName) : loaded;
+            const data = modelName ? await withEnvironment(await withPwmCaptures(await withSerialSensors(loaded, modelName), modelName), modelName) : loaded;
             if (signal.aborted) return;
             loadProject(data);
             if (data.sourceXml) localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
@@ -1956,7 +1320,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               setLibrarySimulationModel(loadedModel);
               localStorage.setItem('jsbsim-remote-model', loadedModel);
               onAssignInstanceModel?.(activeInstance, loadedModel);
-              if (data.sourceXml) localStorage.setItem(remoteBaselineKey(loadedModel), projectFingerprint(useFlowStore.getState()));
+              if (data.sourceXml) setRemoteBaseline(loadedModel, projectFingerprint(useFlowStore.getState()));
             }
             // Persist to localStorage
             try {

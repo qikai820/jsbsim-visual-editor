@@ -186,6 +186,7 @@ export default function PropertyPanel() {
             </div>
             <ExpressionEditor
               expression={item.expression}
+              monitorOwner={item.name}
               onChange={(expr) => {
                 const updated = channels.map((c: any, ci: number) => {
                   if (ci !== sysEditingExpr.chIdx) return c;

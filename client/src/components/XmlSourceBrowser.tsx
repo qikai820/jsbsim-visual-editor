@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { xmlContentEqual } from '../utils/xmlContentEqual';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { compareXmlContent, xmlContentEqual } from '../utils/xmlContentEqual';
 import { changedParts, diffText, type DiffKind, type DiffRow } from '../utils/textDiff';
 
 export interface XmlSourceDocument {
@@ -13,6 +13,10 @@ interface XmlSourceBrowserProps {
   documents: XmlSourceDocument[];
   initialPath?: string;
   loadRemoteContent?: (path: string) => Promise<string | null>;
+  remoteContents?: Record<string, string | null>;
+  title?: string;
+  subtitle?: string;
+  footer?: ReactNode;
   onClose: () => void;
 }
 
@@ -45,7 +49,7 @@ function visibleDiffRows(rows: DiffRow[], changeStarts: number[], expanded: bool
   return result;
 }
 
-export default function XmlSourceBrowser({ documents, initialPath, loadRemoteContent, onClose }: XmlSourceBrowserProps) {
+export default function XmlSourceBrowser({ documents, initialPath, loadRemoteContent, remoteContents, title, subtitle, footer, onClose }: XmlSourceBrowserProps) {
   const normalized = useMemo(() => {
     const unique = new Map<string, XmlSourceDocument>();
     documents.forEach(document => {
@@ -63,10 +67,11 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
   const [filter, setFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [copied, setCopied] = useState(false);
-  const [remoteContent, setRemoteContent] = useState<Record<string, string | null>>({});
+  const [remoteContent, setRemoteContent] = useState<Record<string, string | null>>(remoteContents || {});
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState('');
   const [viewMode, setViewMode] = useState<'source' | 'split' | 'unified'>('split');
+  const [comparisonMode, setComparisonMode] = useState<'semantic' | 'text'>('semantic');
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
   const [showWhitespace, setShowWhitespace] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -119,8 +124,13 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
       void openRemote();
     }
   }, [selected?.path, loadRemoteContent]);
-  const sameXml = typeof remote === 'string' && xmlContentEqual(content, remote);
-  const diff = useMemo(() => typeof remote !== 'string' ? null : diffText(content, remote, ignoreWhitespace), [content, remote, ignoreWhitespace]);
+  const isXml = !selected?.path.toLowerCase().endsWith('.json');
+  const comparison = useMemo(() => isXml && typeof remote === 'string' ? compareXmlContent(remote, content) : null, [isXml, content, remote]);
+  const sameXml = comparison?.equal || false;
+  const semantic = comparisonMode === 'semantic' && !!comparison && !comparison.error;
+  const diff = useMemo(() => remote === undefined ? null : semantic
+    ? diffText(comparison!.left!.xml, comparison!.right!.xml)
+    : diffText(remote || '', content, ignoreWhitespace), [content, remote, ignoreWhitespace, semantic, comparison]);
   const displayRows = useMemo(() => diff ? visibleDiffRows(diff.rows, diff.changeStarts, expanded) : [], [diff, expanded]);
   const jumpToChange = (direction: number) => {
     if (!diff?.changeStarts.length) return;
@@ -131,7 +141,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
   };
   const showText = (text: string) => showWhitespace ? text.replace(/ /g, '·').replace(/\t/g, '→\u00a0\u00a0') : text;
   const renderCode = (text: string, counterpart: string | undefined, kind: DiffKind) => {
-    if (counterpart === undefined || kind === 'same' || kind === 'empty' || ignoreWhitespace) return showText(text) || ' ';
+    if (counterpart === undefined || kind === 'same' || kind === 'empty' || !semantic && ignoreWhitespace) return showText(text) || ' ';
     const [prefix, changed, counterpartChanged, suffix] = changedParts(text, counterpart);
     return <>{showText(prefix)}<mark>{showText(changed || (counterpartChanged ? ' ' : ''))}</mark>{showText(suffix)}</>;
   };
@@ -149,8 +159,8 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
       <section className="xml-source-browser" onClick={event => event.stopPropagation()}>
         <header className="xml-source-header">
           <div>
-            <strong>🧾 XML 源码浏览器</strong>
-            <small>{normalized.length} 个文件 · 只读查看，不会修改工程文件</small>
+            <strong>{title || '🧾 XML 源码浏览器'}</strong>
+            <small>{subtitle || `${normalized.length} 个文件 · 显示当前编辑结果`}</small>
           </div>
           <div className="xml-source-actions">
             {loadRemoteContent && <button className="xml-source-review-button" onClick={() => void openRemote()} disabled={!selected || remoteLoading}>{remoteLoading ? '⏳ 读取仿真机…' : remote === null ? '＋ 仿真机待创建' : remote !== undefined ? '✓ 已读取仿真机' : '⇄ 对比仿真机'}</button>}
@@ -175,32 +185,36 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
           <main className="xml-source-content">
             <div className="xml-source-content-head">
               <strong>{selected?.path || '暂无 XML 文件'}</strong>
-              {typeof remote === 'string' && <span className={sameXml ? 'found' : 'not-found'}>{sameXml ? content === remote ? '内容完全一致' : '模型内容一致，仅格式不同' : 'XML 内容不同'}</span>}
+              {typeof remote === 'string' && <span className={sameXml || !isXml && content === remote ? 'found' : 'not-found'}>{comparison?.error ? 'XML 无法解析' : sameXml ? content === remote ? '内容完全一致' : '模型语义一致，无需同步' : isXml ? '模型语义不同' : content === remote ? '内容完全一致' : '内容不同'}</span>}
               <label>查找 <input value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} placeholder="源码内搜索" /></label>
               {sourceFilter && <span className={sourceMatch ? 'found' : 'not-found'}>{sourceMatch ? '已找到' : '未找到'}</span>}
-              {loadRemoteContent && <div className="xml-git-view-switch" role="group" aria-label="对比显示方式">
+              {(loadRemoteContent || remoteContents) && <div className="xml-git-view-switch" role="group" aria-label="对比显示方式">
                 <button className={viewMode === 'source' ? 'active' : ''} onClick={() => setViewMode('source')}>源码</button>
-                <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')} disabled={typeof remote !== 'string'}>双栏</button>
-                <button className={viewMode === 'unified' ? 'active' : ''} onClick={() => setViewMode('unified')} disabled={typeof remote !== 'string'}>单栏</button>
+                <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')} disabled={remote === undefined}>双栏</button>
+                <button className={viewMode === 'unified' ? 'active' : ''} onClick={() => setViewMode('unified')} disabled={remote === undefined}>单栏</button>
               </div>}
             </div>
             {selected ? (
               <>
                 {remoteError && <div className="xml-source-remote-error">仿真机读取失败：{remoteError}</div>}
+                {comparison?.error && <div className="xml-source-remote-error" role="alert">{comparison.error}。左侧为仿真机，右侧为本机；当前显示原始文本差异。</div>}
                 {remote === null && <div className="xml-source-remote-pending">仿真机上尚无此 XML；确认上传后将创建。</div>}
                 {viewMode !== 'source' && diff ? <>
                   <div className="xml-git-toolbar">
-                    <span className="xml-git-counts"><b className="removed">−{diff.deletions}</b><b className="added">+{diff.additions}</b><span>{diff.changeStarts.length} 处差异</span></span>
+                    <span className="xml-git-counts"><b className="removed">−{diff.deletions}</b><b className="added">+{diff.additions}</b><span>{diff.changeStarts.length} 处{semantic ? '模型' : '文本'}差异</span></span>
+                    {comparison && !comparison.error && <label>比较 <select aria-label="差异比较规则" value={comparisonMode} onChange={event => { setComparisonMode(event.target.value as 'semantic' | 'text'); setActiveChange(0); }}><option value="semantic">模型语义</option><option value="text">原始文本</option></select></label>}
+                    {semantic && <span className="xml-git-note">已忽略排版和等值数值表示 · 规范化行号</span>}
+                    {comparison?.commentsDiffer && <span className="xml-git-note">注释有变化，可切换原始文本查看</span>}
                     {diff.finalNewlineDiffers && <span className="xml-git-note">文件末尾换行不同</span>}
                     {diff.lineEndingDiffers && <span className="xml-git-note">换行格式不同（CRLF/LF）</span>}
                     {diff.approximate && <span className="xml-git-note">文件较大，按行近似对齐</span>}
-                    <label><input type="checkbox" checked={ignoreWhitespace} onChange={event => { setIgnoreWhitespace(event.target.checked); setActiveChange(0); }} />忽略空白</label>
+                    {!semantic && <label><input type="checkbox" checked={ignoreWhitespace} onChange={event => { setIgnoreWhitespace(event.target.checked); setActiveChange(0); }} />忽略空白</label>}
                     <label><input type="checkbox" checked={showWhitespace} onChange={event => setShowWhitespace(event.target.checked)} />显示空白</label>
                     <button onClick={() => setExpanded(value => !value)} disabled={!diff.changeStarts.length}>{expanded ? '收起未改动行' : '展开全部'}</button>
                     <div className="xml-git-nav"><button onClick={() => jumpToChange(-1)} disabled={!diff.changeStarts.length} aria-label="上一处差异">↑</button><span>{diff.changeStarts.length ? `${activeChange + 1} / ${diff.changeStarts.length}` : '0 / 0'}</span><button onClick={() => jumpToChange(1)} disabled={!diff.changeStarts.length} aria-label="下一处差异">↓</button></div>
                   </div>
                   <div className={`xml-git-scroll ${viewMode}`} ref={diffScrollRef} tabIndex={0} aria-label={`${selected.path} 差异`}>
-                    {viewMode === 'split' && <div className="xml-git-pane-head"><span>本机版本</span><span>仿真机版本</span></div>}
+                    {viewMode === 'split' && <div className="xml-git-pane-head"><span>仿真机版本（{semantic ? '语义规范化' : '保存前'}）</span><span>本机版本（{semantic ? '语义规范化' : '待保存'}）</span></div>}
                     {displayRows.map(item => 'skipped' in item ? (
                       <button className="xml-git-skipped" key={`skip-${item.index}`} onClick={() => setExpanded(true)}>··· {item.skipped} 行未改动，点击展开 ···</button>
                     ) : viewMode === 'split' ? (
@@ -216,7 +230,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
                         </> : renderSide(item.row.left.text, item.row.left.number, 'same', undefined, ' ', item.row.right.number)}
                       </div>
                     ))}
-                    {!diff.changeStarts.length && <div className="xml-git-empty">{ignoreWhitespace ? '忽略空白后没有文本差异' : '两个文件的文本完全一致'}</div>}
+                    {!diff.changeStarts.length && <div className="xml-git-empty">{semantic ? '模型语义一致，真实变更为 0，无需同步。可切换原始文本查看排版、数值表示和注释差异。' : ignoreWhitespace ? '忽略空白后没有文本差异' : '两个文件的文本完全一致'}</div>}
                   </div>
                 </> : <pre className="xml-source-code" tabIndex={0} aria-label={`${selected.path} 源码`}>
                   {content.split('\n').map((line, index) => <span className="xml-source-line" key={index}><i>{String(index + 1).padStart(5, ' ')}</i><code>{line || ' '}</code></span>)}
@@ -225,6 +239,7 @@ export default function XmlSourceBrowser({ documents, initialPath, loadRemoteCon
             ) : <div className="xml-source-empty">当前工程没有可浏览的 XML 源码</div>}
           </main>
         </div>
+        {footer}
       </section>
     </div>
   );

@@ -6,13 +6,17 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useFlowStore } from '../store/flowStore';
 import AircraftNode from './nodes/AircraftNode';
+import { MonitorGraphProvider, useMonitorGraph, monitorNodeTypes, MonitorBranch } from './monitor/MonitorGraph';
+import { withSignalMonitor } from './monitor/MonitoredEdge';
+import { addScopeInView } from './monitor/scopePlacement';
 import BendableEdge from './edges/BendableEdge';
 import type { ComponentType } from '../types';
 
-const nodeTypes = { aircraftComponent: AircraftNode };
+const nodeTypes = { aircraftComponent: AircraftNode, ...monitorNodeTypes };
 // Map the built-in 'smoothstep' edge type (used by onConnect) to the bendable
 // edge so existing edges gain waypoints with no data migration.
-const edgeTypes = { smoothstep: BendableEdge, bendable: BendableEdge };
+const MonitoredEdge = withSignalMonitor(BendableEdge);
+const edgeTypes = { smoothstep: MonitoredEdge, bendable: MonitoredEdge, monitorBranch: MonitorBranch };
 
 interface CanvasProps {
   onDragStart: (type: ComponentType) => void;
@@ -24,6 +28,7 @@ const MODULE_TYPES = new Set(['system', 'flight_control', 'aero_coefficients']);
 
 export default function Canvas({ dragType }: CanvasProps) {
   const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode, updateNodeParams, setFocusedNodeId, restoreLayout } = useFlowStore();
+  const monitor = useMonitorGraph('main', nodes, edges);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance<any, any> | null>(null);
   const fitInProgress = useRef(false);
@@ -48,6 +53,7 @@ export default function Canvas({ dragType }: CanvasProps) {
       y: event.clientY,
     });
 
+    if (droppedType === 'scope') { addScopeInView('main', rfInstance.current, reactFlowWrapper.current, position); return; }
     addNode(droppedType, position);
   }, [dragType, addNode]);
 
@@ -135,12 +141,12 @@ export default function Canvas({ dragType }: CanvasProps) {
 
   return (
     <div className="canvas-wrapper" ref={reactFlowWrapper}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
+      <MonitorGraphProvider value={monitor.context}><ReactFlow
+        nodes={monitor.nodes}
+        edges={monitor.edges}
+        onNodesChange={changes => { const modelChanges = monitor.filterChanges(changes); if (modelChanges.length) onNodesChange(modelChanges); }}
         onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
+        onConnect={connection => { if (!monitor.connect(connection)) onConnect(connection); }}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onInit={(instance) => { rfInstance.current = instance; }}
@@ -165,7 +171,7 @@ export default function Canvas({ dragType }: CanvasProps) {
           <ControlButton onClick={restoreLayout} title="恢复紧凑布局" aria-label="恢复紧凑布局">↺</ControlButton>
         </Controls>
         <MiniMap />
-      </ReactFlow>
+      </ReactFlow></MonitorGraphProvider>
     </div>
   );
 }
