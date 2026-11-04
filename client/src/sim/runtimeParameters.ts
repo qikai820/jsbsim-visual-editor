@@ -90,7 +90,15 @@ function groups(project: { nodes: any[] }): Map<string, Group> {
         const value = numeric(item.componentProps?.constant?.value);
         if (value !== undefined) { edits.push(...expressionParameters(item.name, { kind: 'value', value })); clone.componentProps.constant.value = '#tunable'; }
       }
-      if (item.expression) { edits.push(...expressionParameters(item.name, item.expression)); clone.expression = expressionShape(item.expression); }
+      if (['function', 'fcs_function', 'aero_table'].includes(item.type)) {
+        if (item.expression) { edits.push(...expressionParameters(item.name, item.expression)); clone.expression = expressionShape(item.expression); }
+      } else {
+        // The XML parser attaches a placeholder expression to ordinary FCS
+        // components. The canvas correctly omits it on commit because their
+        // XML is generated from componentProps. It is neither a structural
+        // change nor a tunable literal in the running component.
+        delete clone.expression;
+      }
       // Identity and structure remain stable; geometry/layout does not affect the FDM.
       result.set(`${node.id}:${item.name}`, { shape: JSON.stringify(canonical(clone)), edits });
     } };

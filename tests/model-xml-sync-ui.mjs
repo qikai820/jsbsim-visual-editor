@@ -23,6 +23,16 @@ const backend = (command, args) => {
 const liveXml=backend('generate_subfile',{req:{type:'system',name:'Live',params:{channels:JSON.stringify([{name:'Live',items:[{type:'fcs_function',name:'test/limited',cliptoMin:'-1.5',cliptoMax:'test/upper-limit',expression:{kind:'value',value:9.25}},{type:'constant',name:'test/constant',componentProps:{constant:{value:'4.5'}}}]}])}}});
 assert.ok(liveXml.xml.includes('<min>-1.5</min>'));assert.ok(liveXml.xml.includes('<max>test/upper-limit</max>'));
 assert.ok(liveXml.xml.includes('<value>9.25</value>'));assert.ok(liveXml.xml.includes('<value>4.5</value>'));
+const importedClip = backend('parse_xml', {xml:'<fdm_config name="live"><system name="Pitch"><channel name="Pitch"><pure_gain name="vt_pitch_input_limit"><input>fcs/voliro_t/pitch-cmd-norm</input><gain>1</gain><clipto><min>-1</min><max>1</max></clipto><output>fcs/voliro_t/pitch-cmd-limited-norm</output></pure_gain></channel></system></fdm_config>',files:[]});
+const clipParams = importedClip.nodes.find(node=>node.data.componentType==='system').data.params;
+const clipChannels = JSON.parse(clipParams.channels);
+clipChannels[0].items[0].componentProps.clipto_max.value='0.5';
+const savedClip = backend('generate_subfile',{req:{type:'system',name:'Pitch',params:{...clipParams,channels:JSON.stringify(clipChannels)}}}).xml;
+assert.ok(savedClip.includes('<min>-1</min>') && savedClip.includes('<max>0.5</max>'),'imported string clip values persist in generated XML');
+const reopenedClip = backend('parse_xml',{xml:'<fdm_config name="live">'+savedClip.replace(/<\?xml[^>]*\?>/,'')+'</fdm_config>',files:[]});
+assert.equal(JSON.parse(reopenedClip.nodes.find(node=>node.data.componentType==='system').data.params.channels)[0].items[0].componentProps.clipto_max.value,'0.5','saved upper clip survives a fresh XML import');
+clipChannels[0].items[0].componentProps.clipto_max.value='fcs/upper-limit';
+assert.ok(backend('generate_subfile',{req:{type:'system',name:'Pitch',params:{...clipParams,channels:JSON.stringify(clipChannels)}}}).xml.includes('<max>fcs/upper-limit</max>'),'property-driven bounds remain property references when saved');
 const references = [
   { name: 'aircraft/test/Mass.xml', xml: `<?xml version="1.0"?>\n<mass_balance>\n  <!-- keep mass comment -->\n  <ixx unit="SLUG*FT2">1</ixx><iyy unit="SLUG*FT2">2</iyy><izz unit="SLUG*FT2">3</izz>\n  <emptywt unit="LBS">10</emptywt>\n  <location name="CG" unit="IN"><x>1</x><y>2</y><z>3</z></location>\n  <pointmass name="battery"><weight unit="LBS">2</weight><location unit="IN"><x>1</x><y>0</y><z>0</z></location></pointmass>\n  <vendor_mass keep="yes">untouched</vendor_mass>\n</mass_balance>` },
   { name: 'systems/Sensor.xml', xml: `<?xml version="1.0"?>\n<system name="Sensor">\n  <!-- keep sensor comment -->\n  <channel name="sensor"><pure_gain name="sensor/gain"><input>velocities/u-fps</input><gain>1</gain><output>sensor/result</output></pure_gain></channel>\n  <vendor_sensor keep="yes"/>\n</system>` },

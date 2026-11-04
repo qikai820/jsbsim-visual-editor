@@ -9,6 +9,8 @@
 
 输入框在 Enter 或失焦时提交，编辑过程中的空串、负号或指数前缀不会发送。底部提示只有在运行端完成应用并返回实际值、编辑器核对一致后才显示“已应用”。错误或通信超时会保留本地修改，不会自动重启模型。
 
+如果先前的修改未发送或未确认，底部“重新应用”可再次提交当前数值修改，并等待回读确认；无需先改成另一个数值，也不会重载模型。
+
 示波器为可拖动、可从右下角调整大小的浮窗，打开时仍可操作参数面板。
 
 更新由拥有 FDM 的线程在仿真步之间执行，不调用 LoadModel、RunIC、Reset 或重新创建实例。暂停时也能应用，仿真时间保持暂停。示波器继续使用原来的实例、运行代次和历史记录。
@@ -29,7 +31,8 @@
 
 ## 验证入口
 
-- `node tests/runtime-parameters.mjs`：参数标识、数值差异、限幅成组、环境单位换算、结构变化隔离。
+- `node tests/runtime-parameters.mjs`：参数标识、数值差异、限幅成组、环境单位换算、结构变化隔离，以及从 XML 导入的增益块首次将上限改为 `0.5` 的画布提交流程。
 - `cargo test --manifest-path src-tauri/Cargo.toml --test runtime_tuning --test signal_monitor`：协议校验、真实应用 ACK、实际值不符、实例和模型检查、示波器队列。
 - `node --experimental-websocket tests/runtime-tuning-ui.mjs <vite-url>`：浏览器中的草稿/提交、应用反馈、关闭调参、失败保留、模型检查和示波器历史连续性。IPC 为隔离模拟，不连接硬件。
 - 运行端的 `Tools/test_runtime_tuning.cpp`、`Tools/test_runtime_tuning_udp.py`：真实 JSBSim 和 UDP，检查增益、限幅、常量、环境、状态保持、暂停、重试、会话隔离和保存后的新实例。
+- `node --experimental-websocket tests/model-xml-sync-ui.mjs`：真实 Rust XML 解析/生成，检查导入组件的字符串限幅值保存为 XML 后重新导入仍保留，属性形式的限幅引用也不会被丢弃。

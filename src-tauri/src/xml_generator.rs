@@ -606,18 +606,20 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
         let clip_min = comp
             .get("clipto_min")
             .and_then(|v| v.get("value"))
-            .and_then(|v| v.as_f64());
+            .map(val_to_str)
+            .filter(|value| !value.trim().is_empty());
         let clip_max = comp
             .get("clipto_max")
             .and_then(|v| v.get("value"))
-            .and_then(|v| v.as_f64());
+            .map(val_to_str)
+            .filter(|value| !value.trim().is_empty());
         if clip_min.is_some() || clip_max.is_some() {
             let mut inner = vec![];
             if let Some(mn) = clip_min {
-                inner.push(xml_element("min", &[], Some(&fmt_num(mn)), level + 2));
+                inner.push(xml_element("min", &[], Some(&mn), level + 2));
             }
             if let Some(mx) = clip_max {
-                inner.push(xml_element("max", &[], Some(&fmt_num(mx)), level + 2));
+                inner.push(xml_element("max", &[], Some(&mx), level + 2));
             }
             lines.push(xml_element_raw("clipto", &[], Some(&inner.join("\n")), level + 1));
         }
