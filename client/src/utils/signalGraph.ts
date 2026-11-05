@@ -406,7 +406,7 @@ const ROW = 140;
 export function buildSignalGraph(
   channels: ChannelItem[],
   _topLevelProps: string[] = [],
-  opts: { canvas?: { w: number; h: number } } = {},
+  opts: { canvas?: { w: number; h: number }; layout?: boolean } = {},
 ): SignalGraph {
   const items: { item: ChannelItem; ch: number; chName: string; id: string }[] = [];
   channels.forEach((ch, ci) => {
@@ -427,8 +427,9 @@ export function buildSignalGraph(
 
   // Simple rank layout: rank = 1 + max(producer rank). Iterative with cap.
   const rank = new Map<string, number>();
-  for (const e of items) rank.set(e.id, 0);
-  for (let iter = 0; iter < items.length + 2; iter++) {
+  // Canvas startup uses cheap provisional columns; exact placement runs in a worker.
+  for (const e of items) rank.set(e.id, opts.layout === false ? e.ch : 0);
+  for (let iter = 0; opts.layout !== false && iter < items.length + 2; iter++) {
     let changed = false;
     for (const e of items) {
       const myInputs = consumerInputs.get(e.id)!;
@@ -473,7 +474,7 @@ export function buildSignalGraph(
   }
 
   // Order each rank to minimise edge crossings (median/barycenter heuristic).
-  orderRanksByBarycenter(byRank, { prev, next });
+  if (opts.layout !== false) orderRanksByBarycenter(byRank, { prev, next });
 
   const nodes: any[] = [];
   const edges: any[] = [];
@@ -654,10 +655,25 @@ export function buildSignalGraph(
 
   insertProductTables(nodes, edges);
 
+  if (opts.layout === false) {
+    // A cheap, complete first frame even for high-arity operators and tables.
+    // These are temporary positions; measured layout runs asynchronously.
+    const dimensions = nodes.map(node => {
+      const size = signalNodeSize(node);
+      return { width: Math.max(126, size.width), height: Math.max(60, size.height) };
+    });
+    const width = Math.max(126, ...dimensions.map(size => size.width)) + 50;
+    const height = Math.max(60, ...dimensions.map(size => size.height)) + 40;
+    const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length * height * 1.6 / width)));
+    nodes.forEach((node, index) => {
+      node.position = { x: 40 + index % columns * width, y: 40 + Math.floor(index / columns) * height };
+    });
+  }
+
   // Dagre jointly optimises rank assignment, in-rank order and whitespace.
   // Run it after all endpoint nodes and edges exist, replacing the provisional
   // positions above with a compact, collision-free global layout.
-  applyDagreSignalLayout(nodes, edges, opts.canvas);
+  if (opts.layout !== false) applyDagreSignalLayout(nodes, edges, opts.canvas);
 
   // ── Separate overlapping signal lines ──
   // Fan edges out from shared source/target handles by a small vertical offset
@@ -782,7 +798,8 @@ function cloneExpr(e: any): any {
 
 export function graphToChannels(nodes: any[], edges: any[]): any[] {
   const compNodes = nodes.filter(n => n.data?.kind === 'component');
-  compNodes.sort((a, b) => (a.position.x - b.position.x) || (a.position.y - b.position.y));
+  // Node order carries the source XML's component execution order. Viewport
+  // layout and dragging must never reorder the serialized model.
 
   // target node -> (port index -> signal)
   const inputMap = new Map<string, Map<number, string>>();

@@ -85,6 +85,7 @@ export default function ExpressionEditor({ expression, baselineExpression, monit
   // Use refs to track latest state for callbacks
   const pendingIds = useMemo(() => baselineExpression === undefined ? new Set<string>() : pendingExpressionIds(nodes, edges, baselineExpression), [nodes, edges, baselineExpression]);
   const monitor = useMonitorGraph(`expr:${monitorOwner || 'anonymous'}`, nodes, edges);
+  const displayedNodes = useMemo(() => monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node), [monitor.nodes, pendingIds]);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -333,7 +334,7 @@ export default function ExpressionEditor({ expression, baselineExpression, monit
           }}
         >
           <MonitorGraphProvider value={monitor.context}><ReactFlow
-            nodes={monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node)}
+            nodes={displayedNodes}
             edges={monitor.edges}
             onNodesChange={changes => { const modelChanges = monitor.filterChanges(changes); if (modelChanges.length) onNodesChange(modelChanges); }}
             onEdgesChange={onEdgesChange}

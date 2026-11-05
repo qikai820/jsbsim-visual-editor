@@ -1,6 +1,7 @@
-import { memo, useLayoutEffect } from 'react';
-import { useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { memo } from 'react';
+import { type NodeProps } from '@xyflow/react';
 import { DiagramPort } from './OperatorBlock';
+import { useDiagramNodeInternals } from './useDiagramNodeInternals';
 
 interface SignalEndData {
   signalRole: 'source' | 'sink';
@@ -17,8 +18,7 @@ function SignalEndNode({ id, data, selected }: NodeProps) {
   const d = data as SignalEndData;
   const isSource = d.signalRole === 'source';
   const color = isSource ? '#10b981' : '#f59e0b';
-  const updateInternals = useUpdateNodeInternals();
-  useLayoutEffect(() => { updateInternals(id); }, [id, d.signalName, isSource, updateInternals]);
+  useDiagramNodeInternals(id, JSON.stringify([d.signalName, isSource]));
 
   return (
     <div

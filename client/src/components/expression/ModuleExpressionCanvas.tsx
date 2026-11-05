@@ -23,6 +23,7 @@ import { SignalEdgeActionsContext } from './signalEdgeActions';
 import type { Bendpoint } from '../edges/bendpoints';
 import { layoutSignalGraph } from '../../utils/signalLayout';
 import { routeSignalGraph } from '../../utils/signalRouting';
+import { canvasLayoutNeedsRepair } from '../../utils/canvasLayoutIntegrity';
 import { pendingOperatorIds } from './pendingOperators';
 import FunctionBlockNode from './FunctionBlockNode';
 import SignalBlockNode from './SignalBlockNode';
@@ -75,6 +76,7 @@ interface ModuleExpressionCanvasProps {
   modelId?: string;
   initialLayout?: Record<string, { x: number; y: number }>;
   onLayoutChange?: (layout: Record<string, { x: number; y: number }>) => void;
+  onInit?: (instance: ReactFlowInstance) => void;
   initialOpenComponentId?: string;
   findPropertySource?: (signal: string) => { label: string } | null;
   onOpenPropertySource?: (signal: string) => void;
@@ -90,6 +92,19 @@ function withInitialPropertyValues(nodes: Node[], definitions: ModuleExpressionC
     return node.data.initialValue === initialValue ? node
       : { ...node, data: { ...node.data, initialValue } };
   });
+}
+
+function signalRoutingKey(nodes: Node[], edges: Edge[]) {
+  return JSON.stringify([
+    nodes.map(n => [n.id, n.hidden, n.position, n.measured, n.dragging, n.resizing,
+      n.data?.inputs, n.data?.inputCount, n.data?.manualSize]),
+    edges.map(e => [e.id, e.source, e.sourceHandle, e.target, e.targetHandle, e.hidden, e.data?.bendpoints]),
+  ]);
+}
+
+function signalRoutingError(edges: Edge[]) {
+  const blocked = edges.filter(edge => edge.data?.routingBlocked).length;
+  return blocked ? `${blocked} 条连线空间不足，请移动相邻组件或调整手动折点；也可点击自动布局。` : '';
 }
 
 function InitialPropertyValue({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -337,17 +352,20 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     onChannelsChange, onBack, title, mode, embedded = false,
     initialLayout, onLayoutChange,
   } = props;
-  const isSignal = mode === 'signal' || channels != null;
+  const isSignal = mode === 'signal' || mode !== 'expr' && props.channels != null;
   const hasFormulaView = mode === 'signal' || props.channels != null;
 
   const initial = useMemo(() => {
-    const g = isSignal ? buildSignalGraph(channels, topLevelProps) : buildMergedGraph(expressions);
+    // Build identities/wiring immediately; measured, port-aware placement is
+    // asynchronous below. A saved layout must never pay for a discarded Dagre
+    // layout (especially with hundreds of operators).
+    const g = isSignal ? buildSignalGraph(channels, topLevelProps, { layout: false }) : buildMergedGraph(expressions);
     if (isSignal) g.nodes = withInitialPropertyValues(g.nodes, props.propertyDefinitions);
     // Restore saved positions for this model, if any.
     if (initialLayout) {
       for (const n of g.nodes) {
         const p = initialLayout[n.id];
-        if (p) n.position = { x: p.x, y: p.y };
+        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) n.position = { x: p.x, y: p.y };
         const size = (initialLayout as any).__sizes?.[n.id];
         if (size && Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0) {
           n.data = { ...n.data, manualSize: size };
@@ -398,21 +416,32 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   const [nodes, setNodes] = useState<Node[]>(initial.nodes);
   const [edges, setEdges] = useState<Edge[]>(initial.edges);
-  const rootIdsRef = useRef<Record<string, string>>({});
+  const rootIdsRef = useRef<Record<string, string>>((initial as { rootIds?: Record<string, string> }).rootIds || {});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   // In-canvas function expansion (MVP: at most one function expanded at a time).
   const [expandedFnId, setExpandedFnId] = useState<string | null>(null);
   const rfWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const [layoutBusy, setLayoutBusy] = useState(false);
+  const [placing, setPlacing] = useState(false);
+  const [initializing, setInitializing] = useState(isSignal && initial.nodes.length > 0);
   const [routingBusy, setRoutingBusy] = useState(false);
   const [formulaView, setFormulaView] = useState(false);
   const [layoutError, setLayoutError] = useState('');
   const layoutRequest = useRef(0);
-  useEffect(() => () => { layoutRequest.current++; }, []);
+  const layoutAbort = useRef<AbortController | null>(null);
+  const routingAbort = useRef<AbortController | null>(null);
+  const lastRoutedKey = useRef('');
+  const activeLayoutKey = useRef('');
+  useEffect(() => () => {
+    layoutRequest.current++;
+    layoutAbort.current?.abort();
+    routingAbort.current?.abort();
+  }, []);
 
   const pendingIds = useMemo(() => props.baselineChannels === undefined ? new Set<string>() : pendingOperatorIds(nodes, props.baselineChannels), [nodes, props.baselineChannels]);
   const monitor = useMonitorGraph(props.modelId || props.title || 'module', nodes, edges);
+  const displayedNodes = useMemo(() => monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node), [monitor.nodes, pendingIds]);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -502,6 +531,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const persistBendpoints = useCallback(() => {
     persistLayout();
   }, [persistLayout]);
+  const signalEdgeActions = useMemo(() => ({ updateBendpoints: updateEdgeBendpoints, updateFanoutRoute, persistBendpoints }),
+    [updateEdgeBendpoints, updateFanoutRoute, persistBendpoints]);
 
   // ── In-canvas function expansion (Simulink-style operator subgraph) ──
   // Collapse: rebuild the expression from the subgraph (source of truth) and
@@ -645,7 +676,10 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     if (changes.some((c: any) => c.type === 'position' || c.type === 'remove' || c.type === 'dimensions' && c.resizing)) {
       // Moving any obstacle invalidates the automatically routed paths.
       layoutRequest.current++;
+      layoutAbort.current?.abort();
+      routingAbort.current?.abort();
       setLayoutBusy(false);
+      setPlacing(false);
       setEdges(es => {
         const next = es.map(e => e.data?.elkRoute ? { ...e, data: { ...e.data, elkRoute: undefined } } : e);
         edgesRef.current = next;
@@ -672,87 +706,136 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const handleAutoLayout = useCallback(async () => {
     const instance = rfInstance.current;
     if (!instance) return;
+    layoutAbort.current?.abort();
+    routingAbort.current?.abort();
+    const controller = new AbortController();
+    layoutAbort.current = controller;
     const request = ++layoutRequest.current;
     const inputNodes = nodesRef.current;
     const inputEdges = edgesRef.current;
     setLayoutBusy(true);
+    setPlacing(true);
     setLayoutError('');
     try {
       const bounds = rfWrapper.current;
-      const g = isSignal
+      const placed = isSignal
         ? await layoutSignalGraph(inputNodes, inputEdges, instance.getInternalNode,
-          bounds ? bounds.clientWidth / Math.max(1, bounds.clientHeight) : 1.6)
+          bounds ? bounds.clientWidth / Math.max(1, bounds.clientHeight) : 1.6, controller.signal)
         : buildMergedGraph(expressions);
       if (request !== layoutRequest.current) return;
-      // Never overwrite graph edits made while the asynchronous solver ran.
+      // Publish complete measured placement immediately. Detailed obstacle
+      // routing can take much longer on dense graphs and must not delay a
+      // usable, fully connected canvas.
       if (nodesRef.current !== inputNodes || edgesRef.current !== inputEdges) {
         setLayoutError('画布已变化，请重新整理布局。');
         return;
       }
-      nodesRef.current = g.nodes;
-      edgesRef.current = g.edges;
-      setNodes(g.nodes);
-      setEdges(g.edges);
-      persistLayout();
+      nodesRef.current = placed.nodes;
+      edgesRef.current = placed.edges;
+      setNodes(placed.nodes);
+      setEdges(placed.edges);
+      setPlacing(false);
+      setInitializing(false);
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (request === layoutRequest.current) instance.fitView({ padding: 0.08, maxZoom: 1.4, duration: 300 });
       }));
+      const placementKey = signalRoutingKey(placed.nodes, placed.edges);
+      activeLayoutKey.current = placementKey;
+      let routedEdges = placed.edges;
+      let routingFailed = false;
+      if (isSignal) {
+        try {
+          routedEdges = await routeSignalGraph(placed.nodes, placed.edges, instance.getInternalNode, controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          // ELK already produced a complete layout. Keep it on screen even
+          // if optional path refinement fails or times out.
+          routingFailed = true;
+          console.warn('[signal routing]', error);
+        }
+      }
+      if (request !== layoutRequest.current || signalRoutingKey(nodesRef.current, edgesRef.current) !== placementKey) return;
+      const routes = new Map(routedEdges.map(edge => [edge.id, edge]));
+      const currentEdges = edgesRef.current.map(edge => {
+        const routed = routes.get(edge.id);
+        return routed ? { ...edge, type: routed.type, data: { ...edge.data, ...routed.data } } : edge;
+      });
+      edgesRef.current = currentEdges;
+      lastRoutedKey.current = signalRoutingKey(nodesRef.current, currentEdges);
+      if (isSignal) setLayoutError(routingFailed ? '连线整理未完成，已显示全部连接，可点击自动布局重试。' : signalRoutingError(currentEdges));
+      setEdges(currentEdges);
+      persistLayout();
     } catch (error) {
+      if (controller.signal.aborted) return;
       console.error('[signal layout]', error);
       if (request === layoutRequest.current) setLayoutError('自动布局失败，已保留原布局，请重试。');
     } finally {
-      if (request === layoutRequest.current) setLayoutBusy(false);
+      if (request === layoutRequest.current) { setLayoutBusy(false); setPlacing(false); }
     }
   }, [isSignal, expressions, persistLayout]);
 
   // Reroute after moves, resizes, port edits and saved-layout restoration.
   // Positions remain user-controlled; only the paths are recomputed here.
-  const routingKey = JSON.stringify([
-    nodes.map(n => [n.id, n.hidden, n.position, n.measured, n.dragging, n.resizing,
-      n.data?.inputs, n.data?.inputCount, n.data?.manualSize]),
-    edges.map(e => [e.id, e.source, e.sourceHandle, e.target, e.targetHandle, e.hidden, e.data?.bendpoints]),
-  ]);
+  const routingKey = signalRoutingKey(nodes, edges);
+  const latestRoutingKey = useRef(routingKey);
+  latestRoutingKey.current = routingKey;
   useEffect(() => {
-    if (!isSignal || layoutBusy || !nodes.length || nodes.some(n => n.dragging || n.resizing)) return;
+    if (layoutBusy && !placing && activeLayoutKey.current && activeLayoutKey.current !== routingKey) {
+      layoutRequest.current++;
+      layoutAbort.current?.abort();
+      setLayoutBusy(false);
+    }
+  }, [routingKey, layoutBusy, placing]);
+  useEffect(() => {
+    if (!isSignal || layoutBusy || initializing || !nodes.length ||
+      routingKey === lastRoutedKey.current || nodes.some(n => n.dragging || n.resizing)) {
+      setRoutingBusy(false);
+      return;
+    }
     let cancelled = false;
+    const controller = new AbortController();
+    routingAbort.current = controller;
     setRoutingBusy(true);
     const timer = setTimeout(async () => {
       const instance = rfInstance.current;
       if (!instance) { setRoutingBusy(false); return; }
       try {
-        const routed = await routeSignalGraph(nodesRef.current, edgesRef.current, instance.getInternalNode);
-        if (cancelled) return;
+        const routed = await routeSignalGraph(nodesRef.current, edgesRef.current, instance.getInternalNode, controller.signal);
+        if (cancelled || controller.signal.aborted || latestRoutingKey.current !== routingKey) return;
         const byId = new Map(routed.map(e => [e.id, e]));
         const next = edgesRef.current.map(e => {
           const r = byId.get(e.id);
           return r ? { ...e, type: r.type, data: { ...e.data, ...r.data } } : e;
         });
         edgesRef.current = next;
+        lastRoutedKey.current = routingKey;
         setEdges(next);
-        const blocked = next.filter(e => e.data?.routingBlocked).length;
-        setLayoutError(blocked ? `${blocked} 条连线空间不足，请移动相邻组件或调整手动折点；也可点击自动布局。` : '');
+        setLayoutError(signalRoutingError(next));
         persistLayout();
       } catch (error) {
+        if (controller.signal.aborted) return;
         console.error('[signal routing]', error);
         if (!cancelled) setLayoutError('连线整理失败，请点击自动布局重试。');
       } finally {
         if (!cancelled) setRoutingBusy(false);
       }
     }, 100);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [routingKey, isSignal, layoutBusy, persistLayout]);
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+  }, [routingKey, isSignal, layoutBusy, initializing, persistLayout]);
 
-  // On mount, fill the canvas with the adaptive layout — but only when no
-  // saved layout exists (otherwise respect the user's persisted positions).
+  // Check complete, measured geometry before accepting a saved layout. Never
+  // persist provisional positions or route a partial/overlapping old layout.
   useEffect(() => {
-    if (!isSignal || initialLayout) return;
+    if (!isSignal || !initial.nodes.length) return;
     let frame: number;
     let cancelled = false;
     const arrangeWhenMeasured = () => {
       if (cancelled || !nodesRef.current.length) return;
       const instance = rfInstance.current;
       if (instance && nodesRef.current.filter(n => !n.hidden).every(n => instance.getInternalNode(n.id)?.measured?.width)) {
-        void handleAutoLayout();
+        if (canvasLayoutNeedsRepair(nodesRef.current, initialLayout, instance.getInternalNode)) {
+          void handleAutoLayout().finally(() => { if (!cancelled) setInitializing(false); });
+        } else setInitializing(false);
       } else frame = requestAnimationFrame(arrangeWhenMeasured);
     };
     frame = requestAnimationFrame(arrangeWhenMeasured);
@@ -1083,7 +1166,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             aria-pressed={formulaView} title={formulaView ? '返回原信号画布' : '查看多行公式'}>
             {formulaView ? '▦ 返回画布' : '✎ 多行公式'}
           </button>}
-          {routingBusy && <span role="status" style={{ alignSelf: 'center', color: '#64748b', fontSize: 11 }}>整理连线…</span>}
+          {(routingBusy || initializing && !layoutBusy) && <span role="status" style={{ alignSelf: 'center', color: '#64748b', fontSize: 11 }}>{initializing ? '加载画布…' : '整理连线…'}</span>}
           {!formulaView && <button className="expr-layout-btn" onClick={handleAutoLayout} disabled={layoutBusy} title="紧凑排列模块，按端口整理直角连线">{layoutBusy ? '整理中…' : '⤢ 自动布局'}</button>}
           {!formulaView && <button className="expr-fit-btn" onClick={handleFitView} title="适应视图">⊞ 居中</button>}
           <button className="expr-apply-btn" onClick={handleBack}>✓ 完成</button>
@@ -1126,16 +1209,16 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             handleAddComponent(type, rfInstance.current.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
           }}
         >
-          <MonitorGraphProvider value={monitor.context}><SignalEdgeActionsContext.Provider value={{ updateBendpoints: updateEdgeBendpoints, updateFanoutRoute, persistBendpoints }}>
+          <MonitorGraphProvider value={monitor.context}><SignalEdgeActionsContext.Provider value={signalEdgeActions}>
           <ReactFlow
-            nodes={monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node)}
+            nodes={displayedNodes}
             edges={monitor.edges}
             onNodesChange={changes => { const modelChanges = monitor.filterChanges(changes); if (modelChanges.length) onNodesChange(modelChanges); }}
             onEdgesChange={onEdgesChange}
             onConnect={connection => { if (!monitor.connect(connection)) onConnect(connection); }}
             onNodeDragStop={onNodeDragStop}
             nodeTypes={nodeTypes}
-            onInit={(instance) => { rfInstance.current = instance; }}
+            onInit={(instance) => { rfInstance.current = instance; props.onInit?.(instance); }}
             onNodeClick={onNodeClick}
             onNodeDoubleClick={onNodeDoubleClick}
             onPaneClick={onPaneClick}
@@ -1145,8 +1228,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             deleteKeyCode={null}
             snapToGrid
             snapGrid={[20, 20]}
-            nodesDraggable={!layoutBusy}
-            nodesConnectable={!layoutBusy}
+            nodesDraggable={!placing && !initializing}
+            nodesConnectable={!placing && !initializing}
             elementsSelectable
             connectionMode={ConnectionMode.Loose}
             edgeTypes={edgeTypes}

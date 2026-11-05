@@ -353,7 +353,7 @@ createRoot(document.getElementById('root')).render(<div style={{height:'100%',di
   await screenshot('signal-operators-preview.png');
   assert.equal(await evaluate('document.querySelectorAll(".react-flow__edge-path").length'),4,'Gallery wires are visible');
   await evaluate(`window.__galleryFlow.addNodes({id:'routing-obstacle',type:'legend',position:{x:580,y:120},style:{width:40,height:48},data:{label:''}})`);
-  await until('document.querySelectorAll(".react-flow__edge[data-id=out] .react-flow__edge-path").length === 0');
+  assert.equal(await evaluate('document.querySelectorAll(".react-flow__edge[data-id=out] .react-flow__edge-path").length'),1,'An obstacle edit preserves the visible connection while rerouting is pending');
   await evaluate(`window.__galleryFlow.updateNode('routing-obstacle',{position:{x:580,y:300}})`);
   await until('document.querySelectorAll(".react-flow__edge[data-id=out] .react-flow__edge-path").length === 1');
   await send('Emulation.setDeviceMetricsOverride',{width:1000,height:760,deviceScaleFactor:1,mobile:false});

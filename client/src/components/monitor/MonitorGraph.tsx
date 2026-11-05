@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useEffect, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import { applyNodeChanges, BaseEdge, getSmoothStepPath, Handle, Position, useReactFlow, type Edge, type Node, type EdgeProps, type NodeProps, type NodeChange, type Connection } from '@xyflow/react';
 import { propertyBinding, type SignalBinding } from '../../sim/monitorIdentity';
 import { useSignalMonitorStore } from '../../store/signalMonitorStore';
@@ -62,11 +62,26 @@ export function useMonitorGraph(graph: string, originalNodes: Node[], originalEd
     }
     return next;
   }), []);
-  const bindings = useMemo(() => (edge: Pick<Edge, 'id' | 'source' | 'sourceHandle' | 'data' | 'label'>): SignalBinding[] => {
-    if (typeof edge.data?.monitorKey === 'string') return [{ key: edge.data.monitorKey, label: String(edge.label || '中间结果'), expectedKind: typeof edge.data?.monitorKind === 'string' ? edge.data.monitorKind : undefined }];
-    if (typeof edge.data?.signal === 'string' && !edge.data?.tableResult) return [propertyBinding(edge.data.signal)];
-    return fromSource(originalNodes.find(node => node.id === edge.source), edge.sourceHandle, originalNodes);
-  }, [originalNodes]);
+  // Moving/selecting a node changes its wrapper, not its signal identity.
+  // Keep the shared context stable so it does not repaint every wire.
+  const bindingNodesRef = useRef(originalNodes);
+  if (bindingNodesRef.current.length !== originalNodes.length || originalNodes.some((node, index) => {
+    const previous = bindingNodesRef.current[index];
+    return node.id !== previous.id || node.data !== previous.data;
+  })) bindingNodesRef.current = originalNodes;
+  const bindingNodes = bindingNodesRef.current;
+  const bindings = useMemo(() => {
+    const byId = new Map(bindingNodes.map(node => [node.id, node]));
+    const outputs = new Map<string, SignalBinding[]>();
+    return (edge: Pick<Edge, 'id' | 'source' | 'sourceHandle' | 'data' | 'label'>): SignalBinding[] => {
+      if (typeof edge.data?.monitorKey === 'string') return [{ key: edge.data.monitorKey, label: String(edge.label || '中间结果'), expectedKind: typeof edge.data?.monitorKind === 'string' ? edge.data.monitorKind : undefined }];
+      if (typeof edge.data?.signal === 'string' && !edge.data?.tableResult) return [propertyBinding(edge.data.signal)];
+      const key = JSON.stringify([edge.source, edge.sourceHandle]);
+      let values = outputs.get(key);
+      if (!values) { values = fromSource(byId.get(edge.source), edge.sourceHandle, bindingNodes); outputs.set(key, values); }
+      return values;
+    };
+  }, [bindingNodes]);
   useEffect(() => {
     const state = useSignalMonitorStore.getState(), labels = { ...state.project.labels };
     let changed = false;
@@ -78,26 +93,34 @@ export function useMonitorGraph(graph: string, originalNodes: Node[], originalEd
     }
     if (changed) useSignalMonitorStore.setState({ project: { ...state.project, labels } });
   }, [graph, originalEdges, bindings]);
-  const current = scopes.filter(scope => scope.graph === graph);
-  const observers: Node[] = current.map(scope => ({ id: scope.id, type: 'monitorScope', position: scope.position, data: { scopeId: scope.id }, style: { width: SCOPE_WIDTH }, zIndex: 1000 }));
-  const edges: Edge[] = [...originalEdges];
-  const taps: Record<string, TapAnchor[]> = {};
-  for (const scope of current) for (const [index, binding] of scope.channels.entries()) {
-    const source = originalEdges.find(edge => bindings(edge).some(candidate => candidate.key === binding.key && (candidate.sign ?? 1) === (binding.sign ?? 1)))
-      || originalNodes.map(node => ({ id: '', source: node.id, sourceHandle: 'out', data: {} })).find(edge => bindings(edge).some(candidate => candidate.key === binding.key && (candidate.sign ?? 1) === (binding.sign ?? 1)));
-    const hasTap = source && binding.tap && binding.sourceEdge && originalEdges.some(edge => edge.id === binding.sourceEdge);
-    if (hasTap && binding.tap) {
-      const id = `${scope.id}/tap-${index}`;
-      (taps[binding.sourceEdge!] ||= []).push({ id, point: binding.tap });
-      const point = tapPositions[id] || binding.tap;
-      observers.push({ id, type: 'monitorTap', position: { x: point.x - 10, y: point.y - 10 }, data: { scopeId: scope.id, channel: index }, draggable: false, selectable: false, connectable: false, width: 20, height: 20, style: { pointerEvents: 'all' }, zIndex: 1001 });
+  const { current, observers, edges, taps, observerIds, nodes } = useMemo(() => {
+    const current = scopes.filter(scope => scope.graph === graph);
+    const observers: Node[] = current.map(scope => ({ id: scope.id, type: 'monitorScope', position: scope.position, data: { scopeId: scope.id }, style: { width: SCOPE_WIDTH }, zIndex: 1000 }));
+    const edges: Edge[] = current.length ? [...originalEdges] : originalEdges;
+    const taps: Record<string, TapAnchor[]> = {};
+    for (const scope of current) for (const [index, binding] of scope.channels.entries()) {
+      const source = originalEdges.find(edge => bindings(edge).some(candidate => candidate.key === binding.key && (candidate.sign ?? 1) === (binding.sign ?? 1)))
+        || originalNodes.map(node => ({ id: '', source: node.id, sourceHandle: 'out', data: {} })).find(edge => bindings(edge).some(candidate => candidate.key === binding.key && (candidate.sign ?? 1) === (binding.sign ?? 1)));
+      const hasTap = source && binding.tap && binding.sourceEdge && originalEdges.some(edge => edge.id === binding.sourceEdge);
+      if (hasTap && binding.tap) {
+        const id = `${scope.id}/tap-${index}`;
+        (taps[binding.sourceEdge!] ||= []).push({ id, point: binding.tap });
+        const point = tapPositions[id] || binding.tap;
+        observers.push({ id, type: 'monitorTap', position: { x: point.x - 10, y: point.y - 10 }, data: { scopeId: scope.id, channel: index }, draggable: false, selectable: false, connectable: false, width: 20, height: 20, style: { pointerEvents: 'all' }, zIndex: 1001 });
+      }
+      if (source) edges.push({ id: `${scope.id}/ch-${index}`, source: hasTap ? `${scope.id}/tap-${index}` : source.source, sourceHandle: hasTap ? 'tap-out' : source.sourceHandle, target: scope.id, targetHandle: 'scope-in', type: 'monitorBranch', data: { monitorOnly: true }, style: { stroke: '#0891b2', strokeDasharray: '5 3' } });
     }
-    if (source) edges.push({ id: `${scope.id}/ch-${index}`, source: hasTap ? `${scope.id}/tap-${index}` : source.source, sourceHandle: hasTap ? 'tap-out' : source.sourceHandle, target: scope.id, targetHandle: 'scope-in', type: 'monitorBranch', data: { monitorOnly: true }, style: { stroke: '#0891b2', strokeDasharray: '5 3' } });
-  }
-  const observerIds = new Set(observers.map(node => node.id));
-  const nodes: Node[] = [...originalNodes, ...observers.map(node => ({ ...node, ...observerState[node.id] }))];
+    const observerIds = new Set(observers.map(node => node.id));
+    const nodes: Node[] = observers.length ? [...originalNodes, ...observers.map(node => ({ ...node, ...observerState[node.id] }))] : originalNodes;
+    return { current, observers, edges, taps, observerIds, nodes };
+  }, [scopes, graph, originalNodes, originalEdges, bindings, observerState, tapPositions]);
+  const tapsRef = useRef({ key: '{}', taps: {} as Record<string, TapAnchor[]> });
+  const tapsKey = JSON.stringify(taps);
+  if (tapsKey !== tapsRef.current.key) tapsRef.current = { key: tapsKey, taps };
+  const stableTaps = tapsRef.current.taps;
+  const context = useMemo(() => ({ graph, bindings, taps: stableTaps, updateTaps }), [graph, bindings, stableTaps, updateTaps]);
   return {
-    nodes, edges, context: { graph, bindings, taps, updateTaps },
+    nodes, edges, context,
     filterChanges: (changes: NodeChange[]): NodeChange[] => {
       const observerChanges = changes.filter(change => 'id' in change && observerIds.has(change.id));
       if (observerChanges.length) setObserverState(previous => {

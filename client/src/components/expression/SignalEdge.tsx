@@ -1,6 +1,6 @@
-import { useContext, useCallback, useMemo, useRef, useState } from 'react';
+import { useContext, useCallback, useRef, useState } from 'react';
 import {
-  BaseEdge, getSmoothStepPath, useReactFlow, useStore, type EdgeProps,
+  BaseEdge, getSmoothStepPath, useReactFlow, useStore, type EdgeProps, type Edge,
 } from '@xyflow/react';
 import BendpointHandles from '../edges/BendpointHandles';
 import {
@@ -8,9 +8,27 @@ import {
 } from '../edges/bendpoints';
 import { SignalEdgeActionsContext } from './signalEdgeActions';
 import type { SignalRoute } from '../../utils/signalLayout';
-import { signalObstacles, signalRouteIsClear } from '../../utils/signalClearance';
 
 const DRAG_THRESHOLD = 4;
+
+// Share the fan-out index; rendering never scans every obstacle for every
+// wire. Clearance is checked once by the background router.
+const fanoutCache = new WeakMap<Edge[], Map<string, Map<string, number>>>();
+function hasFanout(edges: Edge[], source: string, handle: string | null | undefined) {
+  if (handle == null) return false;
+  let index = fanoutCache.get(edges);
+  if (!index) {
+    index = new Map();
+    for (const edge of edges) {
+      if (edge.sourceHandle == null) continue;
+      let handles = index.get(edge.source);
+      if (!handles) index.set(edge.source, handles = new Map());
+      handles.set(edge.sourceHandle, (handles.get(edge.sourceHandle) || 0) + 1);
+    }
+    fanoutCache.set(edges, index);
+  }
+  return (index.get(source)?.get(handle) || 0) > 1;
+}
 
 // Ensure all segments are orthogonal (horizontal or vertical only).
 // Inserts intermediate bendpoints at boundaries where a diagonal would appear.
@@ -63,8 +81,6 @@ export default function SignalEdge(props: EdgeProps) {
   } = props;
   const actions = useContext(SignalEdgeActionsContext);
   const { screenToFlowPosition } = useReactFlow();
-  const srcOff = (data?.srcOffset as number) ?? 0;
-  const tgtOff = (data?.tgtOffset as number) ?? 0;
   const routeOffset = (data?.routeOffset as number) ?? 0;
   const configuredRouteX = data?.routeX as number | undefined;
   const manualBps = (data?.bendpoints as Bendpoint[]) ?? [];
@@ -79,27 +95,19 @@ export default function SignalEdge(props: EdgeProps) {
   const setBps = (next: Bendpoint[]) => actions?.updateBendpoints(id, next);
   const [hovered, setHovered] = useState(false);
 
-  const selectedNodeIds = useStore((state) =>
-    state.nodes.filter(n => n.selected).map(n => n.id)
-  );
-  const flowNodes = useStore((state) => state.nodes);
-  const obstacles = useMemo(() => signalObstacles(flowNodes.filter(node => !['monitorScope', 'monitorTap'].includes(node.type || ''))), [flowNodes]);
-  const isHighlighted = selectedNodeIds.includes(source) || selectedNodeIds.includes(target);
+  const isHighlighted = useStore(state => !!(state.nodeLookup.get(source)?.selected || state.nodeLookup.get(target)?.selected));
   const showLabel = selected || hovered || isHighlighted;
   const edgeStyle = isHighlighted || selected
     ? { stroke: '#f59e0b', strokeWidth: 2.6 }
+    : data?.routingBlocked ? { stroke: '#b45309', strokeWidth: 1.4, strokeDasharray: '5 3' }
     : { stroke: '#475569', strokeWidth: 1.4 };
 
-  const fanOutCount = useStore((state) => sourceHandleId == null ? 0 :
-    state.edges.filter(e => e.source === source && e.sourceHandle === sourceHandleId).length
-  );
-  const isFanOut = fanOutCount > 1;
+  const isFanOut = useStore(state => hasFanout(state.edges, source, sourceHandleId));
 
-  const src = { x: sourceX, y: sourceY + srcOff };
-  const tgt = { x: targetX, y: targetY + tgtOff };
+  const src = { x: sourceX, y: sourceY };
+  const tgt = { x: targetX, y: targetY };
   const autoRouteX = configuredRouteX ?? ((sourceX + targetX) / 2 + routeOffset);
-  const straightClear = Math.abs(src.y - tgt.y) < .05 &&
-    signalRouteIsClear([src, tgt], { source, target }, obstacles);
+  const straight = Math.abs(src.y - tgt.y) < .05;
 
   // Track whether a drag actually happened (to avoid conflict with dblclick)
   const dragMovedRef = useRef(false);
@@ -225,22 +233,19 @@ export default function SignalEdge(props: EdgeProps) {
 
   if (bps.length === 0 && !useRoute) {
     const branchX = autoRouteX;
-    const [path, lx, ly] = straightClear
+    const [path, lx, ly] = straight
       ? [`M ${src.x},${src.y} L ${tgt.x},${tgt.y}`, (src.x + tgt.x) / 2, src.y] as [string, number, number]
       : getSmoothStepPath({
           sourceX, sourceY: src.y, targetX, targetY: tgt.y, sourcePosition, targetPosition,
           centerX: branchX,
           borderRadius: 0,
         });
-    // The fallback is an M/L-only orthogonal path. Apply the same keepout
-    // during dragging and while the asynchronous router is still working.
-    const coordinates = path.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi)?.map(Number) || [];
-    const points = Array.from({ length: coordinates.length / 2 }, (_, i) => ({ x: coordinates[i * 2], y: coordinates[i * 2 + 1] }));
-    if (!signalRouteIsClear(points, { source, target }, obstacles)) return null;
+    // Keep every logical connection visible while routing is pending, during
+    // dragging, or when an old layout leaves insufficient routing space.
     return (
       <>
         <path d={path} fill="none" stroke="var(--bg-primary, #f5f7fa)" strokeWidth={4.4} style={{ pointerEvents: 'none' }} />
-        <BaseEdge id={id} path={path} labelX={lx} labelY={ly} label={showLabel ? label : undefined}
+        <BaseEdge id={id} path={path} interactionWidth={0} labelX={lx} labelY={ly} label={showLabel ? label : undefined}
           labelStyle={{ fill: '#0f172a', fontSize: 11, fontWeight: 600 }}
           labelBgStyle={{ fill: '#ffffff', fillOpacity: 0.94 }}
           labelBgPadding={[4, 3]} labelBgBorderRadius={3}
@@ -251,18 +256,13 @@ export default function SignalEdge(props: EdgeProps) {
   }
 
   const pts = edgePoints(src, tgt, bps);
-  if (!signalRouteIsClear(pts, { source, target }, obstacles)) return selected ? (
-    <BendpointHandles bendpoints={bps}
-      onChange={(next) => setBps(orthogonalize(src, tgt, next))}
-      onDragEnd={() => actions?.persistBendpoints()} />
-  ) : null;
   // Sharp orthogonal corners cannot cut into the keepout at a convex corner.
   const path = polylinePath(pts, 0);
   const mid = polylinePointAt(pts, 0.5);
   return (
     <>
       <path d={path} fill="none" stroke="var(--bg-primary, #f5f7fa)" strokeWidth={4.4} style={{ pointerEvents: 'none' }} />
-      <BaseEdge id={id} path={path} labelX={mid.x} labelY={mid.y} label={showLabel ? label : undefined}
+      <BaseEdge id={id} path={path} interactionWidth={0} labelX={mid.x} labelY={mid.y} label={showLabel ? label : undefined}
         labelStyle={{ fill: '#0f172a', fontSize: 11, fontWeight: 600 }}
         labelBgStyle={{ fill: '#ffffff', fillOpacity: 0.94 }}
         labelBgPadding={[4, 3]} labelBgBorderRadius={3}

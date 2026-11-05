@@ -1,3 +1,4 @@
+import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
 import { SIGNAL_NODE_CLEARANCE } from './signalClearance';
 import type { Node, Edge, InternalNode } from '@xyflow/react';
 import type { ElkNode, ElkPort } from 'elkjs/lib/elk-api';
@@ -12,19 +13,24 @@ export interface SignalRoute {
  * blocks and shares the trunk of wires leaving the same output. */
 export async function layoutSignalGraph(
   nodes: Node[], edges: Edge[], getInternalNode: (id: string) => InternalNode | undefined,
-  aspectRatio = 1.6,
+  aspectRatio = 1.6, signal?: AbortSignal,
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
-  const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+  const { default: ELK } = await import('elkjs/lib/elk-api.js');
   const visible = nodes.filter(n => !n.hidden);
   const nodeIds = new Set(visible.map(n => n.id));
   const links = edges.filter(e => !e.hidden && nodeIds.has(e.source) && nodeIds.has(e.target));
+  const connections = new Map<string, Edge[]>();
+  for (const edge of links) for (const id of new Set([edge.source, edge.target])) {
+    const list = connections.get(id);
+    if (list) list.push(edge); else connections.set(id, [edge]);
+  }
   const portId = (id: string, side: string, handle?: string | null) => JSON.stringify([id, side, handle ?? '']);
   const children: ElkNode[] = visible.map(node => {
     const internal = getInternalNode(node.id);
     const width = internal?.measured?.width ?? node.measured?.width ?? 94;
     const height = internal?.measured?.height ?? node.measured?.height ?? 58;
     const ports = new Map<string, ElkPort>();
-    for (const edge of links) {
+    for (const edge of connections.get(node.id) || []) {
       for (const side of ['source', 'target'] as const) {
         if (edge[side] !== node.id) continue;
         const handleId = side === 'source' ? edge.sourceHandle : edge.targetHandle;
@@ -47,8 +53,10 @@ export async function layoutSignalGraph(
       layoutOptions: { 'elk.portConstraints': 'FIXED_POS' } };
   });
   if (!children.length) return { nodes, edges };
-  const elk = new ELK();
-  const graph = await elk.layout<ElkNode>({
+  if (signal?.aborted) throw new DOMException('Signal layout cancelled', 'AbortError');
+  let worker: Worker;
+  const elk = new ELK({ workerFactory: () => (worker = new Worker(elkWorkerUrl)) });
+  const input: ElkNode = {
     id: 'signal-root', children,
     layoutOptions: {
       'elk.algorithm': 'layered',
@@ -71,7 +79,24 @@ export async function layoutSignalGraph(
     edges: links.map(e => ({ id: e.id,
       sources: [portId(e.source, 'source', e.sourceHandle)],
       targets: [portId(e.target, 'target', e.targetHandle)] })),
-  });
+  };
+  let cancel = () => {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let graph: ElkNode;
+  try {
+    graph = await new Promise<ElkNode>((resolve, reject) => {
+      cancel = () => reject(new DOMException('Signal layout cancelled', 'AbortError'));
+      timer = setTimeout(() => reject(new Error('Signal layout timed out')), 60000);
+      signal?.addEventListener('abort', cancel, { once: true });
+      worker!.onerror = event => { event.preventDefault(); reject(new Error(event.message || 'Signal layout worker failed')); };
+      worker!.onmessageerror = () => reject(new Error('Invalid signal layout worker result'));
+      elk.layout(input).then(resolve, reject);
+    });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+    elk.terminateWorker();
+  }
   const positions = new Map(graph.children?.map(n => [n.id, n]));
   const routes = new Map(graph.edges?.map(e => [e.id, e]));
   return {

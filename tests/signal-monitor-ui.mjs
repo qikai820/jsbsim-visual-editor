@@ -23,6 +23,9 @@ const channels=[{name:'Monitor test',items:[
  {type:'fcs_function',name:'test/result',output:'test/result',expression:{kind:'sum',children:[{kind:'property',name:'test/gain'},{kind:'sin',child:{kind:'property',name:'test/input'}}]}}
 ]}];
 const originalGraph=buildSignalGraph(channels); const farLayout=Object.fromEntries(originalGraph.nodes.map(node=>[node.id,{x:node.position.x+4500,y:node.position.y-3200}]));
+// All wires are now visible during routing, so explicitly observe the result
+// signal used by the telemetry assertions rather than choosing the first path.
+window.__wireId=originalGraph.edges.find(edge=>edge.data?.signal==='test/result').id;
 window.__store=store; window.__record=monitorRecord; window.__changes=0; window.__channels=JSON.stringify(channels);
 function Harness(){const [view,setView]=React.useState('module');const [baseline,setBaseline]=React.useState(channels);window.__setBaseline=setBaseline;window.__initialChannels=channels;window.__view=setView;window.__flow=useFlowStore;
 return <>{view==='module'?<ModuleExpressionCanvas mode="signal" embedded modelId="monitor-test" title="通用信号监视" channels={channels} baselineChannels={baseline} initialLayout={farLayout} onBack={()=>{}} onChannelsChange={()=>window.__changes++}/>:view==='expr'?<ExpressionEditor expression={channels[0].items[1].expression} baselineExpression={baseline?.[0].items[1].expression || null} monitorOwner="test/formula" onBack={()=>{}} onChange={()=>window.__changes++}/>:<ReactFlowProvider><div style={{height:'100vh',display:'flex'}}><Canvas dragType={null} onDragStart={()=>{}}/></div></ReactFlowProvider>}<ScopeWindow/></>;}

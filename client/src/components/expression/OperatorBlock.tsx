@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, type ReactNode } from 'react';
-import { Handle, Position, NodeResizer, NodeToolbar, useReactFlow, useUpdateNodeInternals, useStore, type NodeProps } from '@xyflow/react';
+import { Handle, Position, NodeResizer, NodeToolbar, useReactFlow, useStore, type NodeProps } from '@xyflow/react';
+import { useDiagramNodeInternals } from './useDiagramNodeInternals';
 import OperatorSymbol from './OperatorSymbol';
 import type { ExprTable } from '../../types';
 import './operatorBlocks.css';
@@ -17,7 +18,6 @@ export default function OperatorBlock({ node, kind, value, table, inputs, output
   const { id, selected, data, width, height } = node;
   const resizing = useStore(s => s.nodeLookup.get(id)?.resizing ?? false);
   const { updateNode } = useReactFlow();
-  const updateInternals = useUpdateNodeInternals();
   const finishResize = useCallback((_event: unknown, size: { width: number; height: number }) => {
     // updateNode emits a replacement. Explicitly finish resizing so it cannot
     // reintroduce the old flag after NodeResizer's final dimensions event.
@@ -40,16 +40,16 @@ export default function OperatorBlock({ node, kind, value, table, inputs, output
         data: { ...n.data, manualSize: { width: w, height: h } } }));
     }
   }, [id, manual, minWidth, minHeight, resizing, w, h, updateNode]);
-  useLayoutEffect(() => { updateInternals(id); }, [id, w, h, portKey, updateInternals]);
+  useDiagramNodeInternals(id, JSON.stringify([w, h, portKey]));
   return <div className={`diagram-block ${selected ? 'selected' : ''} ${data.pendingSync ? 'pending-sync' : ''}`} style={{ width: w, height: h }} title={data.pendingSync ? `${title || '运算块'}\n尚未保存到仿真机模型文件` : title}>
     <NodeResizer isVisible={selected} minWidth={minWidth} minHeight={minHeight} color="#2563eb"
       onResizeEnd={finishResize} />
-    <NodeToolbar isVisible={selected} position={Position.Top} offset={12}>
+    {selected && <NodeToolbar isVisible position={Position.Top} offset={12}>
       <button className="diagram-auto-size nodrag" title="按端口数量恢复自动尺寸" onClick={() => updateNode(id, n => ({
         ...n, width: undefined, height: undefined,
         style: { ...n.style, width: undefined, height: undefined }, data: { ...n.data, manualSize: undefined },
       }))}>自动尺寸</button>
-    </NodeToolbar>
+    </NodeToolbar>}
     <div className="diagram-symbol-center"><OperatorSymbol kind={kind} value={value} table={table} /></div>
     {inputs.map((p, i) => <DiagramPort key={p.id} id={p.id} top={(i + 1) * 100 / (inputs.length + 1)} title={p.title} />)}
     {outputs.map((port, i) => <DiagramPort key={port} id={port} output top={(i + 1) * 100 / (outputs.length + 1)} />)}
