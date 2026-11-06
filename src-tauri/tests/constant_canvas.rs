@@ -1,4 +1,7 @@
 #[allow(dead_code)]
+#[path = "../src/disabled_xml.rs"]
+mod disabled_xml;
+#[allow(dead_code)]
 #[path = "../src/xml_generator.rs"]
 mod xml_generator;
 

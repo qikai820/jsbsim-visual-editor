@@ -91,6 +91,11 @@ try {
     localStorage.setItem('jsbsim-remote-upload-enabled', 'true');
     window.__TAURI_INTERNALS__ = { metadata: { currentWindow:{label:'main'}, currentWebview:{label:'main'} }, transformCallback:()=>1,
       invoke: async (command, args) => {
+        if (command === 'load_aircraft') {
+          const documents=Object.fromEntries(Object.entries(window.__files).filter(([path])=>path!==window.__failRead));
+          const result=await fetch(${JSON.stringify(backendUrl)}, {method:'POST',body:JSON.stringify({command:'load_model',args:{model:args.aircraftId,documents}})}).then(r=>r.json());
+          if(result.error) throw new Error(result.error); return result;
+        }
         if (['generate_xml','generate_subfile','parse_xml'].includes(command)) {
           const result = await fetch(${JSON.stringify(backendUrl)}, { method:'POST', body:JSON.stringify({command,args}) }).then(r=>r.json());
           if (result.error) throw new Error(result.error); return result;
@@ -115,7 +120,11 @@ try {
           window.__writes.push({path:args.path,content:args.content});window.__files[args.path]=args.content;return {uploaded:true};
         }
         if (command === 'sim_status') return {external:true,connected:true,running:false,state:'stopped'};
-        if (command === 'sim_list_tests') return {tests:[]}; if (command === 'sim_list_models') return {models:[]};
+        if (command === 'sim_list_tests') return {tests:[]};
+        if (command === 'sim_list_models') {
+          if(window.__failList) throw new Error('Model list unavailable');
+          return {models:Object.keys(window.__files).flatMap(path=>{const m=path.match(/^aircraft\\/([^/]+)\\/([^/]+)\\.xml$/);return m&&m[1]===m[2]?[{name:m[1]}]:[]})};
+        }
         if (command === 'sim_list_instances') return {instances:[]};
         return {};
       }
@@ -361,7 +370,113 @@ try {
   await send('Emulation.setDeviceMetricsOverride', { width: 700, height: 900, deviceScaleFactor: 1, mobile: false });
   assert.ok(await evaluate(`(()=>{const bar=document.querySelector('.model-sync-bar').getBoundingClientRect();return [...document.querySelectorAll('.model-sync-actions button')].every(b=>{const r=b.getBoundingClientRect();return r.left>=bar.left&&r.right<=bar.right&&r.bottom<=bar.bottom})})()`));
   await send('Page.captureScreenshot', { format:'png' }).then(async result => { await writeFile('/tmp/jsbsim-model-sync-narrow.png', Buffer.from(result.data,'base64')); });
-  console.log('PASS: real XML edits, source preservation, comparison, cancel, verified save, undo/redo, remote races, environment JSON, confirmed local discard, compact-baseline source/graph restoration, layout retention, initial-upload state and responsive notice');
+  // Pull is read-only even with uploads disabled. The browser compares the
+  // prepared local graph against a staged remote graph before replacing it.
+  await send('Emulation.setDeviceMetricsOverride', {width:1500,height:1000,deviceScaleFactor:1,mobile:false});
+  const fileAction = async label => {
+    await evaluate(`[...document.querySelectorAll('.toolbar button')].find(b=>b.textContent.includes('📁 文件')).click()`);
+    await until(`document.querySelector('[role="menuitem"]')`);
+    await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(b=>b.textContent.includes(${JSON.stringify(label)})).click()`);
+  };
+  const openPull = async () => {
+    await fileAction('从仿真机拉取模型');
+    await until(`document.querySelector('.model-pull-dialog[open]')`);
+    await until(`!document.querySelector('.model-pull-dialog footer .primary').disabled`);
+  };
+  const pullReview = async () => {
+    await openPull();
+    await evaluate(`document.querySelector('.model-pull-dialog footer .primary').click()`);
+    await until(`document.querySelector('.model-pull-review-footer')`);
+  };
+  await evaluate(`(()=>{
+    localStorage.setItem('jsbsim-remote-upload-enabled','false');
+    const s=window.store.getState();s.updateNodeParams(s.nodes.find(n=>n.data.componentType==='output').id,{port:'5900'});
+    const xml='<system name="Local only"/>';
+    window.store.setState({xmlFiles:[...s.xmlFiles,{id:'local-only',path:'systems/LocalOnly.xml',category:'system',originalXml:xml,currentXml:xml,dirty:false}]});
+    window.__files['aircraft/test/test.xml']=window.__files['aircraft/test/test.xml'].replace(/port="[0-9]+"/,'port="5800"').replace('</fdm_config>','<system file="RemoteOnly"/></fdm_config>');
+    window.__files['systems/RemoteOnly.xml']='<system name="Remote only"><channel name="Remote"><fcs_function name="remote/value"><function><value>17</value></function></fcs_function></channel></system>';
+    window.__files['engine/direct.xml']+='<!-- pulled comment -->';
+    window.__files['config/models/test.json']=JSON.stringify({version:1,runtime:{dt:.008},environment:{windNorthFps:35}},null,2);
+    window.capturePullState=()=>{const s=window.store.getState();return JSON.stringify({aircraft:s.aircraft,nodes:s.nodes.map(n=>[n.id,n.data]),edges:s.edges,xmlFiles:s.xmlFiles})};
+    window.__failList=true;
+  })()`);
+  const beforePull=await evaluate('window.capturePullState()');
+  const baselineBeforePull=await evaluate(`localStorage.getItem('jsbsim-remote-baseline:test')`);
+  const writesBeforePull=await evaluate('window.__writes.length');
+  // A list failure offers retry and cannot replace the current model.
+  await fileAction('从仿真机拉取模型');
+  await until(`document.querySelector('.model-pull-error')?.textContent.includes('Model list unavailable')`);
+  assert.equal(await evaluate('window.capturePullState()'),beforePull);
+  await evaluate(`window.__failList=false;[...document.querySelectorAll('.model-pull-dialog footer button')].find(b=>b.textContent.includes('刷新')).click()`);
+  await until(`!document.querySelector('.model-pull-dialog footer .primary').disabled`);
+  assert.equal(await evaluate(`document.querySelector('.model-pull-dialog select').value`),'test');
+  await send('Page.captureScreenshot', {format:'png'}).then(async result=>writeFile('/tmp/jsbsim-model-pull-select.png',Buffer.from(result.data,'base64')));
+  await evaluate(`document.querySelector('.model-pull-dialog footer .primary').click()`);
+  await until(`document.querySelector('.model-pull-review-footer')`);
+  assert.equal(await evaluate('window.capturePullState()'),beforePull,'Downloading must not load the graph');
+  assert.match(await evaluate(`document.querySelector('.xml-git-pane-head').innerText`),/上位机当前版本[\s\S]*仿真机拉取版本/);
+  assert.match(await evaluate(`document.querySelector('.xml-git-scroll').textContent`),/5900/,'Graph-only local edits are in the comparison');
+  assert.match(await evaluate(`document.querySelector('.xml-git-scroll').textContent`),/5800/);
+  assert.match(await evaluate(`document.querySelector('.xml-source-file-list').textContent`),/RemoteOnly.xml[\s\S]*上位机将新增/);
+  assert.match(await evaluate(`document.querySelector('.xml-source-file-list').textContent`),/LocalOnly.xml[\s\S]*上位机将移除/);
+  await send('Page.captureScreenshot',{format:'png'}).then(async result=>writeFile('/tmp/jsbsim-model-pull-review.png',Buffer.from(result.data,'base64')));
+  // Local-only files are shown as removals, without a spurious XML parse error.
+  await evaluate(`[...document.querySelectorAll('.xml-source-file-list button')].find(b=>b.textContent.includes('LocalOnly.xml')).click()`);
+  assert.match(await evaluate(`document.querySelector('.xml-source-remote-pending').textContent`),/从当前工程移除/);
+  assert.equal(await evaluate(`Boolean(document.querySelector('.xml-source-remote-error'))`),false);
+  await evaluate(`[...document.querySelectorAll('.xml-source-file-list button')].find(b=>b.textContent.includes('direct.xml')).click()`);
+  assert.match(await evaluate(`document.querySelector('.xml-git-scroll').textContent`),/pulled comment/,'Comment-only changes default to a text comparison');
+  await evaluate(`document.querySelector('.model-pull-review-footer button').click()`);
+  await until(`!document.querySelector('.model-pull-review-footer')`);
+  assert.equal(await evaluate('window.capturePullState()'),beforePull);
+  assert.equal(await evaluate(`localStorage.getItem('jsbsim-remote-baseline:test')`),baselineBeforePull);
+  assert.equal(await evaluate('window.__writes.length'),writesBeforePull);
+  // A required referenced file that cannot be fetched blocks replacement.
+  await evaluate(`window.__failRead='systems/RemoteOnly.xml'`);
+  await openPull();
+  await evaluate(`document.querySelector('.model-pull-dialog footer .primary').click()`);
+  await until(`document.querySelector('.model-pull-error')?.textContent.includes('加载不完整')`);
+  assert.equal(await evaluate('window.capturePullState()'),beforePull);
+  await evaluate(`window.__failRead='';document.querySelector('.model-pull-dialog footer button').click()`);
+  // Local edits after the review cannot be silently overwritten.
+  await pullReview();
+  await evaluate(`(()=>{const s=window.store.getState();s.updateNodeParams(s.nodes.find(n=>n.data.componentType==='output').id,{port:'5950'});document.querySelector('.model-pull-review-footer .primary').click()})()`);
+  await until(`document.querySelector('.model-sync-error')?.textContent.includes('模型已变化')`);
+  assert.equal(await evaluate(`String(window.store.getState().nodes.find(n=>n.data.componentType==='output').data.params.port)`),'5950');
+  assert.equal(await evaluate(`localStorage.getItem('jsbsim-remote-baseline:test')`),baselineBeforePull);
+  // A cache write failure restores the previous graph and baseline.
+  await pullReview();
+  const beforeStorageFailure=await evaluate('window.capturePullState()');
+  await evaluate(`window.__originalSetItem=Storage.prototype.setItem;window.__failStorage=true;Storage.prototype.setItem=function(key,value){if(key==='jsbsim-project'&&window.__failStorage){window.__failStorage=false;throw new Error('Cache write failed')}return window.__originalSetItem.call(this,key,value)};document.querySelector('.model-pull-review-footer .primary').click()`);
+  await until(`document.querySelector('.model-sync-error')?.textContent.includes('Cache write failed')`);
+  await evaluate(`Storage.prototype.setItem=window.__originalSetItem`);
+  assert.equal(await evaluate('window.capturePullState()'),beforeStorageFailure);
+  assert.equal(await evaluate(`localStorage.getItem('jsbsim-remote-baseline:test')`),baselineBeforePull);
+  // Confirmed pull updates the editor, sources and cache, without remote writes.
+  await pullReview();
+  await evaluate(`document.querySelector('.model-pull-review-footer .primary').click()`);
+  await until(`!document.querySelector('.model-pull-review-footer')&&!document.querySelector('.model-sync-error')&&!document.querySelector('.model-sync-bar')`);
+  assert.equal(await evaluate(`String(window.store.getState().nodes.find(n=>n.data.componentType==='output').data.params.port)`),'5800');
+  assert.equal(await evaluate(`window.store.getState().nodes.find(n=>n.data.componentType==='environment').data.params.wind_north_fps`),35);
+  assert.equal(await evaluate(`window.store.getState().xmlFiles.some(f=>f.path==='systems/LocalOnly.xml')`),false);
+  assert.ok(await evaluate(`window.store.getState().xmlFiles.some(f=>f.path==='systems/RemoteOnly.xml')`));
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem('jsbsim-project')).xmlFiles.find(f=>f.category==='main').currentXml`),await evaluate(`window.__files['aircraft/test/test.xml']`));
+  assert.equal(await evaluate(`String(JSON.parse(localStorage.getItem('jsbsim-remote-baseline:test')).nodes.find(n=>n.data.componentType==='output').data.params.port)`),'5800');
+  assert.equal(await evaluate('window.__writes.length'),writesBeforePull);
+  // Pull also works with an empty editor and a different selected remote model.
+  await evaluate(`window.__files['aircraft/other/other.xml']='<fdm_config name="Other aircraft"><metrics><wingarea unit="FT2">11</wingarea></metrics></fdm_config>'`);
+  await fileAction('关闭模型');
+  await until(`window.store.getState().nodes.length===0`);
+  await openPull();
+  await evaluate(`(()=>{const select=document.querySelector('.model-pull-dialog select');select.value='other';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await evaluate(`document.querySelector('.model-pull-dialog footer .primary').click()`);
+  await until(`document.querySelector('.model-pull-review-footer')`);
+  assert.equal(await evaluate(`window.store.getState().nodes.length`),0);
+  assert.match(await evaluate(`document.querySelector('.xml-source-file-list').textContent`),/上位机将新增/);
+  await evaluate(`document.querySelector('.model-pull-review-footer .primary').click()`);
+  await until(`localStorage.getItem('jsbsim-remote-model')==='other'&&window.store.getState().nodes.length>0`);
+  assert.equal(await evaluate('window.__writes.length'),writesBeforePull);
+  console.log('PASS: XML sync and pull: staged full-model comparison, current graph edits, additions/removals/comments/environment, cancellation, list retry, missing references, concurrent edits, cache rollback, confirmed read-only replacement and empty-editor model selection');
 } finally {
   socket?.close(); chrome.kill('SIGTERM'); vite.kill('SIGTERM'); server.close();
   await rm(work, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });

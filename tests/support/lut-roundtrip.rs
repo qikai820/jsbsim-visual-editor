@@ -1,3 +1,4 @@
+#[allow(dead_code)] #[path = "../../src-tauri/src/disabled_xml.rs"] mod disabled_xml;
 // Executable regression using the production Rust serializers and both parsers.
 #[allow(dead_code)] #[path = "../../src-tauri/src/xml_generator.rs"] mod xml_generator;
 #[allow(dead_code)] #[path = "../../src-tauri/src/xml_parser.rs"] mod xml_parser;

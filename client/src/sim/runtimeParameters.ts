@@ -49,6 +49,7 @@ function groups(project: { nodes: any[] }): Map<string, Group> {
   const result = new Map<string, Group>();
   for (const node of project.nodes) {
     const p = node.data.params;
+    if (p.disabled) continue;
     if (node.data.componentType === 'environment') {
       const env = environmentFromProject({ nodes: [node] });
       result.set(node.id, { shape: String(p.atmosphere_model), edits: environmentEdits(env || {}), environment: true }); continue;
@@ -56,7 +57,7 @@ function groups(project: { nodes: any[] }): Map<string, Group> {
     if (node.data.componentType === 'aero_coefficients') {
       try {
         const coefficients = typeof p.coefficients === 'string' ? JSON.parse(p.coefficients) : p.coefficients;
-        for (const item of coefficients || []) if (item.name && item.expression) result.set(`${node.id}:${item.name}`, {
+        for (const item of coefficients || []) if (!item.disabled && item.name && item.expression) result.set(`${node.id}:${item.name}`, {
           shape: JSON.stringify({ ...item, expression: expressionShape(item.expression) }), edits: expressionParameters(item.name, item.expression),
         });
       } catch {}
@@ -66,6 +67,7 @@ function groups(project: { nodes: any[] }): Map<string, Group> {
     try { channels = typeof p.channels === 'string' ? JSON.parse(p.channels) : p.channels; } catch { continue; }
     if (!Array.isArray(channels)) continue;
     const items = (list: any[]) => { for (const item of list) {
+      if (item.disabled) continue;
       if (Array.isArray(item.items)) items(item.items);
       if (!item.name) continue;
       const edits: RuntimeEdit[] = [], clone = JSON.parse(JSON.stringify(item));

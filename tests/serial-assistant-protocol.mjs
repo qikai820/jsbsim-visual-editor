@@ -54,4 +54,30 @@ assert.deepEqual(footer.push({ direction: 'rx', timeMs: 4, elapsedUs: 4, bytes: 
 assert.equal(checkFrame([0x01, 0x03, 0x00, 0x00, 0xf1, 0xd8], { ...rule, checksum: 'crc16Modbus', checksumStart: 0 }).valid, true);
 assert.equal(decodeField({ ...result[0], bytes: [0x01, 0x02] }, { name: 'big', offset: 0, length: 2, type: 'u16', endian: 'big', scale: 1 }), '258');
 
+// Nearby UDP packets retain their boundaries even with gap framing. An
+// incomplete packet must never borrow bytes from the next source/packet.
+const udp = new FrameDecoder({ ...rule, mode: 'gap', checksum: 'none' });
+const packet = { direction: 'rx', timeMs: 10, elapsedUs: 10, datagram: true, peer: '127.0.0.1:9000' };
+assert.deepEqual(udp.push({ ...packet, bytes: [1, 2] }).map(f => f.bytes), [[1, 2]]);
+assert.deepEqual(udp.push({ ...packet, elapsedUs: 11, bytes: [3] }).map(f => f.bytes), [[3]]);
+assert.equal(udp.flush().length, 0);
+const udpFixed = new FrameDecoder({ ...rule, mode: 'fixed', fixedLength: 3, checksum: 'none' });
+const incomplete = udpFixed.push({ ...packet, bytes: [1, 2] });
+assert.equal(incomplete[0].valid, false);
+assert.equal(incomplete[0].peer, packet.peer);
+assert.equal(incomplete[0].datagram, true);
+assert.deepEqual(udpFixed.push({ ...packet, bytes: [3, 4, 5, 6, 7, 8] }).map(f => f.bytes), [[3, 4, 5], [6, 7, 8]]);
+
+// Reconnected TCP streams cannot complete a frame from an earlier connection,
+// including when the OS reuses the same client address.
+const tcp = new FrameDecoder({ ...rule, mode: 'fixed', fixedLength: 3, checksum: 'none' });
+assert.deepEqual(tcp.push({ ...packet, datagram: false, streamId: 1, bytes: [1, 2] }), []);
+const reconnected = tcp.push({ ...packet, datagram: false, streamId: 2, bytes: [3, 4, 5] });
+assert.deepEqual(reconnected.map(f => f.bytes), [[1, 2], [3, 4, 5]]);
+assert.equal(reconnected[0].valid, false);
+assert.equal(reconnected[1].streamId, 2);
+const changedPeer = new FrameDecoder({ ...rule, mode: 'fixed', fixedLength: 2, checksum: 'none' });
+changedPeer.push({ ...packet, datagram: false, bytes: [1] });
+assert.deepEqual(changedPeer.push({ ...packet, datagram: false, peer: '127.0.0.1:9001', bytes: [2, 3] }).map(f => f.bytes), [[1], [2, 3]]);
+
 console.log('serial assistant protocol: PASS');

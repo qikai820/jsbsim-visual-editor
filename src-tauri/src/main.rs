@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod disabled_xml;
 mod xml_parser;
 mod xml_diagnostics;
 mod load_diagnostics;
@@ -20,6 +21,8 @@ mod dataflow;
 mod jsbsim_process;
 mod ftp_sync;
 mod usb_file;
+mod sim_files;
+mod network_files;
 mod storage_usage;
 mod transport;
 mod network_discovery;
@@ -706,11 +709,11 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 fn nsh_execute_tcp(command: &str) -> Result<String, String> {
-    let _guard = romfs_network::NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
     let log_info = command.starts_with("jsbsim --mcap-info ");
     let host = transport::network_host()
         .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?
         .to_string();
+    let _guard = romfs_network::NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
     let port = std::env::var("NSH_TELNET_PORT")
         .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
     let address: SocketAddr = format!("{}:{}", host, port).parse()
@@ -1196,68 +1199,68 @@ async fn usb_file_status() -> Result<usb_file::UsbStatus, String> {
 
 #[tauri::command]
 async fn usb_file_ping() -> Result<serde_json::Value, String> {
-    run_blocking(|| Ok(serde_json::json!({ "identity": usb_file::ping()?, "source": "usb-bulk" }))).await
+    run_blocking(|| Ok(serde_json::json!({ "identity": sim_files::ping()?, "source": sim_files::source() }))).await
 }
 
 #[tauri::command]
 async fn usb_file_storage() -> Result<Vec<storage_usage::StorageUsage>, String> {
-    run_blocking(|| storage_usage::parse(&usb_file::nsh_execute(storage_usage::COMMAND)?)).await
+    run_blocking(|| sim_files::storage()).await
 }
 
 #[tauri::command]
 async fn usb_file_list(path: String) -> Result<serde_json::Value, String> {
-    run_blocking(move || Ok(serde_json::json!({ "path": path, "files": usb_file::list(&path)?, "source": "usb-bulk" }))).await
+    run_blocking(move || Ok(serde_json::json!({ "path": path, "files": sim_files::list(&path)?, "source": sim_files::source() }))).await
 }
 
 #[tauri::command]
 async fn usb_file_list_with_modified(path: String) -> Result<serde_json::Value, String> {
-    run_blocking(move || Ok(serde_json::json!({ "path": path, "files": usb_file::list_with_modified(&path)?, "source": "usb-bulk" }))).await
+    run_blocking(move || Ok(serde_json::json!({ "path": path, "files": sim_files::list_with_modified(&path)?, "source": sim_files::source() }))).await
 }
 
 #[tauri::command]
 async fn usb_file_read(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        let bytes = usb_file::read_all(&path)?;
-        Ok(serde_json::json!({ "path": path, "bytes": bytes, "source": "usb-bulk" }))
+        let bytes = sim_files::read_all(&path)?;
+        Ok(serde_json::json!({ "path": path, "bytes": bytes, "source": sim_files::source() }))
     }).await
 }
 
 #[tauri::command]
 async fn usb_file_write(path: String, bytes: Vec<u8>) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        usb_file::write_all(&path, &bytes)?;
-        Ok(serde_json::json!({ "path": path, "size": bytes.len(), "saved": true, "source": "usb-bulk" }))
+        sim_files::write_all(&path, &bytes)?;
+        Ok(serde_json::json!({ "path": path, "size": bytes.len(), "saved": true, "source": sim_files::source() }))
     }).await
 }
 
 #[tauri::command]
 async fn usb_file_delete(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        usb_file::delete(&path)?;
-        Ok(serde_json::json!({ "path": path, "deleted": true, "source": "usb-bulk" }))
+        sim_files::delete(&path)?;
+        Ok(serde_json::json!({ "path": path, "deleted": true, "source": sim_files::source() }))
     }).await
 }
 
 #[tauri::command]
 async fn usb_file_delete_directory(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        usb_file::delete_directory_tree(&path)?;
-        Ok(serde_json::json!({ "path": path, "deleted": true, "source": "usb-bulk" }))
+        sim_files::delete_directory_tree(&path)?;
+        Ok(serde_json::json!({ "path": path, "deleted": true, "source": sim_files::source() }))
     }).await
 }
 
 #[tauri::command]
 async fn usb_file_mkdir(path: String) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        usb_file::mkdir(&path)?;
-        Ok(serde_json::json!({ "path": path, "created": true, "source": "usb-bulk" }))
+        sim_files::mkdir(&path)?;
+        Ok(serde_json::json!({ "path": path, "created": true, "source": sim_files::source() }))
     }).await
 }
 
 #[tauri::command]
 async fn usb_file_transfer(source: String, destination: String, move_source: bool) -> Result<serde_json::Value, String> {
     run_blocking(move || {
-        usb_file::transfer(&source, &destination, move_source)?;
+        sim_files::transfer(&source, &destination, move_source)?;
         Ok(serde_json::json!({ "source": source, "destination": destination, "moved": move_source }))
     }).await
 }
@@ -1304,7 +1307,7 @@ fn download_usb_file(path: &str, directory: &str) -> Result<(std::path::PathBuf,
     if target.exists() { return Err("下载目录中已有过多同名文件".into()); }
 
     let partial = requested.join(format!(".{}.usbpart", target.file_name().unwrap().to_string_lossy()));
-    let (size, checksum) = match usb_file::download_to_fingerprint(path, &partial) {
+    let (size, checksum) = match sim_files::download_to_fingerprint(path, &partial) {
         Ok(result) => result,
         Err(error) => {
             let _ = std::fs::remove_file(&partial);
@@ -1555,6 +1558,12 @@ async fn serial_assistant_close(session_id: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn serial_assistant_network_open(config: serial_assistant::NetworkConfig, on_event: tauri::ipc::Channel<serial_assistant::SerialEvent>)
+    -> Result<serial_assistant::SessionInfo, String> {
+    run_blocking(move || serial_assistant::global().open_network(config, on_event)).await
+}
+
+#[tauri::command]
 async fn serial_assistant_write(session_id: u64, bytes: Vec<u8>) -> Result<usize, String> {
     run_blocking(move || serial_assistant::global().write(session_id, bytes)).await
 }
@@ -1769,6 +1778,7 @@ fn main() {
             simulator_transport_set,
             serial_assistant_list_ports,
             serial_assistant_open,
+            serial_assistant_network_open,
             serial_assistant_close,
             serial_assistant_write,
             serial_assistant_record_start,

@@ -4,6 +4,7 @@ import { patchExistingSubfileXml } from './sourcePreservingXml';
 import { xmlContentEqual } from './xmlContentEqual';
 import { serializeSerialSensors } from './serialSensorXml';
 import { serializePwmCaptures } from './pwmCaptureXml';
+import { expandDisabledComments } from './disabledXml';
 
 export interface PreparedXml { path: string; content: string; category?: string; dirty: boolean }
 export interface XmlGenerators {
@@ -95,8 +96,10 @@ export async function prepareModelXml(current: ModelProject, baseline: ModelProj
       } else if (type === 'system') {
         const oldParams = old?.data.params || oldSubFile?.data;
         if (!oldParams) throw new Error(`${path} 缺少编辑基线，无法安全合并系统变更`);
+        // Whole-module disabling belongs to the reference in the main XML,
+        // never to the root of a shared external system file.
         const [before, after] = await Promise.all([oldParams, params].map(p =>
-          generators.generateSubfile(type, String(p.name || name), p)));
+          generators.generateSubfile(type, String(p.name || name), { ...p, disabled: false })));
         updates.push(applyXmlDelta(original, before, after));
       } else {
         const previous = old?.data.params || oldSubFile?.data || {};
@@ -127,7 +130,7 @@ export async function prepareModelXml(current: ModelProject, baseline: ModelProj
       put(file.path, file.currentXml, file.category);
     }
   }
-  for (const document of documents.values()) parseXmlDocument(document.content);
+  for (const document of documents.values()) expandDisabledComments(parseXmlDocument(document.content));
   return [...documents.values()];
 }
 
@@ -137,7 +140,7 @@ export async function compareModelXml(documents: PreparedXml[], read: (path: str
   const changes: RemoteXmlChange[] = [];
   for (const document of documents) {
     const remote = await read(document.path);
-    parseXmlDocument(document.content);
+    expandDisabledComments(parseXmlDocument(document.content));
     if (remote !== null) parseXmlDocument(remote);
     if (remote === null || !xmlContentEqual(document.content, remote)) changes.push({ ...document, remote, dirty: true });
   }

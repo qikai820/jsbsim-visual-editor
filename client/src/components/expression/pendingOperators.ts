@@ -12,7 +12,7 @@ function canonical(value: any): any {
 // Only serialized signal data matters: moving or resizing a block is layout.
 function componentValue(data: any) {
   return JSON.stringify(canonical([data.itemType, data.name, data.outputSignal, data.inputs, data.expression,
-    data.cliptoMin, data.cliptoMax, data.compProps]));
+    data.cliptoMin, data.cliptoMax, data.compProps, !!data.disabled, !!data.channelDisabled]));
 }
 function expressionValue(expr: any) {
   if (!expr) return '';

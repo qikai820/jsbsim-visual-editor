@@ -1,0 +1,15 @@
+.model-pull-dialog { position: fixed; inset: 0; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); margin: auto; padding: 0; overflow: auto; border: 1px solid #d5e0eb; border-radius: 12px; background: #fff; color: #334155; box-shadow: 0 24px 80px #15263b33; }
+.model-pull-dialog::backdrop { background: #1c2b3e66; backdrop-filter: blur(3px); }
+.model-pull-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid #e0e7ee; }
+.model-pull-dialog h2 { margin: 0; font-size: 16px; }
+.model-pull-dialog header button { border: 0; background: transparent; color: #64748b; font-size: 22px; cursor: pointer; }
+.model-pull-body { display: flex; flex-direction: column; gap: 16px; padding: 20px; }
+.model-pull-body p { margin: 0; color: #64748b; font-size: 13px; line-height: 1.7; }
+.model-pull-body label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.model-pull-body select { min-width: 0; padding: 9px; border: 1px solid #b9cbdc; border-radius: 6px; background: #fff; color: #334155; font: inherit; }
+.model-pull-body .model-pull-error { padding: 10px; border-radius: 6px; background: #fff2ef; color: #9e3834; overflow-wrap: anywhere; }
+.model-pull-dialog footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid #e0e7ee; background: #f8fafc; }
+.model-pull-dialog footer button { padding: 8px 12px; border: 1px solid #d5dee7; border-radius: 6px; background: #fff; color: #526579; font: inherit; font-size: 12px; cursor: pointer; }
+.model-pull-dialog footer button.primary { border-color: #367aca; background: #367aca; color: #fff; }
+.model-pull-dialog button:disabled { opacity: .5; cursor: default; }
+.model-pull-dialog :focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }

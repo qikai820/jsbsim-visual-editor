@@ -42,6 +42,8 @@ function shortName(s: string): string {
 export default function ComponentPropertyPanel({ data, onChange, onDelete, onEditExpression }: ComponentPropertyPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const meta = data.meta || { label: data.itemType, icon: '•', color: '#64748b' };
+  const expressionConstant = ['function', 'fcs_function'].includes(data.itemType) && data.expression?.kind === 'value';
+  const isConstant = data.itemType === 'constant' || expressionConstant;
 
   const setParam = (field: string, value: string) => {
     const cur = data.compProps?.[field] || {};
@@ -123,15 +125,20 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
         />
       </div>
 
-      {data.itemType === 'constant' && (
+      {isConstant && (
         <div className="field-row">
           <label>常数值</label>
-          <DisplayNumberInput commitOnBlur value={String(data.compProps?.constant?.value ?? '0')}
-            onChange={event => setParam('constant', event.target.value)} />
+          <DisplayNumberInput commitOnBlur
+            value={String(expressionConstant ? data.expression.value : data.compProps?.constant?.value ?? '0')}
+            onChange={event => {
+              if (!expressionConstant) { setParam('constant', event.target.value); return; }
+              const value = Number(event.target.value);
+              if (event.target.value.trim() && Number.isFinite(value)) onChange({ expression: { ...data.expression, value } });
+            }} />
         </div>
       )}
 
-      {data.itemType !== 'constant' && <>
+      {!isConstant && <>
         <div className="prop-divider" />
         <div className="comp-prop-subtitle">
           输入信号（端口）

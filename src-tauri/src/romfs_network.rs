@@ -2,7 +2,7 @@
 //! NuttX FTP exposes the SD card but cannot change into /romfs on this board.
 
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,12 @@ fn read_until(stream: &mut TcpStream, marker: &[u8], deadline: Instant) -> Resul
     let mut output = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
-        if output.ends_with(marker) { return Ok(output); }
+        // readline can append a clear-to-end sequence to the prompt in the
+        // same TCP packet. Waiting for an exact suffix then times out even
+        // though the shell is already ready for the next command.
+        let mut end = output.len();
+        while output[..end].ends_with(b"\x1b[K") { end -= 3; }
+        if output[..end].ends_with(marker) { output.truncate(end); return Ok(output); }
         if Instant::now() >= deadline { return Err("NSH response timed out".into()); }
         match stream.read(&mut buffer) {
             Ok(0) => return Err("NSH connection closed before prompt".into()),
@@ -63,21 +68,52 @@ fn parse_response(raw: &[u8]) -> Result<String, String> {
 }
 
 fn run(command: &str) -> Result<String, String> {
-    let _guard = NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
     let host = crate::transport::network_host()
         .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?;
+    run_on_host(host, command)
+}
+
+pub(crate) struct NshSession<'a> {
+    stream: &'a mut TcpStream,
+}
+
+impl NshSession<'_> {
+    pub(crate) fn command(&mut self, command: &str) -> Result<String, String> {
+        if command.contains(['\n', '\r', '\0']) || command.len() >= 2048 {
+            return Err("invalid or oversized NSH command".into());
+        }
+        self.stream.write_all(command.as_bytes()).and_then(|_| self.stream.write_all(b"\n"))
+            .map_err(|error| format!("cannot send NSH command: {error}"))?;
+        let raw = read_until(self.stream, PROMPT, Instant::now() + Duration::from_secs(30))
+            .map_err(|error| format!("NSH {}: {error}", command.split_whitespace().next().unwrap_or("command")))?;
+        parse_response(&raw)
+    }
+}
+
+pub(crate) fn with_session<T>(operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
+    let host = crate::transport::network_host()
+        .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?;
+    with_host_session(host, operation)
+}
+
+fn run_on_host(host: Ipv4Addr, command: &str) -> Result<String, String> {
+    with_host_session(host, |session| session.command(command))
+}
+
+fn with_host_session<T>(host: Ipv4Addr, operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
+    let _guard = NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
     let port = std::env::var("NSH_TELNET_PORT")
         .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
     let address = SocketAddr::from((host, port));
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .map_err(|error| format!("cannot connect to board ROMFS via NSH: {error}"))?;
     stream.set_read_timeout(Some(Duration::from_millis(250))).map_err(|error| error.to_string())?;
+    stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|error| error.to_string())?;
+    stream.set_nodelay(true).map_err(|error| error.to_string())?;
     let result = (|| {
-        read_until(&mut stream, PROMPT, Instant::now() + Duration::from_secs(3))?;
-        stream.write_all(command.as_bytes()).and_then(|_| stream.write_all(b"\n"))
-            .map_err(|error| format!("cannot send NSH command: {error}"))?;
-        let raw = read_until(&mut stream, PROMPT, Instant::now() + Duration::from_secs(10))?;
-        parse_response(&raw)
+        read_until(&mut stream, PROMPT, Instant::now() + Duration::from_secs(3))
+            .map_err(|error| format!("NSH handshake: {error}"))?;
+        operation(&mut NshSession { stream: &mut stream })
     })();
     // Abruptly closing a Telnet session can stop this board's telnetd task.
     // Always send exit and wait for EOF, even when the command has failed.
@@ -88,6 +124,15 @@ fn run(command: &str) -> Result<String, String> {
         (Ok(_), Err(error)) => Err(error),
         (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
     }
+}
+
+/// Probe a candidate directly: resolving the target here would recurse into
+/// discovery. FTP is rooted at the SD card, which may have no user library.
+pub fn verify_library(host: Ipv4Addr) -> bool {
+    let Ok(output) = run_on_host(host, "ls /romfs/jsbsim") else { return false; };
+    let entries: Vec<_> = output.lines().map(str::trim).collect();
+    entries.contains(&"/romfs/jsbsim:") &&
+        entries.contains(&"aircraft/") && entries.contains(&"engine/")
 }
 
 pub fn list(path: &str) -> Result<Vec<String>, String> {

@@ -1,4 +1,5 @@
 import { xmlContentEqual, xmlElementsEqual } from './xmlContentEqual';
+import { decodeDisabledComment } from './disabledXml';
 
 const MODELED_SYSTEM_CHILDREN = new Set([
   'property', 'function', 'fcs_function', 'channel',
@@ -96,10 +97,11 @@ export type XmlSpan = {
   closeStart: number;
   end: number;
   children: XmlSpan[];
+  disabledXml?: string;
 };
 type TextEdit = { start: number; end: number; text: string };
 
-export function scanXmlSpans(xml: string): XmlSpan {
+export function scanXmlSpans(xml: string, includeDisabled = false): XmlSpan {
   const roots: XmlSpan[] = [];
   const stack: XmlSpan[] = [];
   const tagEnd = (from: number): number => {
@@ -118,6 +120,13 @@ export function scanXmlSpans(xml: string): XmlSpan {
     if (xml.startsWith('<!--', start)) {
       const end = xml.indexOf('-->', start + 4);
       if (end < 0) throw new Error('XML 注释未闭合');
+      const disabledXml = includeDisabled ? decodeDisabledComment(xml.slice(start + 4, end)) : null;
+      if (disabledXml !== null) {
+        const decoded = scanXmlSpans(disabledXml, true);
+        const span: XmlSpan = { tag: decoded.tag, start, openEnd: end + 3, closeStart: end + 3, end: end + 3, children: [], disabledXml };
+        if (stack.length) stack[stack.length - 1].children.push(span);
+        else roots.push(span);
+      }
       index = end + 3;
     } else if (xml.startsWith('<![CDATA[', start)) {
       const end = xml.indexOf(']]>', start + 9);

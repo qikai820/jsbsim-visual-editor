@@ -3,7 +3,7 @@ import {
   localSerialClose, localSerialExport, localSerialListPorts, localSerialOpen, localSerialPickCapture,
   localSerialRecordStart, localSerialRecordStop, localSerialReplay, localSerialSetDtr,
   localSerialSetRts, localSerialWrite, type LocalSerialConfig, type LocalSerialEvent,
-  type LocalSerialPort,
+  localNetworkOpen, type LocalNetworkConfig, type LocalSerialPort,
 } from '../utils/tauriApi';
 import {
   decodeField, DEFAULT_FRAMING_RULE, FrameDecoder, parseHex, toAscii, toHex,
@@ -11,6 +11,9 @@ import {
   type SerialFrame,
 } from '../utils/serialProtocol';
 import './SerialAssistantDialog.css';
+import SerialPortPicker from './SerialPortPicker';
+import EditableComboBox from './EditableComboBox';
+import SerialAssistantIcon from './SerialAssistantIcon';
 
 const SETTINGS_KEY = 'local-serial-assistant-settings-v1';
 const PROFILES_KEY = 'local-serial-assistant-profiles-v1';
@@ -18,12 +21,21 @@ const COMMANDS_KEY = 'local-serial-assistant-commands-v1';
 const MAX_VIEW_BYTES = 2 * 1024 * 1024;
 const MAX_VIEW_CHUNKS = 4000;
 const MAX_VIEW_FRAMES = 4000;
+const COMMON_BAUD_RATES = [
+  300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200,
+  128000, 230400, 256000, 460800, 500000, 921600, 1000000, 1500000,
+  2000000, 3000000, 4000000,
+];
 
-type SavedSettings = { config: LocalSerialConfig; rule: FramingRule };
+type SavedSettings = { config: LocalSerialConfig; rule: FramingRule; transport: 'serial' | 'network'; network: LocalNetworkConfig };
 type CommandTemplate = { text: string; mode: 'hex' | 'text'; lineEnding: 'none' | 'lf' | 'cr' | 'crlf' };
 const DEFAULT_CONFIG: LocalSerialConfig = {
   path: '', baudRate: 115200, dataBits: 8, parity: 'none', stopBits: 1, flowControl: 'none',
 };
+const DEFAULT_NETWORK: LocalNetworkConfig = {
+  mode: 'tcpClient', host: '127.0.0.1', port: 9000, localHost: '0.0.0.0', localPort: 9001,
+};
+const NETWORK_LABELS = { tcpClient: 'TCP 客户端', tcpServer: 'TCP 服务端', udp: 'UDP' };
 
 function savedSettings(): SavedSettings {
   try {
@@ -34,8 +46,11 @@ function savedSettings(): SavedSettings {
     return {
       config: { ...DEFAULT_CONFIG, ...(saved.config || {}) },
       rule,
+      transport: saved.transport === 'network' ? 'network' : 'serial',
+      network: { ...DEFAULT_NETWORK, ...(saved.network || {}),
+        mode: ['tcpClient', 'tcpServer', 'udp'].includes(saved.network?.mode) ? saved.network.mode : DEFAULT_NETWORK.mode },
     };
-  } catch { return { config: DEFAULT_CONFIG, rule: DEFAULT_FRAMING_RULE }; }
+  } catch { return { config: DEFAULT_CONFIG, rule: DEFAULT_FRAMING_RULE, transport: 'serial', network: DEFAULT_NETWORK }; }
 }
 
 function savedProfiles(): Record<string, FramingRule> {
@@ -67,6 +82,10 @@ function formatBytes(value: number): string {
 export default function SerialAssistantDialog({ onClose }: { onClose: () => void }) {
   const initial = useMemo(savedSettings, []);
   const [config, setConfig] = useState<LocalSerialConfig>(initial.config);
+  const [transport, setTransport] = useState(initial.transport);
+  const [network, setNetwork] = useState(initial.network);
+  const [endpoint, setEndpoint] = useState<{ localAddr: string; peerAddr: string | null } | null>(null);
+  const [baudRateInput, setBaudRateInput] = useState(String(initial.config.baudRate));
   const [rule, setRule] = useState<FramingRule>(initial.rule);
   const [profiles, setProfiles] = useState(savedProfiles);
   const [ports, setPorts] = useState<LocalSerialPort[]>([]);
@@ -117,6 +136,11 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
   const rawEndRef = useRef<HTMLDivElement>(null);
+  const isSerial = transport === 'serial';
+  const canSend = connected && (isSerial || network.mode === 'tcpClient' || !!endpoint?.peerAddr);
+  const showPeers = !isSerial || chunks.some(chunk => !!chunk.peer);
+  const baudRateError = /^\d+$/.test(baudRateInput) && Number(baudRateInput) >= 300 && Number(baudRateInput) <= 4000000
+    ? '' : '请输入 300～4000000 之间的整数';
 
   const ruleError = useMemo(() => {
     try { validateFramingRule(rule); return ''; } catch (error) { return errorText(error); }
@@ -129,14 +153,21 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
     (!search || `${toHex(frame.bytes)} ${frame.problem || ''}`.toLowerCase().includes(search.toLowerCase()))).slice(-500);
 
   useEffect(() => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ config, rule }));
-  }, [config, rule]);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ config, rule, transport, network }));
+  }, [config, rule, transport, network]);
 
   useEffect(() => {
+    if (transport !== 'serial') return;
+    let active = true;
     void localSerialListPorts().then(found => {
+      if (!active) return;
       setPorts(found);
       setConfig(current => current.path ? current : { ...current, path: found[0]?.path || '' });
-    }).catch(error => setError(errorText(error)));
+    }).catch(error => { if (active) setError(errorText(error)); });
+    return () => { active = false; };
+  }, [transport]);
+
+  useEffect(() => {
     return () => {
       generationRef.current++;
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -173,10 +204,10 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
   }, [rule.mode, rule.gapMs, ruleError]);
   useEffect(() => { if (tab === 'raw' && !paused) rawEndRef.current?.scrollIntoView({ block: 'end' }); }, [chunks, tab, paused]);
   useEffect(() => {
-    if (!repeating || !connected || !sendText.trim() || !Number.isFinite(repeatMs) || repeatMs < 50) return;
+    if (!repeating || !canSend || !sendText.trim() || !Number.isFinite(repeatMs) || repeatMs < 50) return;
     const timer = setInterval(() => { void send(); }, repeatMs);
     return () => clearInterval(timer);
-  }, [repeating, connected, repeatMs, sendText, sendMode, lineEnding, sessionId]);
+  }, [repeating, canSend, repeatMs, sendText, sendMode, lineEnding, sessionId]);
 
   function refresh() {
     setChunks([...chunksRef.current]);
@@ -204,7 +235,11 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
   }
 
   function receiveChunk(event: Extract<LocalSerialEvent, { kind: 'data' }>) {
-    const chunk: SerialChunk = { direction: event.direction, timeMs: event.timeMs, elapsedUs: event.elapsedUs, bytes: event.bytes };
+    const chunk: SerialChunk = { direction: event.direction, timeMs: event.timeMs, elapsedUs: event.elapsedUs, bytes: event.bytes,
+      peer: event.peer, streamId: event.streamId, datagram: event.datagram };
+    if (!isSerial && network.mode === 'udp' && !network.host.trim() && event.direction === 'rx' && event.peer) {
+      setEndpoint(previous => ({ localAddr: previous?.localAddr || '', peerAddr: event.peer! }));
+    }
     lastArrivalRef.current[chunk.direction] = Date.now();
     chunksRef.current.push(chunk);
     byteWindowRef.current += chunk.bytes.length;
@@ -223,6 +258,15 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
   function handleEvent(event: LocalSerialEvent, generation: number) {
     if (generation !== generationRef.current) return;
     if (event.kind === 'data') { receiveChunk(event); return; }
+    if (event.kind === 'endpoint') {
+      setEndpoint({ localAddr: event.localAddr, peerAddr: event.peerAddr });
+      if (network.mode === 'tcpServer') {
+        framesRef.current.push(...decoderRef.current.flush());
+        if (!event.peerAddr) setRepeating(false);
+        refresh();
+      }
+      return;
+    }
     if (event.kind === 'replayDone') {
       framesRef.current.push(...decoderRef.current.flush());
       setNotice(`记录回放完成，共 ${event.records} 条数据`);
@@ -253,6 +297,7 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
     setConnected(false);
     setRecording(false);
     setRepeating(false);
+    setEndpoint(null);
     if (id !== null) await localSerialClose(id).catch(error => setError(errorText(error)));
     framesRef.current.push(...decoderRef.current.flush());
     refresh();
@@ -264,13 +309,25 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
     setError('');
     try {
       if (sessionRef.current !== null) { await disconnect(); return; }
-      if (!config.path.trim()) throw new Error('请选择本机串口，或输入设备路径');
+      if (isSerial && !config.path.trim()) throw new Error('请选择本机串口，或输入设备路径');
+      if (isSerial && baudRateError) throw new Error(baudRateError);
+      if (!isSerial) {
+        if (network.mode !== 'tcpServer' && (network.mode === 'tcpClient' || network.host.trim()) &&
+          (!network.host.trim() || !Number.isInteger(network.port) || network.port < 1 || network.port > 65535)) {
+          throw new Error('请输入目标地址和 1～65535 的目标端口');
+        }
+        if (network.mode !== 'tcpClient' && (!network.localHost.trim() || !Number.isInteger(network.localPort) || network.localPort < 0 || network.localPort > 65535)) {
+          throw new Error('请输入本地 IP 地址和 0～65535 的本地端口');
+        }
+      }
       const generation = ++generationRef.current;
       const pending: LocalSerialEvent[] = [];
       let ready = false;
-      const info = await localSerialOpen({ ...config, path: config.path.trim() }, event => {
+      const onEvent = (event: LocalSerialEvent) => {
         if (ready) handleEvent(event, generation); else pending.push(event);
-      });
+      };
+      const info = isSerial ? await localSerialOpen({ ...config, path: config.path.trim() }, onEvent)
+        : await localNetworkOpen({ ...network, host: network.host.trim(), localHost: network.localHost.trim() }, onEvent);
       if (generation !== generationRef.current) { await localSerialClose(info.sessionId); return; }
       clearData();
       setPaused(false);
@@ -280,7 +337,8 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
       setDtr(null);
       setRts(null);
       setOfflinePath('');
-      setNotice(`已连接 ${info.path}`);
+      setEndpoint(null);
+      setNotice(`${!isSerial && network.mode !== 'tcpClient' ? '已启动' : '已连接'} ${info.path}`);
       ready = true;
       pending.forEach(event => handleEvent(event, generation));
     } catch (error) { setError(errorText(error)); } finally { setBusy(false); }
@@ -335,7 +393,7 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
   }
 
   async function send() {
-    if (sessionId === null || !connected || sendingRef.current) return;
+    if (sessionId === null || !canSend || sendingRef.current) return;
     sendingRef.current = true;
     try {
       let bytes = sendMode === 'hex' ? parseHex(sendText) : Array.from(new TextEncoder().encode(sendText));
@@ -379,10 +437,11 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
         const rows = framesRef.current.filter(frame => frame.direction === 'rx' ? showRx : showTx)
           .map(frame => ({ frame: frame.id, timeMs: frame.timeMs, direction: frame.direction,
             hex: toHex(frame.bytes), valid: frame.valid, problem: frame.problem || '',
+            peer: frame.peer || '', streamId: frame.streamId ?? '', datagram: frame.datagram ?? false,
             fields: Object.fromEntries(rule.fields.map(field => [field.name, decodeField(frame, field)])) }));
         const content = kind === 'json' ? JSON.stringify(rows, null, 2) : [
-          ['frame', 'timeMs', 'direction', 'hex', 'valid', 'problem', ...rule.fields.map(field => field.name)].map(csvCell).join(','),
-          ...rows.map(row => [row.frame, row.timeMs, row.direction, row.hex, row.valid ?? '', row.problem,
+          ['frame', 'timeMs', 'direction', 'hex', 'valid', 'problem', 'peer', 'streamId', 'datagram', ...rule.fields.map(field => field.name)].map(csvCell).join(','),
+          ...rows.map(row => [row.frame, row.timeMs, row.direction, row.hex, row.valid ?? '', row.problem, row.peer, row.streamId, row.datagram,
             ...rule.fields.map(field => row.fields[field.name])].map(csvCell).join(',')),
         ].join('\n');
         bytes = Array.from(new TextEncoder().encode(content));
@@ -413,53 +472,88 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
   }
 
   function updateRule(change: Partial<FramingRule>) { setRule(previous => ({ ...previous, ...change })); }
+  function updateBaudRate(value: string) {
+    setBaudRateInput(value);
+    if (/^\d+$/.test(value) && Number(value) >= 300 && Number(value) <= 4000000) {
+      setConfig(previous => ({ ...previous, baudRate: Number(value) }));
+    }
+  }
+
+  function changeTransport(mode: 'serial' | LocalNetworkConfig['mode']) {
+    setTransport(mode === 'serial' ? 'serial' : 'network');
+    if (mode !== 'serial') setNetwork(previous => ({ ...previous, mode }));
+    setEndpoint(null); setError(''); setNotice('');
+  }
   function updateField(index: number, change: Partial<SerialField>) {
     setRule(previous => ({ ...previous, fields: previous.fields.map((field, at) => at === index ? { ...field, ...change } : field) }));
   }
 
   const frameStatus = selectedFrame?.problem || (selectedFrame?.valid === true ? '校验正确' : selectedFrame?.valid === false ? '校验错误' : '未配置校验');
+  const connectionStatus = !connected ? offlinePath ? `○ 离线记录 · ${offlinePath.split('/').pop()}` : '○ 未连接'
+    : isSerial ? `● 已连接 · ${config.path} · ${config.baudRate} ${config.dataBits}${config.parity === 'none' ? 'N' : config.parity === 'even' ? 'E' : 'O'}${config.stopBits}`
+    : `● ${NETWORK_LABELS[network.mode]} · 本地 ${endpoint?.localAddr || '…'} · ${endpoint?.peerAddr ? `对端 ${endpoint.peerAddr}` : network.mode === 'tcpServer' ? '等待客户端连接' : '等待报文，可回复最近来源'}`;
 
-  return <div className="serial-assistant-overlay" role="dialog" aria-label="串口助手">
+  return <div className="serial-assistant-overlay" role="dialog" aria-label="串口与网口助手">
     <section className="serial-assistant">
       <header className="serial-assistant-head">
-        <div><strong>⌁ 串口助手</strong><small>电脑本机串口 · 原始数据与协议分析</small></div>
-        <button onClick={onClose} aria-label="关闭串口助手">×</button>
+        <div className="serial-assistant-heading"><span className="serial-assistant-logo"><SerialAssistantIcon name="connection" /></span><div><strong>串口与网口助手</strong><small>收发监控 · 协议分析</small></div></div>
+        <div className="serial-assistant-window-actions"><span className={`serial-assistant-connection-badge ${connected ? 'connected' : ''}`}><i />{connected ? !isSerial && network.mode === 'tcpServer' && !endpoint?.peerAddr ? '监听中' : '已连接' : '未连接'}</span><button onClick={onClose} aria-label="关闭串口与网口助手"><SerialAssistantIcon name="close" /></button></div>
       </header>
-      <div className="serial-assistant-connect">
-        <label className="serial-assistant-port">本机串口（{ports.length}）
-          <select aria-label="选择本机串口" value={ports.some(port => port.path === config.path) ? config.path : ''}
-            onChange={event => setConfig({ ...config, path: event.target.value })} disabled={connected}>
-            <option value="">手动输入路径</option>
-            {ports.map(port => <option key={port.path} value={port.path}>{port.label}</option>)}
-          </select>
-        </label>
-        <label className="serial-assistant-port-path">设备路径<input value={config.path} onChange={event => setConfig({ ...config, path: event.target.value })} disabled={connected} placeholder="例如 /dev/ttyACM0" /></label>
-        <button onClick={() => void refreshPorts()} disabled={busy}>刷新</button>
-        <label>波特率<input type="number" min="300" max="4000000" value={config.baudRate} disabled={connected} onChange={event => setConfig({ ...config, baudRate: Number(event.target.value) })} /></label>
-        <label>数据位<select value={config.dataBits} disabled={connected} onChange={event => setConfig({ ...config, dataBits: Number(event.target.value) })}>{[5, 6, 7, 8].map(value => <option key={value}>{value}</option>)}</select></label>
-        <label>校验<select value={config.parity} disabled={connected} onChange={event => setConfig({ ...config, parity: event.target.value as LocalSerialConfig['parity'] })}><option value="none">无</option><option value="even">偶</option><option value="odd">奇</option></select></label>
-        <label>停止位<select value={config.stopBits} disabled={connected} onChange={event => setConfig({ ...config, stopBits: Number(event.target.value) })}><option>1</option><option>2</option></select></label>
-        <label>流控<select value={config.flowControl} disabled={connected} onChange={event => setConfig({ ...config, flowControl: event.target.value as LocalSerialConfig['flowControl'] })}><option value="none">无</option><option value="software">XON/XOFF</option><option value="hardware">RTS/CTS</option></select></label>
-        <button className="serial-assistant-primary" disabled={busy} onClick={() => void toggleConnection()}>{busy ? '处理中…' : connected ? '断开' : '连接'}</button>
-      </div>
-      <div className="serial-assistant-workspace">
+      <div className="serial-assistant-body">
+      <aside className="serial-assistant-connect" aria-label="连接配置">
+        <div className="serial-assistant-modes" role="group" aria-label="调试方式">
+          {(['serial', 'tcpClient', 'tcpServer', 'udp'] as const).map(mode => <button type="button" key={mode} data-mode={mode}
+            aria-pressed={(isSerial ? 'serial' : network.mode) === mode} disabled={connected || busy} onClick={() => changeTransport(mode)}>
+            {mode === 'serial' ? '串口' : NETWORK_LABELS[mode]}
+          </button>)}
+        </div>
+        {isSerial ? <div className="serial-assistant-serial-fields">
+          <SerialPortPicker ports={ports} value={config.path} disabled={connected || busy} onChange={path => setConfig({ ...config, path })} onRefresh={() => void refreshPorts()} refreshing={busy} />
+          <EditableComboBox label="波特率" ariaLabel="选择或输入波特率" options={COMMON_BAUD_RATES.map(value => ({ value: String(value), label: String(value) }))}
+            value={baudRateInput} disabled={connected || busy} onChange={updateBaudRate} placeholder="选择或输入波特率" inputMode="numeric" suffix="bps" error={baudRateError} />
+        </div> : <div className="serial-assistant-network-fields">
+          {network.mode !== 'tcpClient' && <>
+            <label>本地 IP<input aria-label="本地 IP" value={network.localHost} disabled={connected || busy} onChange={event => setNetwork({ ...network, localHost: event.target.value })} placeholder="0.0.0.0" /></label>
+            <label>本地端口<input aria-label="本地端口" type="number" min="0" max="65535" step="1" value={network.localPort} disabled={connected || busy} onChange={event => setNetwork({ ...network, localPort: Number(event.target.value) })} title="0 表示由系统分配端口" /></label>
+          </>}
+          {network.mode !== 'tcpServer' && <>
+            <label>目标地址<input aria-label="目标地址" value={network.host} disabled={connected || busy} onChange={event => setNetwork({ ...network, host: event.target.value })} placeholder={network.mode === 'udp' ? '留空则回复最近来源' : 'IP 或主机名'} /></label>
+            <label>目标端口<input aria-label="目标端口" type="number" min="1" max="65535" step="1" value={network.port} disabled={connected || busy || (network.mode === 'udp' && !network.host.trim())} onChange={event => setNetwork({ ...network, port: Number(event.target.value) })} /></label>
+          </>}
+        </div>}
+        <button className="serial-assistant-primary" disabled={busy || (isSerial && !connected && !!baudRateError)} onClick={() => void toggleConnection()}><SerialAssistantIcon name="connection" />{busy ? '处理中…' : connected ? (!isSerial && network.mode !== 'tcpClient' ? '停止' : '断开') : !isSerial && network.mode !== 'tcpClient' ? '启动' : '连接'}</button>
+        {isSerial ? <>
+          <div className="serial-assistant-serial-options">
+            <label>数据位<select value={config.dataBits} disabled={connected || busy} onChange={event => setConfig({ ...config, dataBits: Number(event.target.value) })}>{[5, 6, 7, 8].map(value => <option key={value}>{value}</option>)}</select></label>
+            <label>校验<select value={config.parity} disabled={connected || busy} onChange={event => setConfig({ ...config, parity: event.target.value as LocalSerialConfig['parity'] })}><option value="none">无</option><option value="even">偶</option><option value="odd">奇</option></select></label>
+            <label>停止位<select value={config.stopBits} disabled={connected || busy} onChange={event => setConfig({ ...config, stopBits: Number(event.target.value) })}><option>1</option><option>2</option></select></label>
+            <label>流控<select value={config.flowControl} disabled={connected || busy} onChange={event => setConfig({ ...config, flowControl: event.target.value as LocalSerialConfig['flowControl'] })}><option value="none">无</option><option value="software">XON/XOFF</option><option value="hardware">RTS/CTS</option></select></label>
+          </div>
+          <details className="serial-assistant-line-settings"><summary>DTR / RTS<SerialAssistantIcon name="chevron" /></summary><div>
+            <label>DTR<select aria-label="DTR 电平" value={dtr === null ? 'keep' : dtr ? 'high' : 'low'} disabled={!connected} onChange={event => void changeLine('dtr', event.target.value === 'high')}><option value="keep" disabled={dtr !== null}>未设置</option><option value="low">低</option><option value="high">高</option></select></label>
+            <label>RTS<select aria-label="RTS 电平" value={rts === null ? 'keep' : rts ? 'high' : 'low'} disabled={!connected} onChange={event => void changeLine('rts', event.target.value === 'high')}><option value="keep" disabled={rts !== null}>未设置</option><option value="low">低</option><option value="high">高</option></select></label>
+          </div></details>
+        </> : <p className="serial-assistant-network-hint">{network.mode === 'tcpServer' ? '一次调试一个客户端，断开后继续监听。' : network.mode === 'udp' ? '每次发送一个报文。目标留空时回复最近来源。' : '连接目标 TCP 服务端，按字节流拆帧。'}</p>}
+      </aside>
+      <div className="serial-assistant-main">
+      <div className={`serial-assistant-workspace ${tab === 'frames' ? 'with-analysis' : ''}`}>
         <div className="serial-assistant-data">
           <div className="serial-assistant-data-head">
             <div className="serial-assistant-tabs" role="tablist" aria-label="数据视图"><button role="tab" aria-selected={tab === 'raw'} onClick={() => setTab('raw')}>原始数据</button><button role="tab" aria-selected={tab === 'frames'} onClick={() => setTab('frames')}>帧分析 <span>{frames.length}</span></button></div>
-            <div className="serial-assistant-data-actions"><button onClick={() => setPaused(value => !value)}>{paused ? '继续显示' : '暂停显示'}</button><button onClick={() => void toggleRecording()} disabled={!connected || busy}>{recording ? '● 停止记录' : '● 开始记录'}</button><button onClick={() => void openRecording()} disabled={busy}>打开记录</button><button onClick={clearData}>清屏</button></div>
+            <div className="serial-assistant-data-actions"><button onClick={() => setPaused(value => !value)}><SerialAssistantIcon name={paused ? 'play' : 'pause'} />{paused ? '继续显示' : '暂停显示'}</button><button className={recording ? 'recording' : ''} onClick={() => void toggleRecording()} disabled={!connected || busy}><SerialAssistantIcon name="record" />{recording ? '停止记录' : '开始记录'}</button><button onClick={() => void openRecording()} disabled={busy}><SerialAssistantIcon name="folder" />打开记录</button><button onClick={clearData}><SerialAssistantIcon name="clear" />清屏</button></div>
           </div>
-          <div className="serial-assistant-filter"><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="查找 HEX 或文本" aria-label="查找数据" /><label><input type="checkbox" checked={showRx} onChange={event => setShowRx(event.target.checked)} />接收 RX</label><label><input type="checkbox" checked={showTx} onChange={event => setShowTx(event.target.checked)} />发送 TX</label><span></span><select aria-label="导出当前窗口数据" value="" onChange={event => { const kind = event.target.value as 'binary' | 'csv' | 'json'; if (kind) void exportData(kind); }}><option value="">导出当前窗口…</option><option value="binary">原始 BIN</option><option value="csv">帧列表 CSV</option><option value="json">帧列表 JSON</option></select></div>
+          <div className="serial-assistant-filter"><label className="serial-assistant-search"><SerialAssistantIcon name="search" /><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="查找 HEX 或文本" aria-label="查找数据" /></label><label><input type="checkbox" checked={showRx} onChange={event => setShowRx(event.target.checked)} />接收 RX</label><label><input type="checkbox" checked={showTx} onChange={event => setShowTx(event.target.checked)} />发送 TX</label><span></span><select aria-label="导出当前窗口数据" value="" onChange={event => { const kind = event.target.value as 'binary' | 'csv' | 'json'; if (kind) void exportData(kind); }}><option value="">导出当前窗口…</option><option value="binary">原始 BIN</option><option value="csv">帧列表 CSV</option><option value="json">帧列表 JSON</option></select></div>
           {viewDropped > 0 && <p className="serial-assistant-limited">当前窗口已移出 {formatBytes(viewDropped)} 较早数据；已开启的记录文件仍保存完整字节。</p>}
           <div className="serial-assistant-scroll">
-            {tab === 'raw' ? <div role="tabpanel"><div className="serial-assistant-raw-grid serial-assistant-grid-head"><span>时间</span><span>方向</span><span>长度</span><span>HEX</span><span>ASCII</span></div>
-              {filteredChunks.map((chunk, index) => <div className="serial-assistant-raw-grid serial-assistant-row" key={`${chunk.elapsedUs}-${chunk.direction}-${index}`}><span>{formatTime(chunk.timeMs)}</span><span className={chunk.direction === 'rx' ? 'serial-assistant-rx' : 'serial-assistant-tx'}>{chunk.direction === 'rx' ? '↓ RX' : '↑ TX'}</span><span>{chunk.bytes.length}</span><code>{toHex(chunk.bytes)}</code><code>{toAscii(chunk.bytes)}</code></div>)}
-              {!filteredChunks.length && <div className="serial-assistant-empty">连接电脑串口，或打开本地记录文件后在这里查看原始字节。</div>}<div ref={rawEndRef} /></div>
+            {tab === 'raw' ? <div role="tabpanel"><div className={`serial-assistant-raw-grid serial-assistant-grid-head ${showPeers ? 'network' : ''}`}><span>时间</span><span>方向</span><span>长度</span>{showPeers && <span>对端地址</span>}<span>HEX</span><span>ASCII</span></div>
+              {filteredChunks.map((chunk, index) => <div className={`serial-assistant-raw-grid serial-assistant-row ${showPeers ? 'network' : ''}`} key={`${chunk.elapsedUs}-${chunk.direction}-${index}`}><span>{formatTime(chunk.timeMs)}</span><span className={chunk.direction === 'rx' ? 'serial-assistant-rx' : 'serial-assistant-tx'}>{chunk.direction === 'rx' ? '↓ RX' : '↑ TX'}</span><span>{chunk.bytes.length}</span>{showPeers && <span className="serial-assistant-peer" title={chunk.peer}>{chunk.peer || '—'}</span>}<code>{toHex(chunk.bytes)}</code><code>{toAscii(chunk.bytes)}</code></div>)}
+              {!filteredChunks.length && <div className="serial-assistant-empty">连接串口、启动网口调试，或打开本地记录文件后查看原始字节。</div>}<div ref={rawEndRef} /></div>
               : <div role="tabpanel"><div className="serial-assistant-frame-grid serial-assistant-grid-head"><span>帧号</span><span>时间</span><span>方向</span><span>间隔</span><span>长度</span><span>校验</span><span>HEX</span></div>
                 {filteredFrames.map((frame, index) => <button className={`serial-assistant-frame-grid serial-assistant-frame-row ${selectedFrame?.id === frame.id ? 'selected' : ''}`} key={frame.id} onClick={() => setSelectedFrameId(frame.id)}><span>#{frame.id}</span><span>{formatTime(frame.timeMs)}</span><span className={frame.direction === 'rx' ? 'serial-assistant-rx' : 'serial-assistant-tx'}>{frame.direction === 'rx' ? '↓ RX' : '↑ TX'}</span><span>{index ? `${((frame.elapsedUs - filteredFrames[index - 1].elapsedUs) / 1000).toFixed(1)} ms` : '—'}</span><span>{frame.bytes.length} B</span><span className={frame.problem || frame.valid === false ? 'serial-assistant-bad' : 'serial-assistant-ok'}>{frame.problem ? '异常' : frame.valid === null ? '—' : frame.valid ? '正确' : '错误'}</span><code>{toHex(frame.bytes)}</code></button>)}
                 {!filteredFrames.length && <div className="serial-assistant-empty">选择拆帧规则后，收到的字节会在这里组成协议帧。</div>}</div>}
           </div>
         </div>
-        <aside className="serial-assistant-analysis">
+        {tab === 'frames' && <aside className="serial-assistant-analysis">
           <div className="serial-assistant-side-title"><strong>拆帧规则</strong><button onClick={saveProfile}>保存配置</button></div>
           <select aria-label="已保存的拆帧规则" defaultValue="" onChange={event => { const saved = profiles[event.target.value]; if (saved) setRule(saved); }}><option value="">自定义规则</option>{Object.keys(profiles).map(name => <option key={name}>{name}</option>)}</select>
           <label>拆帧方式<select value={rule.mode} onChange={event => updateRule({ mode: event.target.value as FramingMode })}><option value="gap">空闲间隔</option><option value="fixed">固定帧长</option><option value="headerLength">帧头 + 长度字段</option><option value="headerFooter">帧头 + 帧尾</option><option value="delimiter">结束符</option></select></label>
@@ -475,33 +569,36 @@ export default function SerialAssistantDialog({ onClose }: { onClose: () => void
           {offlinePath && <button disabled={busy || !!ruleError} onClick={() => void replayAgain()}>按当前规则重新分析记录</button>}
           <div className="serial-assistant-divider" />
           <div className="serial-assistant-side-title"><strong>{selectedFrame ? `帧 #${selectedFrame.id}` : '字段解析'}</strong><span className={selectedFrame?.valid === false || selectedFrame?.problem ? 'serial-assistant-bad' : 'serial-assistant-ok'}>{selectedFrame ? frameStatus : '选择一帧'}</span></div>
+          {selectedFrame?.peer && <span className="serial-assistant-peer" title={selectedFrame.peer}>对端：{selectedFrame.peer}{selectedFrame.datagram ? ' · UDP 报文' : ''}</span>}
           {selectedFrame && <><div className="serial-assistant-byte-strip">{selectedFrame.bytes.slice(0, 80).map((byte, index) => <span key={index} title={`偏移 ${index}`}>{byte.toString(16).padStart(2, '0').toUpperCase()}</span>)}{selectedFrame.bytes.length > 80 && <span>…</span>}</div>{selectedFrame.problem && <span className="serial-assistant-bad">{selectedFrame.problem}</span>}</>}
           <div className="serial-assistant-side-title"><strong>字段定义</strong><button onClick={() => updateRule({ fields: [...rule.fields, { name: '新字段', offset: 0, length: 1, type: 'u8', endian: 'little', scale: 1 }] })}>＋ 添加</button></div>
           {rule.fields.map((field, index) => <div className="serial-assistant-field-editor" key={index}><div><input aria-label="字段名" value={field.name} onChange={event => updateField(index, { name: event.target.value })} /><button aria-label={`删除字段 ${field.name}`} onClick={() => updateRule({ fields: rule.fields.filter((_, at) => at !== index) })}>×</button></div><div><label>偏移<input type="number" min="0" value={field.offset} onChange={event => updateField(index, { offset: Number(event.target.value) })} /></label><label>长度<input type="number" min="1" value={field.length} onChange={event => updateField(index, { length: Number(event.target.value) })} /></label></div><div><select aria-label="字段类型" value={field.type} onChange={event => updateField(index, { type: event.target.value as SerialField['type'] })}>{['u8','s8','u16','s16','u32','s32','f32','f64','ascii','hex'].map(type => <option key={type}>{type}</option>)}</select><select aria-label="字段字节序" value={field.endian} onChange={event => updateField(index, { endian: event.target.value as SerialField['endian'] })}><option value="little">小端</option><option value="big">大端</option></select><input type="number" step="any" aria-label="比例系数" value={field.scale} onChange={event => updateField(index, { scale: Number(event.target.value) })} /></div>{selectedFrame && <output>{field.name}：{decodeField(selectedFrame, field)}</output>}</div>)}
-        </aside>
+        </aside>}
       </div>
       <div className="serial-assistant-send">
         <div className="serial-assistant-send-options">
-          <strong>发送</strong><span>电脑本机串口</span>
+          <strong>发送</strong>
+          <select value={sendMode} onChange={event => setSendMode(event.target.value as 'hex' | 'text')} aria-label="发送格式"><option value="hex">HEX</option><option value="text">文本</option></select>
           <select aria-label="历史与常用报文" value="" onChange={event => chooseCommand(event.target.value)}>
             <option value="">历史与常用报文</option>
             {savedCommands.length > 0 && <optgroup label="常用报文">{savedCommands.map((value, index) => <option key={`saved-${index}`} value={`saved:${index}`}>{value.mode.toUpperCase()} · {value.text}</option>)}</optgroup>}
             {sendHistory.length > 0 && <optgroup label="本次发送">{sendHistory.map((value, index) => <option key={`history-${index}`} value={`history:${index}`}>{value.mode.toUpperCase()} · {value.text}</option>)}</optgroup>}
           </select>
-          <button onClick={saveCommand} disabled={!sendText.trim()}>保存报文</button>
-          <label>DTR<select aria-label="DTR 电平" value={dtr === null ? 'keep' : dtr ? 'high' : 'low'} disabled={!connected} onChange={event => void changeLine('dtr', event.target.value === 'high')}><option value="keep" disabled={dtr !== null}>未设置</option><option value="low">低</option><option value="high">高</option></select></label>
-          <label>RTS<select aria-label="RTS 电平" value={rts === null ? 'keep' : rts ? 'high' : 'low'} disabled={!connected} onChange={event => void changeLine('rts', event.target.value === 'high')}><option value="keep" disabled={rts !== null}>未设置</option><option value="low">低</option><option value="high">高</option></select></label>
+          <button onClick={saveCommand} disabled={!sendText.trim()}><SerialAssistantIcon name="save" />保存报文</button>
         </div>
         <div className="serial-assistant-send-input">
-          <select value={sendMode} onChange={event => setSendMode(event.target.value as 'hex' | 'text')} aria-label="发送格式"><option value="hex">HEX</option><option value="text">文本</option></select>
-          <input value={sendText} onChange={event => setSendText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void send(); } }} placeholder={sendMode === 'hex' ? '例如 AA 55 01 00' : '输入要发送的文本'} aria-label="发送内容" />
-          <select value={lineEnding} disabled={sendMode === 'hex'} onChange={event => setLineEnding(event.target.value as typeof lineEnding)} aria-label="换行方式"><option value="none">不追加换行</option><option value="lf">LF</option><option value="cr">CR</option><option value="crlf">CRLF</option></select>
-          <button className="serial-assistant-primary" disabled={!connected || !sendText.trim()} onClick={() => void send()}>发送 ↵</button>
-          <label>间隔 ms<input type="number" min="50" step="50" value={repeatMs} onChange={event => setRepeatMs(Number(event.target.value))} /></label>
-          <button disabled={!connected || !sendText.trim() || repeatMs < 50} onClick={() => setRepeating(value => !value)}>{repeating ? '停止定时' : '定时发送'}</button>
+          <textarea value={sendText} onChange={event => setSendText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={sendMode === 'hex' ? '例如 AA 55 01 00' : '输入要发送的文本，Shift + Enter 换行'} aria-label="发送内容" spellCheck={false} />
+          <button className="serial-assistant-primary" disabled={!canSend || !sendText.trim()} onClick={() => void send()}><SerialAssistantIcon name="send" />发送</button>
+        </div>
+        <div className="serial-assistant-send-settings">
+          <label>换行<select value={lineEnding} disabled={sendMode === 'hex'} onChange={event => setLineEnding(event.target.value as typeof lineEnding)} aria-label="换行方式"><option value="none">不追加</option><option value="lf">LF</option><option value="cr">CR</option><option value="crlf">CRLF</option></select></label>
+          <label>间隔<input type="number" min="50" step="50" value={repeatMs} onChange={event => setRepeatMs(Number(event.target.value))} aria-label="定时发送间隔" />ms</label>
+          <button disabled={!canSend || !sendText.trim() || !Number.isFinite(repeatMs) || repeatMs < 50} onClick={() => setRepeating(value => !value)}><SerialAssistantIcon name="timer" />{repeating ? '停止定时' : '定时发送'}</button>
         </div>
       </div>
-      <footer className="serial-assistant-status"><span>{connected ? `● 已连接 · ${config.path} · ${config.baudRate} ${config.dataBits}${config.parity === 'none' ? 'N' : config.parity === 'even' ? 'E' : 'O'}${config.stopBits}` : offlinePath ? `○ 离线记录 · ${offlinePath.split('/').pop()}` : '○ 未连接 · 仅访问电脑本机串口'}</span><span>RX {formatBytes(rxBytes)}　TX {formatBytes(txBytes)}　{recording ? '● 记录中' : '记录未开始'}</span></footer>
+      </div>
+      </div>
+      <footer className="serial-assistant-status"><span>{connectionStatus}</span><span>RX {formatBytes(rxBytes)}　TX {formatBytes(txBytes)}　{recording ? '● 记录中' : '记录未开始'}</span></footer>
       {(error || notice) && <div className={`serial-assistant-message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error || notice}<button onClick={() => { setError(''); setNotice(''); }} aria-label="关闭提示">×</button></div>}
     </section>
   </div>;

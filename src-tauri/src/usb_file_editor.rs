@@ -53,36 +53,36 @@ pub struct BuiltInSaveResult {
 }
 
 pub fn open_builtin(path: &str) -> Result<BuiltInDocument, String> {
-    crate::usb_file::validate_editable_file(path)?;
-    if crate::usb_file::stat(path)?.size > BUILTIN_TEXT_LIMIT as u64 {
+    crate::sim_files::validate_editable_file(path)?;
+    if crate::sim_files::stat(path)?.size > BUILTIN_TEXT_LIMIT as u64 {
         return Err("文件超过内置编辑器的 4 MiB 限制".into());
     }
-    let bytes = crate::usb_file::read_limited(path, BUILTIN_TEXT_LIMIT)?;
+    let bytes = crate::sim_files::read_limited(path, BUILTIN_TEXT_LIMIT)?;
     if bytes.contains(&0) {
         return Err("内置编辑器仅支持 UTF-8 文本文件".into());
     }
     let size = bytes.len() as u64;
-    let checksum = crate::usb_file::crc32(&bytes);
+    let checksum = crate::sim_files::crc32(&bytes);
     let content = String::from_utf8(bytes).map_err(|_| "内置编辑器仅支持 UTF-8 文本文件")?;
     Ok(BuiltInDocument { path: path.to_owned(), content, size, checksum })
 }
 
 pub fn save_builtin(path: &str, content: String, expected_size: u64, expected_checksum: u32)
     -> Result<BuiltInSaveResult, String> {
-    crate::usb_file::validate_editable_file(path)?;
+    crate::sim_files::validate_editable_file(path)?;
     let bytes = content.as_bytes();
     if bytes.len() > BUILTIN_TEXT_LIMIT {
         return Err("文件超过内置编辑器的 4 MiB 限制".into());
     }
     let size = bytes.len() as u64;
-    let checksum = crate::usb_file::crc32(bytes);
+    let checksum = crate::sim_files::crc32(bytes);
     if (size, checksum) == (expected_size, expected_checksum) {
         return Ok(BuiltInSaveResult { changed: false, size, checksum });
     }
-    if crate::usb_file::fingerprint(path)? != (expected_size, expected_checksum) {
+    if crate::sim_files::fingerprint(path)? != (expected_size, expected_checksum) {
         return Err("设备上的文件已发生变化，未覆盖设备文件；请复制当前编辑内容后重新打开".into());
     }
-    crate::usb_file::write_all(path, bytes)?;
+    crate::sim_files::write_all(path, bytes)?;
     Ok(BuiltInSaveResult { changed: true, size, checksum })
 }
 
@@ -99,7 +99,7 @@ fn local_fingerprint(path: &Path) -> Result<(u64, u32), String> {
     loop {
         let count = file.read(&mut data).map_err(|error| error.to_string())?;
         if count == 0 { break; }
-        checksum = crate::usb_file::crc32_fold(checksum, &data[..count]);
+        checksum = crate::sim_files::crc32_fold(checksum, &data[..count]);
         size += count as u64;
     }
     Ok((size, !checksum))
@@ -154,7 +154,7 @@ pub fn save(id: &str) -> Result<EditorSaveResult, String> {
         }
         return Ok(EditorSaveResult { changed: false, size: local.0 });
     }
-    let remote = crate::usb_file::fingerprint(&session.info.remote_path)?;
+    let remote = crate::sim_files::fingerprint(&session.info.remote_path)?;
     if remote != session.baseline {
         return Err("设备上的文件已发生变化；本地副本仍保留，请先处理冲突".into());
     }
@@ -172,7 +172,7 @@ pub fn save(id: &str) -> Result<EditorSaveResult, String> {
         if copied != local || local_fingerprint(Path::new(&session.info.local_path))? != local {
             return Err("本地文件在保存期间发生变化，请再试一次".into());
         }
-        crate::usb_file::upload_from(&session.info.remote_path, &snapshot)?;
+        crate::sim_files::upload_from(&session.info.remote_path, &snapshot)?;
         Ok(copied)
     })();
     let _ = std::fs::remove_dir_all(&snapshot_dir);
@@ -238,7 +238,7 @@ pub async fn open(window: tauri::WebviewWindow, path: String, directory: String)
     let (local_path, size, checksum) = super::run_blocking({
         let path = path.clone();
         move || {
-            crate::usb_file::validate_editable_file(&path)?;
+            crate::sim_files::validate_editable_file(&path)?;
             super::download_usb_file(&path, &directory)
         }
     }).await?;

@@ -1,3 +1,4 @@
+#[path = "../src/disabled_xml.rs"] mod disabled_xml;
 #[path = "../src/xml_diagnostics.rs"] mod xml_diagnostics;
 #[path = "../src/expression_xml.rs"] mod expression_xml;
 #[path = "../src/xml_parser.rs"] mod xml_parser;

@@ -867,6 +867,7 @@ fn parse_component_section(
     for el in &elements {
         let file = get_attr(el, "file").unwrap_or("").to_string();
         let mut params = json!({});
+        if el.disabled { params["disabled"] = json!(true); }
         if !file.is_empty() {
             params["file"] = json!(file);
             // Preserve ownership for edits made in the signal-flow editor.
@@ -908,6 +909,7 @@ fn parse_component_section(
                         "name": f_name,
                         "expression": expr_val
                     });
+                    if f.disabled { item["disabled"] = json!(true); }
 
                     // Sibling <clipto>
                     if let Some(clip) = find_child(f, "clipto") {
@@ -943,6 +945,7 @@ fn parse_component_section(
                     "type": child.tag,
                     "name": item_name
                 });
+                if child.disabled { ch_item["disabled"] = json!(true); }
 
                 // Extract component-specific properties
                 let mut props = json!({});
@@ -1059,13 +1062,21 @@ fn parse_component_section(
                 ch_items.push(ch_item);
             }
 
+            // Functions and ordinary components are collected separately above;
+            // restore their actual XML execution order before exposing the graph.
+            ch_items.sort_by_key(|item| ch.children.iter().position(|child|
+                child.tag == item["type"].as_str().unwrap_or("") &&
+                get_attr(child, "name").unwrap_or("") == item["name"].as_str().unwrap_or("")
+            ).unwrap_or(usize::MAX));
             if !ch_name.is_empty() || !ch_items.is_empty() {
-                channel_data.push(json!({
+                let mut channel = json!({
                     "name": ch_name,
                     "attrs": ch.attrs.iter().filter(|(key, _)| key.as_str() != "name")
                         .map(|(key, value)| (key.clone(), json!(value))).collect::<serde_json::Map<_, _>>(),
                     "items": ch_items
-                }));
+                });
+                if ch.disabled { channel["disabled"] = json!(true); }
+                channel_data.push(channel);
             }
         }
 
@@ -1091,11 +1102,13 @@ fn parse_component_section(
                     };
                     let expression = xml_to_expr(body);
                     let expr_val = serde_json::to_value(&expression).unwrap_or(json!({"kind": "value", "value": 0}));
-                    top_func_items.push(json!({
+                    let mut item = json!({
                         "type": fk,
                         "name": f_name,
                         "expression": expr_val
-                    }));
+                    });
+                    if f.disabled { item["disabled"] = json!(true); }
+                    top_func_items.push(item);
                 }
             }
             if !top_func_items.is_empty() {
@@ -1199,6 +1212,7 @@ fn parse_aerodynamics(
                     "axis": axis_name,
                     "expression": expr_val
                 }));
+                if func.disabled { coefficients.last_mut().unwrap()["disabled"] = json!(true); }
             }
         }
     }
@@ -1226,6 +1240,7 @@ fn parse_aerodynamics(
                 "axis": "",
                 "expression": expr_val
             }));
+            if func.disabled { coefficients.last_mut().unwrap()["disabled"] = json!(true); }
         }
     }
 
@@ -1764,6 +1779,7 @@ fn resolve_section_files(
                             // The sub-file root should be the section element
                             if ref_root.tag == *section {
                                 let mut merged = ref_root.clone();
+                                merged.disabled = child.disabled;
                                 // Copy attributes from the reference element (except file)
                                 for (k, v) in &child.attrs {
                                     if k != "file" {

@@ -62,11 +62,51 @@ communication** control applies to both file transfer and live simulation:
 
 - `Auto` keeps network fallback available and uses USB files after a successful
   protocol PING.
-- `Network` uses UDP for telemetry/control and FTP for files.
+- `Network` uses UDP for telemetry/control, FTP for model synchronization,
+  and Telnet NSH for the SD/eMMC file manager.
 - `USB` uses only the private bulk endpoints.
 
 The selected mode is stored on the desktop computer and restored when the
 application starts.
+
+**Tools > Simulator Files** follows this selection for capacity, directory
+listing, upload/download, editing, rename, copy/move, and deletion. Network
+mode accesses both `/mnt/sdcard` and `/data` through the existing Telnet NSH
+service; the board's FTP root exposes only the SD card. Network uploads use
+temporary files, verify size and CRC through readback, then publish by rename.
+Commands fit the shipping firmware's 80-byte NSH input limit. NSH transfers
+are slower than USB, particularly for large binary files. Filenames must also
+be supported by the board filesystem; the current FAT configuration can reject
+some non-ASCII names even though UTF-8 file contents are preserved.
+
+Capacity is read through the selected transport. An unmounted SD card is
+reported as unavailable and refuses file access; if only data is mounted,
+opening the manager selects data. The editor's existing conflict check also
+applies to network saves. This requires rebuilding/reopening the desktop
+editor, with no board firmware update.
+
+Network discovery verifies the NuttX FTP service and its SD-card `jsbsim`
+directory. If that directory is absent, it also checks the built-in
+`/romfs/jsbsim` library through Telnet NSH. A board using only built-in models
+can therefore connect over Ethernet with an empty SD card. This desktop fix
+requires reopening the rebuilt editor; it does not require a firmware update
+or copying models onto the SD card.
+
+The USB NSH window waits up to 35 seconds for `ifup`, `ifdown`, and `ifconfig`.
+The matching firmware gives those commands 30 seconds to complete PHY
+negotiation. Other commands retain the short response budget. A command that
+exceeds its budget is reported as still running and is not forcibly deleted
+inside a driver. New NSH commands are rejected as busy until the old child
+exits; other USB services remain available after the response. `top` receives
+its native SIGINT request after one second. This requires the updated firmware
+and editor; increasing only the editor timeout cannot fix older firmware's
+one-second command cancellation.
+
+This command-channel fix does not add Ethernet cable detection. The current
+startup script brings up only `eth0`; `eth1` is the independent EQoS controller
+and needs its own `ifup eth1`. A failed PHY negotiation still requires another
+successful `ifup` on the affected interface. Confirm both cold boot without a
+cable followed by insertion and a normal cable-connected boot on the board.
 
 Board protocol v6 adds opcode `14` on the same file-service endpoints for the
 debug console mirror. A request has no payload and puts the last read byte

@@ -16,9 +16,17 @@ pub struct XmlElement {
     pub attrs: HashMap<String, String>,
     pub text: String,
     pub children: Vec<XmlElement>,
+    pub disabled: bool,
 }
 
 pub fn parse_xml_tree(xml: &str) -> Result<XmlElement, String> {
+    parse_xml_tree_depth(xml, 0)
+}
+
+use crate::disabled_xml::decode_disabled_comment;
+
+fn parse_xml_tree_depth(xml: &str, depth: usize) -> Result<XmlElement, String> {
+    if depth > 64 { return Err("已注释模块嵌套层数过多".into()); }
     crate::xml_diagnostics::validate(xml, "XML input")?;
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -42,6 +50,7 @@ pub fn parse_xml_tree(xml: &str) -> Result<XmlElement, String> {
                     attrs,
                     text: String::new(),
                     children: Vec::new(),
+                    disabled: false,
                 });
             }
             Ok(Event::End(_)) => {
@@ -77,11 +86,19 @@ pub fn parse_xml_tree(xml: &str) -> Result<XmlElement, String> {
                     attrs,
                     text: String::new(),
                     children: Vec::new(),
+                    disabled: false,
                 };
                 if stack.is_empty() {
                     root = Some(elem);
                 } else {
                     stack.last_mut().unwrap().children.push(elem);
+                }
+            }
+            Ok(Event::Comment(ref e)) => {
+                if let Some(payload) = decode_disabled_comment(&String::from_utf8_lossy(e))? {
+                    let mut element = parse_xml_tree_depth(&payload, depth + 1)?;
+                    element.disabled = true;
+                    if let Some(parent) = stack.last_mut() { parent.children.push(element); }
                 }
             }
             Ok(Event::Eof) => break,

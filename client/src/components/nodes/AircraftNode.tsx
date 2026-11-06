@@ -50,7 +50,7 @@ function AircraftNode({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={`aircraft-node ${selected ? 'selected' : ''} ${isModule ? 'aircraft-node-module' : ''}`}
+      className={`aircraft-node ${selected ? 'selected' : ''} ${isModule ? 'aircraft-node-module' : ''} ${nodeData.params?.disabled ? 'module-commented' : ''}`}
       style={{ borderColor: def.color }}
       title={isModule ? '双击进入模块信号流画布' : undefined}
     >
@@ -67,6 +67,7 @@ function AircraftNode({ data, selected }: NodeProps) {
       ))}
 
       {/* Header */}
+      {nodeData.params?.disabled && <span className="module-commented-badge">已注释</span>}
       <div className="node-header" style={{ background: def.color }}>
         <span className="node-icon"><AviationIcon type={nodeData.componentType} size={14} /></span>
         <span className="node-label">{nodeData.componentType === 'input' || nodeData.componentType === 'output'

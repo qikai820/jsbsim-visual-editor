@@ -48,11 +48,22 @@ fn visual_property(path: &str, id: u8) -> Option<String> {
     path = path.strip_prefix("jsbsim/").unwrap_or(path);
     let path = format!("/{path}");
     let selected =
-    ["/position/h-agl-ft", "/position/terrain-elevation-asl-ft", "/fcs/voliro_t/pitch-rad"]
+    ["/position/h-agl-ft", "/position/terrain-elevation-asl-ft", "/fcs/voliro_t/pitch-rad",
+        "/fcs/voliro_t/rpm-model/version", "/fcs/voliro_t/rpm-model/tail-calibrated"]
         .contains(&path.as_str())
         || (0..5).any(|i| {
             let index = if i == 0 { String::new() } else { format!("[{i}]") };
             path == format!("/fcs/esc-out{index}") || path == format!("/fcs/voliro_t/thrust-lbf{index}")
+                || path == format!("/fcs/voliro_t/rpm{index}")
+        })
+        || (0..8).any(|i| {
+            let index = if i == 0 { String::new() } else { format!("[{i}]") };
+            path == format!("/propulsion/engine{index}/propeller-rpm")
+                || path == format!("/propulsion/engine{index}/propeller-sense")
+        })
+        || (0..4).any(|i| {
+            let index = if i == 0 { String::new() } else { format!("[{i}]") };
+            path == format!("/fcs/gimbal-outer-rad{index}") || path == format!("/fcs/gimbal-inner-rad{index}")
         });
     selected.then_some(path)
 }
@@ -303,5 +314,48 @@ mod tests {
         let snapshots=cache.snapshots();
         assert_eq!(snapshots[0]["scene_epoch"],1);assert_eq!(snapshots[0]["timestamp"],0.14);
         assert_eq!(snapshots[1]["scene_epoch"],0);assert_eq!(snapshots[1]["timestamp"],40.0);
+    }
+    #[test]
+    fn morphquad_gimbals_and_eight_rotors_keep_age_and_instance() {
+        let mut cache=SceneTelemetry::default();let mut pose=frame(1.0,1);
+        pose["model"]=json!("MorphQuad");
+        pose["properties"]=json!({"/01/jsbsim/fcs[0]/gimbal-outer-rad[0]":3.14,
+            "/01/jsbsim/fcs[0]/gimbal-inner-rad[3]":-0.4,
+            "/01/jsbsim/propulsion[0]/engine[7]/propeller-rpm[0]":3500,
+            "/01/jsbsim/propulsion[0]/engine[7]/propeller-sense[0]":-1,
+            "/02/jsbsim/fcs[0]/gimbal-inner-rad[1]":99});
+        cache.ingest(&pose);let received=cache.entries[&1].received;
+        let snapshot=&cache.snapshots()[0];
+        assert_eq!(snapshot["properties"]["/fcs/gimbal-outer-rad"],3.14);
+        assert_eq!(snapshot["properties"]["/fcs/gimbal-inner-rad[3]"],-0.4);
+        assert_eq!(snapshot["properties"]["/propulsion/engine[7]/propeller-rpm"],3500);
+        assert_eq!(snapshot["properties"].as_object().unwrap().len(),4);
+        cache.ingest(&json!({"instance_id":"01","model":"MorphQuad","tree_generation":1,
+            "timestamp":1.1,"monitor":{"version":1,"sequence":1,"samples":{
+                "fcs/gimbal-outer-rad[3]":[0,1.1,false],"propulsion/engine[6]/propeller-rpm":[4200,1.1,false]}}}));
+        assert_eq!(cache.entries[&1].received,received);
+        assert_eq!(cache.snapshots()[0]["properties"]["/fcs/gimbal-outer-rad[3]"],0);
+        assert_eq!(cache.snapshots()[0]["properties"]["/propulsion/engine[6]/propeller-rpm"],4200);
+    }
+    #[test]
+    fn rotor_rpm_and_direction_keep_canonical_paths_and_independent_age() {
+        let mut cache=SceneTelemetry::default();let mut pose=frame(1.0,1);
+        pose["properties"]=json!({"/01/jsbsim/fcs[0]/voliro_t[0]/rpm[0]":0,
+            "/01/jsbsim/propulsion[0]/engine[1]/propeller-rpm[0]":3500,
+            "/01/jsbsim/propulsion[0]/engine[1]/propeller-sense[0]":-1,
+            "/02/jsbsim/fcs[0]/voliro_t[0]/rpm[1]":9999});
+        cache.ingest(&pose);let received=cache.entries[&1].received;
+        let snapshot=&cache.snapshots()[0];
+        assert_eq!(snapshot["properties"]["/fcs/voliro_t/rpm"],0);
+        assert_eq!(snapshot["properties"]["/propulsion/engine[1]/propeller-rpm"],3500);
+        assert_eq!(snapshot["properties"].as_object().unwrap().len(),3);
+        cache.ingest(&json!({"instance_id":"01","model":"voliro_t","tree_generation":1,
+            "timestamp":1.1,"monitor":{"version":1,"sequence":1,"samples":{"fcs/voliro_t/rpm[4]":[-6200,1.1,false],
+                "fcs/voliro_t/rpm-model/version":[1,1.1,false],"fcs/voliro_t/rpm-model/tail-calibrated":[0,1.1,false]}}}));
+        assert_eq!(cache.entries[&1].received,received,"rotor sampling cannot refresh body pose");
+        assert_eq!(cache.snapshots()[0]["properties"]["/fcs/voliro_t/rpm[4]"],-6200);
+        assert_eq!(cache.snapshots()[0]["properties"]["/fcs/voliro_t/rpm-model/version"],1);
+        assert_eq!(cache.snapshots()[0]["properties"]["/fcs/voliro_t/rpm-model/tail-calibrated"],0);
+        cache.ingest(&frame(0.0,2));assert!(cache.snapshots()[0]["properties"].as_object().unwrap().is_empty());
     }
 }

@@ -35,6 +35,9 @@ import ExpressionEditor from './ExpressionEditor';
 import LutTablePreview from './LutTablePreview';
 import FormulaNotebook from './FormulaNotebook';
 import SignalPathInput from '../SignalPathInput';
+import NodeContextMenu from '../NodeContextMenu';
+import { moduleIsDisabled } from '../../utils/disabledXml';
+import { disabledGraph } from '../../utils/disabledGraph';
 
 const nodeTypes = {
   ...monitorNodeTypes,
@@ -60,6 +63,8 @@ interface ModuleExpressionCanvasProps {
   onChange?: (id: string, expr: ExprNode) => void;
   channels?: any[];
   baselineChannels?: any[] | null;
+  moduleDisabled?: boolean;
+  allowChannelDisable?: boolean;
   topLevelProps?: string[];
   propertyDefinitions?: { name: string; attrs?: Record<string, string> }[];
   onPropertyValueChange?: (name: string, value: string) => void;
@@ -418,6 +423,9 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   const [edges, setEdges] = useState<Edge[]>(initial.edges);
   const rootIdsRef = useRef<Record<string, string>>((initial as { rootIds?: Record<string, string> }).rootIds || {});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const [disabledChanged, setDisabledChanged] = useState(false);
   // In-canvas function expansion (MVP: at most one function expanded at a time).
   const [expandedFnId, setExpandedFnId] = useState<string | null>(null);
   const rfWrapper = useRef<HTMLDivElement>(null);
@@ -440,10 +448,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   }, []);
 
   const pendingIds = useMemo(() => props.baselineChannels === undefined ? new Set<string>() : pendingOperatorIds(nodes, props.baselineChannels), [nodes, props.baselineChannels]);
-  const monitor = useMonitorGraph(props.modelId || props.title || 'module', nodes, edges);
+  const disabledView = useMemo(() => disabledGraph(nodes, edges, props.moduleDisabled), [nodes, edges, props.moduleDisabled]);
+  const monitor = useMonitorGraph(props.modelId || props.title || 'module', disabledView.nodes, disabledView.edges);
   const displayedNodes = useMemo(() => monitor.nodes.map(node => pendingIds.has(node.id) ? { ...node, data: { ...node.data, pendingSync: true } } : node), [monitor.nodes, pendingIds]);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
+  const sourceChannelsRef = useRef(channels);
+  const committedChannelsRef = useRef(JSON.stringify(channels));
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
   const propertyValuesKey = JSON.stringify(props.propertyDefinitions || []);
@@ -498,16 +509,39 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // ── Signal-mode commit (recompute edges + report channel changes) ──
   const commitSignal = useCallback((nextNodes: any[]) => {
+    if (props.moduleDisabled) return;
     const { nodes: rn, edges: re } = recomputeGraph(nextNodes, edgesRef.current);
     const valuedNodes = withInitialPropertyValues(rn, props.propertyDefinitions);
     nodesRef.current = valuedNodes;
     edgesRef.current = re;
     setNodes(valuedNodes);
     setEdges(re);
-    const ch = graphToChannels(valuedNodes, re);
-    onChannelsChange?.(ch);
+    const ch = graphToChannels(valuedNodes, re, sourceChannelsRef.current);
+    const serialized = JSON.stringify(ch);
+    if (serialized !== committedChannelsRef.current) {
+      committedChannelsRef.current = serialized;
+      onChannelsChange?.(ch);
+    }
     persistLayout();
-  }, [onChannelsChange, persistLayout, propertyValuesKey]);
+  }, [onChannelsChange, persistLayout, propertyValuesKey, props.moduleDisabled]);
+
+  const toggleDisabled = useCallback((id: string, channel = false) => {
+    const target = nodesRef.current.find(node => node.id === id);
+    if (!target || props.moduleDisabled || target.data?.kind !== 'component') return;
+    if (!channel && target.data.channelDisabled) return;
+    const field = channel ? 'channelDisabled' : 'disabled';
+    const disabled = !target.data[field];
+    const changed = nodesRef.current.map(node => node.id === id || channel && node.data?.kind === 'component' && node.data.ch === target.data.ch
+      ? { ...node, data: { ...node.data, [field]: disabled } } : node);
+    // Collapse any expanded owner before rebuilding the signal graph.
+    const owners = new Set(changed.filter(node => node.data?.kind === 'component' && (node.id === id || channel && node.data.ch === target.data.ch)).map(node => node.id));
+    const next = changed.filter(node => !owners.has(String(node.data?.ownerId)) || node.data?.kind !== 'exprBlock')
+      .map(node => owners.has(node.id) ? { ...node, data: { ...node.data, expanded: false } } : node);
+    if (expandedFnId && owners.has(expandedFnId)) setExpandedFnId(null);
+    setEditingExprId(null); setLutPreviewId(null);
+    setDisabledChanged(true);
+    commitSignal(next);
+  }, [commitSignal, expandedFnId, props.moduleDisabled]);
 
   // ── Signal-edge bendpoints (waypoints) ──
   // Write waypoints to edges state only (no recompute), so a drag isn't blown
@@ -846,6 +880,10 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     setEdges(es => applyEdgeChanges(changes, es));
   }, []);
   const onConnect = useCallback((connection: Connection) => {
+    if (props.moduleDisabled || [connection.source, connection.target].some(id => {
+      const node = nodesRef.current.find(item => item.id === id);
+      return moduleIsDisabled(node?.data) || moduleIsDisabled(nodesRef.current.find(owner => owner.id === node?.data.ownerId)?.data);
+    })) return;
     if (isSignal) {
       const src: any = nodesRef.current.find(n => n.id === connection.source);
       const tgt: any = nodesRef.current.find(n => n.id === connection.target);
@@ -932,7 +970,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     }
     setEdges(es => addEdge({ ...connection, type: 'smoothstep', animated: false }, es));
     setTimeout(syncToTree, 0);
-  }, [isSignal, commitSignal, syncToTree, expSync]);
+  }, [isSignal, commitSignal, syncToTree, expSync, props.moduleDisabled]);
 
   const onNodeClick = useCallback((e: any, node: Node) => {
     // Expand/collapse a function block via its ⤢ button (event delegation).
@@ -948,6 +986,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   // Double-click a LUT to inspect its breakpoint grid; other functions open
   // the formula editor as before.
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
+    if (props.moduleDisabled || moduleIsDisabled(node.data)) { setSelectedNodeId(node.id); return; }
     const d = node.data;
     if (d?.kind === 'tablePreview') {
       setSelectedNodeId(node.id);
@@ -963,19 +1002,20 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       setSelectedNodeId(node.id);
       setEditingExprId(node.id);
     }
-  }, []);
+  }, [props.moduleDisabled]);
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
   }, []);
 
   // ── Signal-mode: update a component node's data ──
   const updateComponent = useCallback((id: string, patch: any) => {
+    if (props.moduleDisabled || moduleIsDisabled(nodesRef.current.find(node => node.id === id)?.data)) return;
     const next = nodesRef.current.map(n => {
       if (n.id !== id) return n;
       return { ...n, data: { ...n.data, ...patch } };
     });
     commitSignal(next);
-  }, [commitSignal]);
+  }, [commitSignal, props.moduleDisabled]);
 
   // ── Function expression editing (signal mode) ──
   const [editingExprId, setEditingExprId] = useState<string | null>(null);
@@ -999,11 +1039,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
 
   // ── Add / delete components (signal mode) ──
   const handleAddComponent = useCallback((type: string, dropPosition?: { x: number; y: number }) => {
+    if (props.moduleDisabled) return;
     if (type === 'scope') { addScopeInView(props.modelId || props.title || 'module', rfInstance.current, rfWrapper.current, dropPosition); return; }
     const meta = COMPONENT_META[type] || { label: type, icon: '•', color: '#64748b' };
     const id = `c-new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const inputs = type === 'constant' ? [] : SINGLE_INPUT_TYPES.has(type) ? [''] : ['', ''];
     const compProps: any = {};
+    const channel = nodesRef.current.find(node => node.data?.kind === 'component' && node.data.ch === 0)?.data;
     // A constant needs both a value and an output property before it can be
     // represented in JSBSim XML. Give a new block a usable, unique draft.
     let name = '';
@@ -1028,7 +1070,8 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         kind: 'component', itemType: type, name, outputSignal: name,
         inputs, expression: type === 'function' ? { kind: 'value', value: 0 } : undefined,
         compProps, ch: 0,
-        chName: String((nodesRef.current.find(node => (node.data as any)?.kind === 'component' && (node.data as any)?.ch === 0)?.data as any)?.chName || ''),
+        channelDisabled: !!channel?.channelDisabled, channelAttrs: channel?.channelAttrs,
+        chName: String(channel?.chName || ''),
         itemIdx: 0, meta,
       },
     };
@@ -1037,6 +1080,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   }, [commitSignal]);
 
   const createFormula = useCallback((name: string, expression: ExprNode) => {
+    if (props.moduleDisabled) return;
     const id = `c-formula-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const existing = nodesRef.current.find(node => node.data?.kind === 'component' &&
       (node.data as any).chName === '__JSBSIM_SYSTEM_TOP_LEVEL_FUNCTIONS__') ||
@@ -1049,13 +1093,14 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       id, type: 'signalBlock', position: { x: 400, y: 180 + nodesRef.current.length * 16 },
       data: { kind: 'component', itemType: 'function', name, outputSignal: name,
         inputs: collectPropertyNodes(expression).map(property => property.name), expression, compProps: {}, ch, chName, itemIdx: 0,
-        meta: COMPONENT_META.function },
+        meta: COMPONENT_META.function, channelDisabled: !!existing?.data.channelDisabled, channelAttrs: existing?.data.channelAttrs },
     };
     commitSignal([...nodesRef.current, node]);
     setSelectedNodeId(id);
   }, [commitSignal]);
 
   const handleDelete = useCallback(() => {
+    if (props.moduleDisabled) return;
     if (selectedNodeId && useSignalMonitorStore.getState().project.scopes.some(scope => scope.id === selectedNodeId)) { useSignalMonitorStore.getState().removeScope(selectedNodeId); setSelectedNodeId(null); return; }
     if (!selectedNodeId) return;
     const sel: any = nodesRef.current.find(n => n.id === selectedNodeId);
@@ -1088,7 +1133,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
     const next = nodesRef.current.filter(n => n.id !== selectedNodeId);
     commitSignal(next);
     setSelectedNodeId(null);
-  }, [selectedNodeId, commitSignal, expandedFnId, expSync]);
+  }, [selectedNodeId, commitSignal, expandedFnId, expSync, props.moduleDisabled]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1147,6 +1192,13 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
   }, []);
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
+  const contextTarget = nodes.find(node => node.id === contextMenu?.id);
+  const contextOwner = contextTarget?.data?.kind === 'component' ? contextTarget
+    : nodes.find(node => node.id === contextTarget?.data?.ownerId);
+  const selectedDisabled = !!selectedNode && moduleIsDisabled(disabledView.nodes.find(node => node.id === selectedNode.id)?.data);
+  const disabledSignals = selectedNode ? disabledView.edges.filter(edge => edge.source === selectedNode.id && edge.data?.moduleDisabled &&
+    !moduleIsDisabled(disabledView.nodes.find(node => node.id === edge.target)?.data)).map(edge => String(edge.data?.signal || edge.label || '')).filter(Boolean) : [];
+  const missingInputs = disabledView.nodes.find(node => node.id === selectedNodeId)?.data.disabledInputs as string[] | undefined;
   const selectedExpr = selectedNode?.data?.exprNode as ExprNode | undefined;
   const selectedIsRoot = !!(selectedNode?.data as any)?.isExprRoot;
   const hasExprs = !isSignal && expressions.some(e => e.expression && e.expression.kind);
@@ -1174,6 +1226,9 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       </div>
 
       {layoutError && <div role="status" style={{ padding: '6px 12px', color: '#b45309' }}>{layoutError}</div>}
+      {(disabledChanged || props.moduleDisabled) && <div className="module-structure-notice" role="status">
+        {props.moduleDisabled ? '所属模块已注释，内部为只读状态。返回主模型可取消注释。' : '注释和取消注释属于结构修改；保存到仿真机并重新加载模型后生效。'}
+      </div>}
 
       {isSignal && expandedFnId && (
         <div className="expr-subgraph-bar">
@@ -1188,7 +1243,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         </div>
       ) : (
       <div className={`expr-editor-main${hasFormulaView && formulaView ? ' expr-editor-main--formula' : ''}`}>
-        {isSignal ? (
+        {props.moduleDisabled ? null : isSignal ? (
           expandedFnId ? (
             <ExpressionPalette onAddBlock={handleAddExprBlock} />
           ) : (
@@ -1219,7 +1274,15 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             onNodeDragStop={onNodeDragStop}
             nodeTypes={nodeTypes}
             onInit={(instance) => { rfInstance.current = instance; props.onInit?.(instance); }}
-            onNodeClick={onNodeClick}
+            onNodeClick={(event, node) => {
+              if (props.moduleDisabled || moduleIsDisabled(node.data)) { setSelectedNodeId(node.id); return; }
+              onNodeClick(event, node);
+            }}
+            onNodeContextMenu={(event, node) => {
+              event.preventDefault(); event.stopPropagation();
+              setSelectedNodeId(node.id);
+              setContextMenu({ x: event.clientX, y: event.clientY, id: node.id });
+            }}
             onNodeDoubleClick={onNodeDoubleClick}
             onPaneClick={onPaneClick}
             fitView
@@ -1229,7 +1292,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             snapToGrid
             snapGrid={[20, 20]}
             nodesDraggable={!placing && !initializing}
-            nodesConnectable={!placing && !initializing}
+            nodesConnectable={!placing && !initializing && !props.moduleDisabled}
             elementsSelectable
             connectionMode={ConnectionMode.Loose}
             edgeTypes={edgeTypes}
@@ -1247,7 +1310,21 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
         </div>
 
         <div className="expr-props">
-          {editingExprId && editingNode ? (
+          {(disabledSignals.length > 0 || !!missingInputs?.length) && <div role="status" className="module-dependency-notice">
+            <strong>{disabledSignals.length ? '下游仍引用此模块输出' : '输入来自已注释模块'}</strong>
+            {[...new Set(disabledSignals.length ? disabledSignals : missingInputs)].map(signal => <code key={signal}>{signal}</code>)}
+          </div>}
+          {selectedDisabled ? <div className="module-disabled-panel">
+            <span className="module-status-badge">已注释 · 不参与计算</span>
+            {selectedNode?.data.kind === 'component' ? <fieldset disabled className="module-readonly-fields">
+              <ComponentPropertyPanel data={selectedNode.data} onChange={() => {}} onDelete={() => {}} />
+            </fieldset> : <p>{String(selectedNode?.data.name || selectedNode?.data.itemType || '模块')}</p>}
+            <p>位置、参数与连线已保留。</p>
+            <p>保存并重新加载模型后生效。</p>
+            <button className="module-enable-button" disabled={props.moduleDisabled} onClick={() => selectedNode && toggleDisabled(selectedNode.id, !!selectedNode.data.channelDisabled)}>
+              {selectedNode?.data.channelDisabled ? '取消所在通道注释' : '取消注释（启用）'}
+            </button>
+          </div> : editingExprId && editingNode ? (
             <ExpressionEditor
               expression={(editingNode.data as any).expression as ExprNode}
               baselineExpression={props.baselineChannels === undefined ? undefined : (props.baselineChannels ? (buildSignalGraph(props.baselineChannels).nodes.find(n => n.id === editingNode.id)?.data.expression as ExprNode | undefined) || null : null)}
@@ -1338,13 +1415,29 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
             </div>
           )}
         </div>
-        {hasFormulaView && formulaView && <FormulaNotebook nodes={nodes}
+        {hasFormulaView && formulaView && <FormulaNotebook nodes={nodes.filter(node => !props.moduleDisabled && !moduleIsDisabled(node.data))}
           onUpdate={(id, expression) => updateComponent(id, {
             expression, inputs: collectPropertyNodes(expression).map(property => property.name),
           })}
           onCreate={createFormula} />}
       </div>
       )}
+      {contextMenu && contextTarget && <NodeContextMenu {...contextMenu}
+        title={String(contextOwner?.data.name || contextTarget.data.name || '模块')}
+        onClose={closeContextMenu} actions={[
+          { label: '查看属性', run: () => setSelectedNodeId(contextOwner?.id || contextTarget.id) },
+          { label: `${contextOwner?.data.disabled ? '取消注释（启用）' : '注释模块（停用）'}${contextOwner && contextOwner.id !== contextTarget.id ? ' · 所属函数' : ''}`,
+            disabled: !contextOwner || !!props.moduleDisabled || !!contextOwner.data.channelDisabled,
+            hint: props.moduleDisabled ? '请先返回主模型取消所属模块注释' : contextOwner?.data.channelDisabled ? '请先取消所在通道注释' : !contextOwner ? '请选择完整组件；表达式算子需注释所属函数' : undefined,
+            run: () => contextOwner && toggleDisabled(contextOwner.id) },
+          ...(contextOwner && props.allowChannelDisable !== false && typeof contextOwner.data.ch === 'number' &&
+            contextOwner.data.chName !== '__JSBSIM_SYSTEM_TOP_LEVEL_FUNCTIONS__' ? [{
+              label: contextOwner.data.channelDisabled ? '取消所在通道注释' : '注释所在通道（停用）',
+              disabled: !!props.moduleDisabled,
+              run: () => toggleDisabled(contextOwner.id, true),
+            }] : []),
+          ...(contextOwner?.id === contextTarget.id && !props.moduleDisabled ? [{ label: '删除模块', danger: true, run: handleDelete }] : []),
+        ]} />}
       {lutPreviewNode && (
         <LutTablePreview
           title={String((lutPreviewNode.data as any).name || (lutPreviewNode.data as any).outputSignal || '插值表')}

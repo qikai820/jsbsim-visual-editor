@@ -70,7 +70,7 @@ fn mark_auto_usb_file_unhealthy() {
 
 /* In automatic mode, prefer USB only when the complete protocol responds.
  * The explicit modes are shared with simulation telemetry and control. */
-fn use_usb() -> bool {
+pub(crate) fn use_usb() -> bool {
     match transport::mode() {
         TransportMode::Usb => true,
         TransportMode::Network => false,

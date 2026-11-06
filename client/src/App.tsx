@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef, Component, type ReactNode, Suspense, lazy } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, Component, type ReactNode, Suspense, lazy } from 'react';
+import { disabledDependencies } from './utils/disabledGraph';
 import { ReactFlowProvider } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
 import RuntimeTuningPanel from './components/RuntimeTuningPanel';
@@ -65,6 +66,7 @@ function aeroCoefficientsToChannels(coefficients: any[]): any[] {
       type: containsTable(coefficient?.expression) ? 'aero_table' : 'function',
       name: coefficient?.name || `coefficient-${byAxis.get(axis)!.length + 1}`,
       expression: coefficient?.expression || { kind: 'value', value: 0 },
+      disabled: !!coefficient?.disabled,
     });
   }
   return [...byAxis.entries()].map(([name, items]) => ({ name, items }));
@@ -84,6 +86,7 @@ function channelsToAeroCoefficients(channels: any[], previous: any[]): any[] {
         axis,
         description: old?.description || '',
         expression: item?.expression || old?.expression || { kind: 'value', value: 0 },
+        ...(item?.disabled ? { disabled: true } : {}),
       });
     }
   }
@@ -212,6 +215,8 @@ function savedInstanceSlots(): Record<string, string> {
 function AppContent() {
   useEffect(installDialogDragging, []);
   const selectedNodeId = useFlowStore(state => state.selectedNodeId);
+  const modelNodes = useFlowStore(state => state.nodes);
+  const moduleDependencies = useMemo(() => disabledDependencies(modelNodes), [modelNodes]);
   const editingSubFileId = useFlowStore(state => state.editingSubFileId);
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
@@ -768,6 +773,10 @@ function AppContent() {
         hudVisible={hudVisible}
         onToggleHud={() => setHudVisible(value => !value)}
         onLog={(line) => setJsbsimLogs(lines => [...lines, line].slice(-200))} />
+      {workspace === 'editor' && moduleDependencies.length > 0 && <details className="module-structure-notice module-project-dependencies">
+        <summary>⚠ {moduleDependencies.length} 处信号引用来自已注释模块，请检查下游输入</summary>
+        {moduleDependencies.map((dependency, index) => <div key={index}><code>{dependency.signal}</code> → {dependency.consumer}</div>)}
+      </details>}
       {showLogCenter && <LogCenter onClose={() => setShowLogCenter(false)} />}
       <div className="main-content">
         {workspace === 'scene' ? (
@@ -809,6 +818,8 @@ function AppContent() {
             key={focusedModule.id}
             embedded
             mode="signal"
+            moduleDisabled={!!focusedModule.data.params.disabled}
+            allowChannelDisable={!focusedAero}
             initialOpenComponentId={sourceJump?.moduleId === focusedModule.id ? sourceJump.componentId : undefined}
             findPropertySource={(signal) => findPropertyProducer(signal)}
             onOpenPropertySource={(signal) => {

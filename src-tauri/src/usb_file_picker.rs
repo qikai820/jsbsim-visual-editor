@@ -58,7 +58,7 @@ fn collect_folder(source: &Path, relative: &str, destination: &str,
         let name = child.file_name().into_string()
             .map_err(|_| format!("文件名不是 UTF-8: {}", local_path.display()))?;
         let relative_path = if relative.is_empty() { name } else { format!("{relative}/{name}") };
-        crate::usb_file::managed_volume(&format!("{destination}/{relative_path}"))
+        crate::sim_files::managed_volume(&format!("{destination}/{relative_path}"))
             .map_err(|error| format!("{}: {error}", local_path.display()))?;
         let metadata = std::fs::symlink_metadata(&local_path)
             .map_err(|error| format!("读取 {} 失败: {error}", local_path.display()))?;
@@ -77,21 +77,21 @@ fn prepare_folder(source: PathBuf, directory: String) -> Result<PreparedFolder, 
     let metadata = std::fs::symlink_metadata(&source).map_err(|error| error.to_string())?;
     if !metadata.is_dir() { return Err("请选择普通文件夹，不能选择链接".into()); }
     let destination = remote_path(&directory, &source)?;
-    crate::usb_file::managed_volume(&destination)?;
+    crate::sim_files::managed_volume(&destination)?;
     let mut entries = Vec::new();
     collect_folder(&source, "", &destination, &mut entries)?;
     let files = entries.iter().filter(|entry| !entry.directory).count();
     let directories = entries.len() - files + 1;
     let bytes = entries.iter().map(|entry| entry.size).sum();
-    let identity = crate::usb_file::ping()?;
-    if identity != "lmx93-usb-file/4" && identity != "lmx93-usb-file/5" && identity != "lmx93-usb-file/6" {
+    let identity = crate::sim_files::ping()?;
+    if identity != crate::sim_files::NETWORK_IDENTITY && identity != "lmx93-usb-file/4" && identity != "lmx93-usb-file/5" && identity != "lmx93-usb-file/6" {
         return Err("文件夹上传需要 lmx93-usb-file/4 或更新板端固件".into());
     }
-    if identity != "lmx93-usb-file/5" && identity != "lmx93-usb-file/6" && (crate::usb_file::has_long_component(&destination) ||
+    if identity != crate::sim_files::NETWORK_IDENTITY && identity != "lmx93-usb-file/5" && identity != "lmx93-usb-file/6" && (crate::sim_files::has_long_component(&destination) ||
         entries.iter().any(|entry| entry.relative_path.split('/').any(|part| part.len() > 32))) {
         return Err("文件夹包含超过 32 字节的名称，需要升级至 lmx93-usb-file/5 板端固件".into());
     }
-    let siblings = crate::usb_file::list(&directory)?;
+    let siblings = crate::sim_files::list(&directory)?;
     let name = source.file_name().and_then(|name| name.to_str()).ok_or("文件夹名无效")?;
     let root = siblings.iter().find(|entry| entry.name == name);
     if root.is_some_and(|entry| !entry.directory) {
@@ -105,7 +105,7 @@ fn prepare_folder(source: PathBuf, directory: String) -> Result<PreparedFolder, 
             let parent_unavailable = unavailable.iter().any(|parent| entry.relative_path.starts_with(&format!("{parent}/")));
             if parent_unavailable { continue; }
             let remote = format!("{destination}/{}", entry.relative_path);
-            match crate::usb_file::stat(&remote) {
+            match crate::sim_files::stat(&remote) {
                 Ok(found) => {
                     existing.insert(entry.relative_path.clone(), found.directory);
                     if entry.directory && !found.directory { unavailable.push(entry.relative_path.clone()); }
@@ -217,7 +217,7 @@ pub async fn pick_and_upload(
     match selected {
         Some(source) => super::run_blocking(move || {
             let remote_path = remote_path(&directory, &source)?;
-            let size = crate::usb_file::upload_from(&remote_path, &source)?;
+            let size = crate::sim_files::upload_from(&remote_path, &source)?;
             Ok(Some(UsbUploadSelection {
                 local_path: source.to_string_lossy().into_owned(),
                 remote_path,
@@ -255,17 +255,17 @@ fn upload_folder(prepared: PreparedFolder, policy: ConflictPolicy,
         }
     }
     let staging = if root_exists { None } else {
-        let siblings = crate::usb_file::list(&directory)?;
+        let siblings = crate::sim_files::list(&directory)?;
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?.subsec_nanos();
         let path = (0..16).map(|attempt| format!("{directory}/.usbup{:08x}", seed.wrapping_add(attempt)))
             .find(|candidate| !siblings.iter().any(|entry| candidate.rsplit('/').next() == Some(entry.name.as_str())))
             .ok_or("无法分配临时上传目录")?;
         for entry in &entries {
-            crate::usb_file::managed_volume(&format!("{path}/{}", entry.relative_path))
+            crate::sim_files::managed_volume(&format!("{path}/{}", entry.relative_path))
                 .map_err(|error| format!("临时上传目录无法容纳 {}: {error}", entry.relative_path))?;
         }
-        crate::usb_file::mkdir(&path)?;
+        crate::sim_files::mkdir(&path)?;
         Some(path)
     };
     let base = staging.as_deref().unwrap_or(&destination);
@@ -281,7 +281,7 @@ fn upload_folder(prepared: PreparedFolder, policy: ConflictPolicy,
             }
             let remote = format!("{base}/{}", entry.relative_path);
             let found = if root_exists {
-                match crate::usb_file::stat(&remote) {
+                match crate::sim_files::stat(&remote) {
                     Ok(found) => Some(found),
                     Err(error) if error.contains("errno 2") => None,
                     Err(error) => return Err(format!("检查 {remote} 失败: {error}")),
@@ -303,7 +303,7 @@ fn upload_folder(prepared: PreparedFolder, policy: ConflictPolicy,
                 }
             }
             if entry.directory {
-                if found.is_none() { crate::usb_file::mkdir(&remote)?; }
+                if found.is_none() { crate::sim_files::mkdir(&remote)?; }
             } else {
                 let actual_size = std::fs::metadata(&entry.local_path)
                     .map_err(|error| error.to_string())?.len();
@@ -313,20 +313,20 @@ fn upload_folder(prepared: PreparedFolder, policy: ConflictPolicy,
                 let _ = window.emit("usb-folder-upload-progress", serde_json::json!({
                     "path": entry.relative_path, "completedFiles": completed_files, "totalFiles": files,
                 }));
-                crate::usb_file::upload_from(&remote, &entry.local_path)
+                crate::sim_files::upload_from(&remote, &entry.local_path)
                     .map_err(|error| format!("上传 {} 失败: {error}", entry.relative_path))?;
                 if found.is_some() { overwritten += 1; }
                 completed_files += 1;
             }
         }
         if let Some(staging) = &staging {
-            crate::usb_file::transfer(staging, &destination, true)?;
+            crate::sim_files::transfer(staging, &destination, true)?;
         }
         Ok::<(), String>(())
     })();
     if let Err(error) = result {
         if let Some(staging) = &staging {
-            return match crate::usb_file::remove_tree(staging, true) {
+            return match crate::sim_files::remove_tree(staging, true) {
                 Ok(()) => Err(error),
                 Err(cleanup) => Err(format!("{error}；临时目录 {staging} 清理失败: {cleanup}")),
             };

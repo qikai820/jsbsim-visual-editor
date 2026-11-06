@@ -3,7 +3,7 @@
 
 use quick_xml::{events::{BytesStart, Event}, Reader, XmlVersion};
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 pub struct RemoteXml {
     pub path: String,
@@ -24,13 +24,27 @@ fn push_reference(element: &BytesStart<'_>, output: &mut Vec<String>) -> Result<
     Ok(())
 }
 
-fn references(xml: &str) -> Result<Vec<String>, String> {
+fn references(xml: &str) -> Result<Vec<(String, bool)>, String> {
+    references_depth(xml, 0)
+}
+
+fn references_depth(xml: &str, depth: usize) -> Result<Vec<(String, bool)>, String> {
+    if depth > 64 { return Err("已注释模块嵌套层数过多".into()); }
     let mut reader = Reader::from_str(xml);
     let mut buffer = Vec::new();
     let mut output = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element) | Event::Empty(element)) => push_reference(&element, &mut output)?,
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                let mut files = Vec::new();
+                push_reference(&element, &mut files)?;
+                output.extend(files.into_iter().map(|file| (file, false)));
+            },
+            Ok(Event::Comment(comment)) => {
+                if let Some(payload) = crate::disabled_xml::decode_disabled_comment(&String::from_utf8_lossy(&comment))? {
+                    output.extend(references_depth(&payload, depth + 1)?.into_iter().map(|(file, _)| (file, true)));
+                }
+            },
             Ok(Event::Eof) => break,
             Err(error) => return Err(error.to_string()),
             _ => {}
@@ -113,14 +127,15 @@ where F: FnMut(&str) -> Result<String, String> {
     }
     let main_path = format!("aircraft/{model}/{model}.xml");
     let main = download(&main_path).map_err(|error| format!("无法读取 {main_path}: {error}"))?;
-    let mut queue = VecDeque::from([(main_path.clone(), main.clone())]);
-    let mut seen = HashSet::from([main_path]);
-    let mut files = Vec::new();
-    while let Some((parent, xml)) = queue.pop_front() {
+    let mut queue = VecDeque::from([(main_path.clone(), main.clone(), false)]);
+    let mut seen = HashMap::from([(main_path, false)]);
+    let mut files: Vec<RemoteXml> = Vec::new();
+    while let Some((parent, xml, parent_optional)) = queue.pop_front() {
         crate::xml_diagnostics::validate(&xml, &parent)?;
-        for reference in references(&xml).map_err(|error| format!("{parent} XML 解析失败: {error}"))? {
+        for (reference, optional) in references(&xml).map_err(|error| format!("{parent} XML 解析失败: {error}"))? {
+            let optional = optional || parent_optional;
             let paths = candidates(model, &parent, &reference)?;
-            if paths.iter().any(|path| seen.contains(path)) { continue; }
+            if paths.iter().any(|path| seen.get(path).is_some_and(|previous_optional| !*previous_optional || optional)) { continue; }
             let mut failures = Vec::new();
             let mut found = None;
             for path in &paths {
@@ -130,12 +145,13 @@ where F: FnMut(&str) -> Result<String, String> {
                 }
             }
             let Some((path, content)) = found else {
+                if optional { continue; }
                 return Err(format!("模型 {model} 加载不完整：{parent} 引用 {reference}，但未能读取。{}", failures.join("；")));
             };
             if files.len() >= 128 { return Err(format!("模型 {model} 引用的 XML 文件超过 128 个")); }
-            seen.insert(path.clone());
-            queue.push_back((path.clone(), content.clone()));
-            files.push(RemoteXml { path, xml: content });
+            seen.insert(path.clone(), optional);
+            queue.push_back((path.clone(), content.clone(), optional));
+            if !files.iter().any(|file| file.path == path) { files.push(RemoteXml { path, xml: content }); }
         }
     }
     Ok((main, files))

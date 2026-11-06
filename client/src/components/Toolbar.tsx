@@ -21,6 +21,8 @@ import SerialAssistantDialog from './SerialAssistantDialog';
 import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
 import ModelSyncBar from './ModelSyncBar';
+import ModelPullDialog from './ModelPullDialog';
+import { comparePulledModel } from '../utils/modelPull';
 import { useSignalMonitorStore } from '../store/signalMonitorStore';
 import { isTauri, selectModelImport, getSimulatorTransportMode, getPlotJugglerRate, setPlotJugglerRate, startPlotJuggler } from '../utils/tauriApi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -134,7 +136,7 @@ async function loadRemoteXmlForReview(path: string): Promise<string | null> {
   }
 }
 
-async function withPwmCaptures(data: any, model: string): Promise<any> {
+async function withPwmCaptures(data: any, model: string, onSource?: (path: string, content: string) => void): Promise<any> {
   let source: string;
   try {
     source = (await ftpDownloadXml(pwmCapturePath(model))).content;
@@ -143,6 +145,7 @@ async function withPwmCaptures(data: any, model: string): Promise<any> {
     if (parent.files.some(file => file.toLowerCase() === `${model}.pwm.xml`.toLowerCase())) throw error;
     return data;
   }
+  onSource?.(pwmCapturePath(model), source);
   const captures = parsePwmCaptures(source);
   const existing = Array.isArray(data.nodes) ? data.nodes : [];
   const right = existing.reduce((x: number, node: any) => Math.max(x, Number(node.position?.x) || 0), 0) + 320;
@@ -153,11 +156,12 @@ async function withPwmCaptures(data: any, model: string): Promise<any> {
   return { ...data, nodes: [...existing, ...pwmNodes] };
 }
 
-async function withSerialSensors(data: any, model: string): Promise<any> {
+async function withSerialSensors(data: any, model: string, onSource?: (path: string, content: string) => void): Promise<any> {
   let source = '';
   try {
     const remote = await ftpDownloadXml(serialSensorPath(model));
     source = remote.content;
+    onSource?.(serialSensorPath(model), source);
   } catch (error) {
     const parent = await listRemoteXmlParent('config/models');
     if (parent.files.some(file => file.toLowerCase() === `${model}.serial.xml`.toLowerCase())) {
@@ -308,6 +312,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [showNshConsole, setShowNshConsole] = useState(false);
   const [showSerialAssistant, setShowSerialAssistant] = useState(false);
   const [showUsbFiles, setShowUsbFiles] = useState(false);
+  const [showModelPull, setShowModelPull] = useState(false);
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
   const [plotJugglerOpening, setPlotJugglerOpening] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
@@ -384,6 +389,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [syncError, setSyncError] = useState('');
   useEffect(() => setSyncError(''), [syncModel, hasLoadedModel]);
   const syncInFlight = useRef(false);
+  const pullContext = useRef('');
+  pullContext.current = JSON.stringify([activeInstance, syncModel, workspace]);
+  const [pullReview, setPullReview] = useState<(ReturnType<typeof comparePulledModel> & {
+    model: string; resolve: (accepted: boolean) => void;
+  }) | null>(null);
   const [syncReview, setSyncReview] = useState<{
     changes: RemoteXmlChange[]; assets: Array<{ name: string; size: number }>;
     resolve: (accepted: boolean) => void;
@@ -785,6 +795,94 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     catch (error: any) { if (error.name !== 'ModelSyncCancelledError') alert(`保存到仿真机失败：${error.message || error}`); }
   };
 
+  const handlePullModel = async (model: string) => {
+    if (syncInFlight.current) throw new Error('模型对比或保存正在进行，请先完成当前操作。');
+    syncInFlight.current = true;
+    setLoading(true);
+    setSyncError('');
+    try {
+      const state = useFlowStore.getState();
+      const snapshot: ModelProject = { aircraft: state.aircraft, nodes: state.nodes, edges: state.edges,
+        subFiles: state.subFiles, xmlFiles: state.xmlFiles };
+      const fingerprint = modelSyncFingerprint(snapshot), context = pullContext.current;
+      const checkCurrent = () => {
+        if (pullContext.current !== context || modelSyncFingerprint(useFlowStore.getState()) !== fingerprint) {
+          throw new Error('拉取或对比期间上位机模型已变化，请重新拉取并对比。');
+        }
+      };
+      // Prepare actual local edits, including graph-only changes, before any
+      // replacement. Never load the incoming graph merely to preview it.
+      const local = snapshot.nodes.length || snapshot.xmlFiles?.length
+        ? await prepareModelXml(snapshot, readRemoteBaseline(syncModel) || state.xmlEditBaseline || snapshot, syncModel,
+          { generateXml, generateSubfile, originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' }) : [];
+      const hardware = new Map<string, string>();
+      const onSource = (path: string, content: string) => { hardware.set(path, content); };
+      const data = await withEnvironment(await withPwmCaptures(await withSerialSensors(await loadAircraft(model), model, onSource), model, onSource), model);
+      if (!Array.isArray(data.nodes) || !Array.isArray(data.edges) || !data.sourceXml ||
+          !data.xmlFiles?.some((file: any) => file.category === 'main')) {
+        throw new Error('仿真机返回的模型不完整，无法覆盖上位机模型。');
+      }
+      const incoming = await prepareModelXml(data, data, model, { generateXml, generateSubfile });
+      for (const [path, content] of hardware) {
+        const file = incoming.find(file => file.path === path);
+        if (file) file.content = content;
+        else incoming.push({ path, content, category: 'hardware', dirty: false });
+      }
+      // Only the environment group is represented by the editor; other runtime
+      // settings in the simulator's JSON are not part of this replacement.
+      for (const [project, documents, directory] of [[snapshot, local, syncModel], [data, incoming, model]] as const) {
+        const environment = environmentFromProject(project);
+        if (environment) documents.push({ path: `config/models/${directory}.json`, category: 'environment',
+          content: JSON.stringify({ environment }, null, 2), dirty: false });
+      }
+      checkCurrent();
+      const comparison = comparePulledModel(local, incoming);
+      setShowModelPull(false);
+      setLoading(false);
+      const accepted = await new Promise<boolean>(resolve => setPullReview({ ...comparison, model, resolve }));
+      setPullReview(null);
+      if (!accepted) return;
+      checkCurrent();
+      setLoading(true);
+      // Roll back both the editor and its caches if persistence fails. The
+      // baseline advances only after the user accepts this downloaded snapshot.
+      const previous = useFlowStore.getState(), monitoring = useSignalMonitorStore.getState().project;
+      const keys = ['jsbsim-project', 'jsbsim-raw-xml', 'jsbsim-reference-files', 'jsbsim-remote-model',
+        'jsbsim-import-assets', 'jsbsim-import-directory', 'jsbsim-cache-version', remoteBaselineKey(model)];
+      const cache = keys.map(key => [key, localStorage.getItem(key)] as const);
+      try {
+        loadProject(data);
+        const saved = projectFingerprint(useFlowStore.getState());
+        localStorage.setItem('jsbsim-project', saved);
+        localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
+        localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
+        localStorage.setItem('jsbsim-remote-model', model);
+        localStorage.setItem('jsbsim-cache-version', '2');
+        localStorage.removeItem('jsbsim-import-assets');
+        localStorage.removeItem('jsbsim-import-directory');
+        setRemoteBaseline(model, saved);
+      } catch (error) {
+        useFlowStore.setState(previous);
+        useSignalMonitorStore.getState().load(monitoring);
+        for (const [key, value] of cache) {
+          try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch { /* best effort after a storage failure */ }
+        }
+        throw error;
+      }
+      clearImportedSubFiles();
+      setLibrarySimulationModel(model);
+      onAssignInstanceModel?.(activeInstance, model);
+      onModelContextChange?.();
+      onLog?.(`[${new Date().toLocaleTimeString()}] 已确认使用仿真机模型覆盖上位机：${model}`);
+    } catch (error: any) {
+      setSyncError(`拉取模型失败：${error.message || error}`);
+      throw error;
+    } finally {
+      setLoading(false);
+      syncInFlight.current = false;
+    }
+  };
+
   const handleDiscardLocalChanges = (): string | null => {
     if (loading || syncInFlight.current || !editBaseline) return '当前无法恢复模型，请先完成正在进行的操作。';
     try {
@@ -1068,6 +1166,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
                 <div className="file-menu-separator" />
                 <button role="menuitem" onClick={() => { void handleSave(); setShowFileMenu(false); }}>💾 {isZh ? '保存' : 'Save'}</button>
                 <button role="menuitem" onClick={() => { void handleSaveToSimulator(); setShowFileMenu(false); }}>🛰️ {isZh ? '保存到仿真机' : 'Save to Simulator'}</button>
+                <button role="menuitem" disabled={loading || !!syncReview || !!pullReview} onClick={() => { setShowModelPull(true); setShowFileMenu(false); }}>📡 {isZh ? '从仿真机拉取模型' : 'Pull Model from Simulator'}</button>
                 <button role="menuitem" onClick={() => { void handleLoad(); setShowFileMenu(false); }}>📂 {isZh ? '打开工程' : 'Open Project'}</button>
                 {recentProjects.length > 0 && <>
                   <div className="file-menu-separator" />
@@ -1121,7 +1220,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
-              <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口助手（本机）' : 'Serial Assistant (Local)'}</button>
+              <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口与网口助手（本机）' : 'Serial & Network Assistant (Local)'}</button>
               <div className="file-menu-separator" />
               <button role="menuitem" onClick={() => { setShowJ23Guide(true); setShowToolsMenu(false); }}>📖 {isZh ? '使用说明' : 'User Guide'}</button>
             </div>}
@@ -1157,13 +1256,25 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         onClose={() => setShowSimulationConfig(false)} />}
       {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} toolbarAppearance={toolbarAppearance} onToolbarAppearanceChange={updateToolbarAppearance} />}
       {showJ23Guide && <J23GuideDialog onClose={() => setShowJ23Guide(false)} />}
+      {showModelPull && <ModelPullDialog initialModel={hasLoadedModel ? syncModel : instanceSlots[activeInstance] || remoteModelDirectory}
+        onPull={handlePullModel} onClose={() => setShowModelPull(false)} />}
 
       {visiblePendingPaths.length > 0 && <ModelSyncBar key={syncModel} paths={visiblePendingPaths}
-        initialUpload={needsInitialUpload} busy={loading || !!syncReview}
+        initialUpload={needsInitialUpload} busy={loading || !!syncReview || !!pullReview}
         canDiscard={!!editBaseline && (modifiedXmlFiles.length > 0 || environmentPending.length > 0)}
         onSave={() => void handleSaveToSimulator()} onDiscard={handleDiscardLocalChanges} />}
       {(syncError || pendingPreparation.revision === pendingRevision && pendingPreparation.error) &&
         <div className="model-sync-error" role="alert">{syncError || pendingPreparation.error}</div>}
+      {pullReview && <XmlSourceBrowser documents={pullReview.documents} comparisonDirection="pull"
+        initialPath={pullReview.documents.find(file => file.dirty)?.path}
+        title={`从仿真机拉取模型 · ${pullReview.model}`}
+        subtitle={`新增 ${pullReview.counts.added} · 修改 ${pullReview.counts.modified} · 移除 ${pullReview.counts.removed} · 文本变化 ${pullReview.counts.text} · 一致 ${pullReview.counts.same}；左侧上位机当前版本 → 右侧本次拉取版本`}
+        remoteContents={pullReview.localContents} onClose={() => pullReview.resolve(false)}
+        footer={<footer className="model-sync-review-footer model-pull-review-footer">
+          <div>确认后将用本次拉取的模型替换上位机当前模型及本地缓存，当前未保存的修改会被覆盖。已另存的工程文件需通过“保存”更新。</div>
+          <button onClick={() => pullReview.resolve(false)}>取消，保留上位机模型</button>
+          <button className="primary" onClick={() => pullReview.resolve(true)}>确认覆盖上位机模型</button>
+        </footer>} />}
       {syncReview && <XmlSourceBrowser documents={syncReview.changes}
         title="对比并保存到仿真机" subtitle={`${syncReview.changes.length} 个 XML 将写入；请逐项查看本机编辑结果与仿真机版本的差异`}
         remoteContents={Object.fromEntries(syncReview.changes.map(file => [file.path, file.remote]))}

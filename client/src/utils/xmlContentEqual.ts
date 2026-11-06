@@ -1,4 +1,5 @@
 import { childXmlRule, xmlAttributeKind, xmlElementRule, type XmlElementRule, type XmlValueKind } from './jsbsimXmlRules';
+import { decodeDisabledComment } from './disabledXml';
 
 /** Exact decimal normalization; never round through Number or use an epsilon.
  * Keep arbitrarily large integers/exponents and subnormal decimal differences.
@@ -105,7 +106,12 @@ export function parseXmlSemantics(xml: string, context?: Element): XmlSemanticDo
   const children = (parent: Node, preserve = false, parentRule?: XmlElementRule): SemanticNode[] => {
     const result: SemanticNode[] = [];
     for (const node of Array.from(parent.childNodes)) {
-      if (node.nodeType === Node.COMMENT_NODE) { comments.push(node.nodeValue || ''); continue; }
+      if (node.nodeType === Node.COMMENT_NODE) {
+        const text = node.nodeValue || '';
+        if (decodeDisabledComment(text) !== null) result.push({ kind: 'markup', value: serializer.serializeToString(node) });
+        else comments.push(text);
+        continue;
+      }
       if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE) {
         const value = node.nodeValue || '';
         const previous = result[result.length - 1];

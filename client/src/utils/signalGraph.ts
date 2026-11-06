@@ -25,6 +25,8 @@ export interface ChannelItem {
   items?: ChannelItem[];
   cliptoMin?: string;
   cliptoMax?: string;
+  disabled?: boolean;
+  attrs?: Record<string, string>;
 }
 
 export interface SignalGraph {
@@ -522,6 +524,10 @@ export function buildSignalGraph(
         cliptoMin: e.item.cliptoMin,
         cliptoMax: e.item.cliptoMax,
         compProps,
+        disabled: !!e.item.disabled,
+        channelDisabled: !!channels[e.ch]?.disabled,
+        channelAttrs: channels[e.ch]?.attrs,
+        sourceChannel: { ...channels[e.ch], items: [] },
         ch: e.ch,
         chName: e.chName,
         itemIdx: 0,
@@ -529,6 +535,10 @@ export function buildSignalGraph(
         hasMultipleOutputs: outputConsumers > 1,  // Fan-out indicator
       },
     });
+    const data = nodes[nodes.length - 1].data;
+    // The canvas adds display defaults and normalizes port representations.
+    // Keep an independent snapshot so only actual edits reach the source model.
+    data.sourceItem = structuredClone({ original: e.item, projection: serializeComponent(data, inputs) });
   }
 
   // Signal endpoint nodes
@@ -796,7 +806,61 @@ function cloneExpr(e: any): any {
   return e ? JSON.parse(JSON.stringify(e)) : { kind: 'value', value: 0 };
 }
 
-export function graphToChannels(nodes: any[], edges: any[]): any[] {
+function serializeComponent(d: any, inputs: string[]): any {
+  let item: any;
+  if (d.itemType === 'function' || d.itemType === 'fcs_function' || d.itemType === 'aero_table') {
+    const expr = cloneExpr(d.expression);
+    setFunctionInputs(expr, inputs);
+    item = { type: d.itemType, name: d.name || '', expression: expr };
+    if (d.hasExplicitOutput && d.outputSignal) item.output = d.outputSignal;
+    if (d.cliptoMin !== undefined) item.cliptoMin = d.cliptoMin;
+    if (d.cliptoMax !== undefined) item.cliptoMax = d.cliptoMax;
+  } else {
+    const compProps = { ...(d.compProps || {}) };
+    delete compProps.input;
+    delete compProps.output;
+    delete compProps.properties;
+    delete compProps.gains;
+    if (d.itemType === 'constant') {
+      delete compProps.inputs;
+    } else if (SINGLE_INPUT_TYPES.has(d.itemType)) {
+      compProps.input = { value: inputs[0] || '', attrs: {} };
+      if (d.gains && d.gains[0] != null && String(d.gains[0]).trim() !== '') {
+        compProps.gain = { value: String(d.gains[0]), attrs: {} };
+      }
+    } else {
+      compProps.inputs = inputs;
+      compProps.gains = (d.gains && Array.isArray(d.gains)) ? d.gains : inputs.map(() => undefined);
+    }
+    if (d.hasExplicitOutput && d.outputSignal) {
+      compProps.output = { value: d.outputSignal, attrs: {} };
+    }
+    item = { type: d.itemType, name: d.name || '', componentProps: compProps };
+  }
+  if (d.disabled) item.disabled = true;
+  return item;
+}
+
+/** Apply the delta between canvas projections to the original parsed item.
+ * This retains omitted defaults, parser metadata and attributes on untouched
+ * ports even when another field in the same component changes.
+ */
+function applyComponentDelta(original: any, before: any, after: any): any {
+  if (JSON.stringify(before) === JSON.stringify(after)) return original;
+  if (before && after && typeof before === 'object' && typeof after === 'object' &&
+      !Array.isArray(before) && !Array.isArray(after)) {
+    const result = { ...original };
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+      if (after[key] === undefined) delete result[key];
+      else result[key] = applyComponentDelta(original?.[key], before[key], after[key]);
+    }
+    return result;
+  }
+  return after;
+}
+
+export function graphToChannels(nodes: any[], edges: any[], sourceChannels: any[] = []): any[] {
   const compNodes = nodes.filter(n => n.data?.kind === 'component');
   // Node order carries the source XML's component execution order. Viewport
   // layout and dragging must never reorder the serialized model.
@@ -813,9 +877,10 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
     }
   }
 
-  const channels: any[] = [];
-  const ensureChannel = (ch: number, name: string) => {
-    if (!channels[ch]) channels[ch] = { name: name || '', items: [] };
+  // Empty channels have no graph nodes, but still belong to the source file.
+  const channels: any[] = sourceChannels.map(channel => ({ ...channel, items: [] }));
+  const ensureChannel = (ch: number, name: string, sourceChannel: any) => {
+    if (!channels[ch]) channels[ch] = { ...(sourceChannel || { name: name || '' }), items: [] };
     else if (!channels[ch].name && name) channels[ch].name = name;
     return channels[ch];
   };
@@ -831,46 +896,17 @@ export function graphToChannels(nodes: any[], edges: any[]): any[] {
       if (inputs[i] === undefined) inputs[i] = d.inputs[i] || '';
     }
 
-    let item: any;
-    if (d.itemType === 'function' || d.itemType === 'fcs_function' || d.itemType === 'aero_table') {
-      const expr = cloneExpr(d.expression);
-      setFunctionInputs(expr, inputs);
-      item = { type: d.itemType, name: d.name || '', expression: expr };
-      if (d.hasExplicitOutput && d.outputSignal) item.output = d.outputSignal;
-      if (d.cliptoMin !== undefined) item.cliptoMin = d.cliptoMin;
-      if (d.cliptoMax !== undefined) item.cliptoMax = d.cliptoMax;
-    } else {
-      const compProps = { ...(d.compProps || {}) };
-      delete compProps.input;
-      delete compProps.output;
-      delete compProps.properties;
-      delete compProps.gains;
-      if (d.itemType === 'constant') {
-        // A constant is a source: keep its value and output, but no input.
-        delete compProps.inputs;
-      } else if (SINGLE_INPUT_TYPES.has(d.itemType)) {
-        compProps.input = { value: inputs[0] || '', attrs: {} };
-        if (d.gains && d.gains[0] != null && String(d.gains[0]).trim() !== '') {
-          compProps.gain = { value: String(d.gains[0]), attrs: {} };
-        }
-      } else {
-        // Multi-input component (summer, etc.): keep the ordered inputs list
-        // and a parallel gains array so the interleaved <input>/<gain> pairing
-        // round-trips losslessly.
-        compProps.inputs = inputs;
-        compProps.gains = (d.gains && Array.isArray(d.gains)) ? d.gains : inputs.map(() => undefined);
-      }
-      // Only emit <output> when the original component had an explicit one;
-      // otherwise JSBSim binds the output to the component `name` automatically.
-      if (d.hasExplicitOutput && d.outputSignal) {
-        compProps.output = { value: d.outputSignal, attrs: {} };
-      }
-      item = { type: d.itemType, name: d.name || '', componentProps: compProps };
-    }
+    const projected = serializeComponent(d, inputs);
+    const item = d.sourceItem
+      ? applyComponentDelta(d.sourceItem.original, d.sourceItem.projection, projected) : projected;
 
     const ch = (typeof d.ch === 'number' && d.ch >= 0) ? d.ch : 0;
-    ensureChannel(ch, d.chName).items.push(item);
+    const channel = ensureChannel(ch, d.chName, d.sourceChannel);
+    if (d.channelDisabled) channel.disabled = true;
+    else if (channel.disabled) delete channel.disabled;
+    if (d.channelAttrs) channel.attrs = d.channelAttrs;
+    channel.items.push(item);
   }
 
-  return channels.filter(Boolean).map(c => ({ name: c.name || '', items: c.items }));
+  return channels.filter(Boolean);
 }

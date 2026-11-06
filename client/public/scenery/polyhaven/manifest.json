@@ -1,0 +1,76 @@
+{
+  "license": "CC0-1.0",
+  "license_url": "https://polyhaven.com/license",
+  "processing": "Official JPG sources resized with Lanczos and encoded as quality-85 JPEGs. No generative processing. Original source files are not bundled.",
+  "assets": [
+    {
+      "id": "kloppenheim_03_puresky",
+      "name": "Kloppenheim 03 (Pure Sky)",
+      "authors": {
+        "Greg Zaal": "Original",
+        "Jarod Guest": "Sky Edits"
+      },
+      "page": "https://polyhaven.com/a/kloppenheim_03_puresky",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/kloppenheim_03_puresky.jpg",
+      "source_md5": "05c8325777aa95286a57370ca0dd9b65",
+      "file": "sky.jpg",
+      "size": [
+        1024,
+        512
+      ],
+      "usage": "display background; source is the official tonemapped panorama",
+      "sha256": "6055914e74c777598c29f41e9c2a9c8d47aedb7c547471a77ea717a0a171b3c7"
+    },
+    {
+      "id": "grass_ground",
+      "name": "Grass Ground",
+      "authors": {
+        "Charlotte Baglioni": "All"
+      },
+      "page": "https://polyhaven.com/a/grass_ground",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/grass_ground/grass_ground_diff_1k.jpg",
+      "source_md5": "299047258586c762735b7284d3c662c3",
+      "file": "grass.jpg",
+      "size": [
+        512,
+        512
+      ],
+      "usage": "field albedo; source covers 2.51 metres",
+      "sha256": "252729b85e74161801ff53926977a899b9beee4fa48f9e6f00f77e59a62f13f7"
+    },
+    {
+      "id": "asphalt_02",
+      "name": "Asphalt 02",
+      "authors": {
+        "Rob Tuytel": "All"
+      },
+      "page": "https://polyhaven.com/a/asphalt_02",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg",
+      "source_md5": "fa19772d4817754c3efab708c651f5a8",
+      "file": "asphalt.jpg",
+      "size": [
+        512,
+        512
+      ],
+      "usage": "baked runway albedo beneath procedural markings",
+      "sha256": "e758126a96d9d649965a3e859bcb95520024c0c327b20ebd7846557719675458"
+    },
+    {
+      "id": "concrete_floor_01",
+      "name": "Concrete Floor 01",
+      "authors": {
+        "Rob Tuytel": "All"
+      },
+      "page": "https://polyhaven.com/a/concrete_floor_01",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_floor_01/concrete_floor_01_diff_1k.jpg",
+      "source_md5": "187065cfc20a35eb421eac6d4f38c58f",
+      "file": "concrete.jpg",
+      "size": [
+        256,
+        256
+      ],
+      "usage": "baked apron and helipad albedo",
+      "sha256": "10f8f278327240a00b1181dd42ec77692c60cdf40e7bcf98e6bb4822066f6ddb"
+    }
+  ]
+}

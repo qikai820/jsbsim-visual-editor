@@ -21,7 +21,7 @@ function stable(value: any): any {
 }
 
 export function xmlParams(params: Record<string, any> = {}): Record<string, any> {
-  return Object.fromEntries(Object.entries(params).filter(([key]) => !editorParams.has(key)));
+  return Object.fromEntries(Object.entries(params).filter(([key, value]) => !editorParams.has(key) && !(key === 'disabled' && !value)));
 }
 
 export function nodeXmlFingerprint(node: any): string {
@@ -65,6 +65,7 @@ export function changedModelPaths(current: ModelProject, baseline: ModelProject,
     if (old && next && nodeXmlFingerprint(old) === nodeXmlFingerprint(next)) continue;
     if (old) paths.add(nodeXmlPath(old, baseline, model));
     if (next) paths.add(nodeXmlPath(next, current, model));
+    if (!!old?.data.params?.disabled !== !!next?.data.params?.disabled) paths.add(main);
     // File-backed modules also have declarations / mounting data in the main
     // model. The XML delta later removes candidates whose content is unchanged.
     if (!old || !next || ['engine', 'propeller'].includes(next.data.componentType) ||

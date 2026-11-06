@@ -4,6 +4,12 @@
 
 use serde_json::Value;
 
+fn maybe_disabled(xml: String, data: &Value, level: usize) -> String {
+    if data.get("disabled").and_then(Value::as_bool) == Some(true) {
+        format!("{}{}", indent(level), crate::disabled_xml::comment_out_xml(xml.trim_start()))
+    } else { xml }
+}
+
 // ── XML helper functions ────────────────────────────────────────────────────
 
 fn indent(level: usize) -> String {
@@ -508,6 +514,11 @@ fn table_data_3d_to_xml(expr: &Value, level: usize) -> String {
 // ── Channel / component serialization ───────────────────────────────────────
 
 fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
+    if it.get("disabled").and_then(Value::as_bool) == Some(true) {
+        let mut enabled = it.clone();
+        enabled.as_object_mut()?.remove("disabled");
+        return serialize_channel_item(&enabled, level).map(|xml| maybe_disabled(xml, it, level));
+    }
     if it.is_null() || !it.is_object() {
         return None;
     }
@@ -791,7 +802,7 @@ fn serialize_channels_xml(params: &Value) -> String {
                 Some(items.join("\n"))
             };
             // `items` are serialized component elements, not text.
-            blocks.push(xml_element_raw("channel", &ch_attrs, content.as_deref(), 2));
+            blocks.push(maybe_disabled(xml_element_raw("channel", &ch_attrs, content.as_deref(), 2), ch, 2));
         }
     }
     blocks.join("\n")
@@ -1540,7 +1551,7 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
         // its reference. Its channels/properties are serialized into the
         // referenced systems XML by the per-file generator.
         if p.get("file").and_then(|v| v.as_str()).map(|v| !v.is_empty()).unwrap_or(false) {
-            lines.push(xml_element("system", &[("file", file)], None, 1));
+            lines.push(maybe_disabled(xml_element("system", &[("file", file)], None, 1), p, 1));
             continue;
         }
 
@@ -1561,8 +1572,10 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
         }
 
         if body.trim().is_empty() {
-            let attrs = if file.is_empty() { vec![] } else { vec![("file", file)] };
-            lines.push(xml_element("system", &attrs, None, 1));
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let attrs = if !file.is_empty() { vec![("file", file)] }
+                else if !name.is_empty() { vec![("name", name)] } else { vec![] };
+            lines.push(maybe_disabled(xml_element("system", &attrs, None, 1), p, 1));
         } else {
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let attrs = if file.is_empty() {
@@ -1570,7 +1583,7 @@ fn build_system_references(groups: &std::collections::HashMap<String, Vec<&Value
             } else {
                 vec![("file", file)]
             };
-            lines.push(xml_element_raw("system", &attrs, Some(&body), 1));
+            lines.push(maybe_disabled(xml_element_raw("system", &attrs, Some(&body), 1), p, 1));
         }
     }
 
@@ -1601,7 +1614,7 @@ fn build_flight_control(groups: &std::collections::HashMap<String, Vec<&Value>>)
             .unwrap_or("");
 
         if !file.is_empty() {
-            lines.push(xml_element("flight_control", &[("file", file)], None, 1));
+            lines.push(maybe_disabled(xml_element("flight_control", &[("file", file)], None, 1), p, 1));
             continue;
         }
 
@@ -1636,17 +1649,13 @@ fn build_flight_control(groups: &std::collections::HashMap<String, Vec<&Value>>)
             body.push_str(&ch_xml);
         }
 
-        if body.trim().is_empty() {
-            continue;
-        }
-
         let mut attrs = vec![];
         if !file.is_empty() {
             attrs.push(("file", file));
         } else if !name.is_empty() {
             attrs.push(("name", name));
         }
-        lines.push(xml_element_raw("flight_control", &attrs, Some(&body), 1));
+        lines.push(maybe_disabled(xml_element_raw("flight_control", &attrs, if body.trim().is_empty() { None } else { Some(&body) }, 1), p, 1));
     }
 
     lines.join("\n\n")
@@ -1735,7 +1744,7 @@ fn build_aerodynamics(groups: &std::collections::HashMap<String, Vec<&Value>>) -
             let func_content = func_content_parts.join("\n");
 
             let func_xml = xml_element_raw("function", &[("name", func_name)], Some(&func_content), 2);
-            func_entries.push((axis.to_string(), func_xml));
+            func_entries.push((axis.to_string(), maybe_disabled(func_xml, c, 2)));
         }
     }
 

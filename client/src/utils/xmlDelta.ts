@@ -1,5 +1,6 @@
 import { scanXmlSpans, type XmlSpan } from './sourcePreservingXml';
 import { xmlContentEqual, xmlElementsEqual } from './xmlContentEqual';
+import { DISABLED_ATTRIBUTE, commentOutXml, expandDisabledComments, serializeDisabledElements } from './disabledXml';
 
 export function parseXmlDocument(xml: string): XMLDocument {
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
@@ -7,7 +8,7 @@ export function parseXmlDocument(xml: string): XMLDocument {
   return doc;
 }
 
-const markup = (element: Element) => new XMLSerializer().serializeToString(element);
+const markup = serializeDisabledElements;
 const equal = xmlElementsEqual;
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 function key(element: Element): string {
@@ -25,13 +26,24 @@ function match(element: Element, candidates: Element[], used: Set<Element>): Ele
 export function applyXmlDelta(sourceXml: string, beforeXml: string, afterXml: string,
   onReference?: (source: Element, before: Element, after: Element) => void): string {
   if (xmlContentEqual(beforeXml, afterXml)) return sourceXml;
-  const sourceDoc = parseXmlDocument(sourceXml);
-  const before = parseXmlDocument(beforeXml).documentElement;
-  const after = parseXmlDocument(afterXml).documentElement;
+  const sourceDoc = expandDisabledComments(parseXmlDocument(sourceXml));
+  const before = expandDisabledComments(parseXmlDocument(beforeXml)).documentElement;
+  const after = expandDisabledComments(parseXmlDocument(afterXml)).documentElement;
   const edits: Array<{ start: number; end: number; text: string }> = [];
   const newline = sourceXml.includes('\r\n') ? '\r\n' : '\n';
   const visit = (source: Element, old: Element, next: Element, span: XmlSpan, depth: number) => {
     if (equal(old, next)) return;
+    if (source.hasAttribute(DISABLED_ATTRIBUTE) || old.hasAttribute(DISABLED_ATTRIBUTE) || next.hasAttribute(DISABLED_ATTRIBUTE)) {
+      const enabled = (element: Element) => {
+        const copy = element.cloneNode(true) as Element;
+        copy.removeAttribute(DISABLED_ATTRIBUTE);
+        return copy;
+      };
+      const raw = span.disabledXml ?? sourceXml.slice(span.start, span.end);
+      const updated = applyXmlDelta(raw, markup(enabled(old)), markup(enabled(next)), onReference);
+      edits.push({ start: span.start, end: span.end, text: next.hasAttribute(DISABLED_ATTRIBUTE) ? commentOutXml(updated) : updated });
+      return;
+    }
     if (depth === 1 && source.hasAttribute('file') && !old.hasAttribute('file') && !next.hasAttribute('file') && onReference) {
       onReference(source, old, next);
       return;
@@ -109,7 +121,12 @@ export function applyXmlDelta(sourceXml: string, beforeXml: string, afterXml: st
       additions.push(...nextChildren.filter(child => !usedNext.has(child)));
       const retained = pairs.filter(pair => pair.target && pair.nextChild);
       const slots = [...retained].sort((a, b) => sourceChildren.indexOf(a.target!) - sourceChildren.indexOf(b.target!));
-      const ordered = [...retained].sort((a, b) => nextChildren.indexOf(a.nextChild!) - nextChildren.indexOf(b.nextChild!));
+      const requestedOrder = [...retained].sort((a, b) => nextChildren.indexOf(a.nextChild!) - nextChildren.indexOf(b.nextChild!));
+      // The reduced generator groups e.g. system functions before channels,
+      // while source files may interleave them. Only an actual before/after
+      // order change may move source nodes; a scalar edit keeps their slots.
+      const orderChanged = retained.some((pair, index) => pair !== requestedOrder[index]);
+      const ordered = orderChanged ? requestedOrder : slots;
       const locations = new Map<Element, XmlSpan>();
       slots.forEach((slot, index) => locations.set(ordered[index].target!, span.children[sourceChildren.indexOf(slot.target!)]));
       if (slots.some((slot, index) => slot !== ordered[index])) {
@@ -161,7 +178,7 @@ export function applyXmlDelta(sourceXml: string, beforeXml: string, afterXml: st
     }
     if (opening !== sourceXml.slice(span.start, span.openEnd)) edits.push({ start: span.start, end: span.openEnd, text: opening });
   };
-  visit(sourceDoc.documentElement, before, after, scanXmlSpans(sourceXml), 0);
+  visit(sourceDoc.documentElement, before, after, scanXmlSpans(sourceXml, true), 0);
   let result = sourceXml, end = sourceXml.length;
   for (const edit of edits.sort((a, b) => b.start - a.start || b.end - a.end)) {
     if (edit.end > end) throw new Error('XML 变更范围重叠，无法安全保存');

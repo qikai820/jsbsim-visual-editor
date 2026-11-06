@@ -4,6 +4,7 @@ import { useDiagramNodeInternals } from './useDiagramNodeInternals';
 import OperatorSymbol from './OperatorSymbol';
 import type { ExprTable } from '../../types';
 import './operatorBlocks.css';
+import { moduleIsDisabled } from '../../utils/disabledXml';
 
 export function DiagramPort({ id, output = false, top = 50, title }: { id: string; output?: boolean; top?: number; title?: string }) {
   return <Handle id={id} type={output ? 'source' : 'target'} position={output ? Position.Right : Position.Left}
@@ -41,7 +42,9 @@ export default function OperatorBlock({ node, kind, value, table, inputs, output
     }
   }, [id, manual, minWidth, minHeight, resizing, w, h, updateNode]);
   useDiagramNodeInternals(id, JSON.stringify([w, h, portKey]));
-  return <div className={`diagram-block ${selected ? 'selected' : ''} ${data.pendingSync ? 'pending-sync' : ''}`} style={{ width: w, height: h }} title={data.pendingSync ? `${title || '运算块'}\n尚未保存到仿真机模型文件` : title}>
+  return <div className={`diagram-block ${selected ? 'selected' : ''} ${data.pendingSync ? 'pending-sync' : ''} ${moduleIsDisabled(data) ? 'module-commented' : ''}`} style={{ width: w, height: h }} title={moduleIsDisabled(data) ? `${title || '模块'}\n已注释；保存并重新加载后停用` : data.pendingSync ? `${title || '运算块'}\n尚未保存到仿真机模型文件` : title}>
+    {moduleIsDisabled(data) && <span className="module-commented-badge">已注释</span>}
+    {!!(data.disabledInputs as string[] | undefined)?.length && <span className="module-dependency-badge" title={`输入来自已注释模块：${(data.disabledInputs as string[]).join('、')}`}>⚠</span>}
     <NodeResizer isVisible={selected} minWidth={minWidth} minHeight={minHeight} color="#2563eb"
       onResizeEnd={finishResize} />
     {selected && <NodeToolbar isVisible position={Position.Top} offset={12}>

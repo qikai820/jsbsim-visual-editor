@@ -1,4 +1,6 @@
 import { canonicalMonitorProperty } from './monitorIdentity';
+import { rotorCount, rotorRpmKey } from './sceneRotors';
+import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
 
 export interface SceneMonitorTarget { instance: string; model: string }
 const sceneListeners = new Set<(frame: any) => void>();
@@ -11,10 +13,15 @@ export const SCENE_POSE_KEYS = ['position/lat-geod-deg', 'position/long-gc-deg',
   'attitude/phi-rad', 'attitude/theta-rad', 'attitude/psi-rad'] as const;
 export function sceneSignalKeys(model: string): string[] {
   const ground = ['position/h-agl-ft', 'position/terrain-elevation-asl-ft'];
+  const rpm = Array.from({ length: rotorCount(model) }, (_, i) => rotorRpmKey(model, i));
+  if (isMorphQuad(model)) return [...SCENE_POSE_KEYS,
+    ...MORPHQUAD_ARMS.flatMap((_, i) => [gimbalKey(i, 'outer'), gimbalKey(i, 'inner')]), ...rpm,
+    ...Array.from({ length: 8 }, (_, i) => `propulsion/engine[${i}]/propeller-sense`), ...ground];
   return /voliro/i.test(model) ? ['fcs/voliro_t/pitch-rad',
-    ...SCENE_POSE_KEYS,
+    ...SCENE_POSE_KEYS, ...rpm, 'fcs/voliro_t/rpm-model/version', 'fcs/voliro_t/rpm-model/tail-calibrated',
     ...Array.from({ length: 5 }, (_, i) => `fcs/esc-out[${i}]`),
-    ...Array.from({ length: 5 }, (_, i) => `fcs/voliro_t/thrust-lbf[${i}]`), ...ground] : [...SCENE_POSE_KEYS, ...ground];
+    ...Array.from({ length: 5 }, (_, i) => `fcs/voliro_t/thrust-lbf[${i}]`), ...ground] : [...SCENE_POSE_KEYS, ...rpm,
+      ...Array.from({ length: rotorCount(model) }, (_, i) => `propulsion/engine[${i}]/propeller-sense`), ...ground];
 }
 
 // One VMON subscription per instance: preserve the user's signals and use free

@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, type MouseEve
 import { createPortal } from 'react-dom';
 import { useLanguage } from '../i18n';
 import {
-  isTauri, usbFileDelete, usbFileDeleteDirectory, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
+  getSimulatorTransportMode, isTauri, usbFileDelete, usbFileDeleteDirectory, usbFileDownload, usbFileList, usbFileListWithModified, usbFileMkdir,
   listenUsbFolderUploadProgress, usbFileEditSessions, usbFileFinishEditor, usbFileOpenBuiltIn,
   usbFileOpenEditor, usbFilePing, usbFileSaveBuiltIn, usbFileSaveEditor, usbFileTransfer,
   usbFileUploadFolder, usbFileUploadLocal, usbFileWrite, usbFileStorage,
@@ -82,6 +82,8 @@ const MIN_WINDOW_HEIGHT = 320;
 export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   const { isZh } = useLanguage();
   const [volume, setVolume] = useState<Volume>('sd');
+  const [transportMode, setTransportMode] = useState(getSimulatorTransportMode);
+  const initialVolumeChosen = useRef(false);
   const [segments, setSegments] = useState<string[]>([]);
   const [entries, setEntries] = useState<UsbFileEntry[]>([]);
   const [selected, setSelected] = useState<string>('');
@@ -198,11 +200,24 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     setRevision(value => value + 1);
   }, []);
   useEffect(() => {
+    const changed = () => { setTransportMode(getSimulatorTransportMode()); initialVolumeChosen.current = false; refresh(); };
+    window.addEventListener('jsbsim-local-settings-changed', changed);
+    return () => window.removeEventListener('jsbsim-local-settings-changed', changed);
+  }, [refresh]);
+  useEffect(() => {
     let cancelled = false;
     setStorageLoading(true);
     setStorageError('');
     void usbFileStorage().then(result => {
-      if (!cancelled) setStorage(result);
+      if (!cancelled) {
+        setStorage(result);
+        if (!initialVolumeChosen.current) {
+          initialVolumeChosen.current = true;
+          if (!result.find(item => item.volume === 'sd')?.totalBytes && result.find(item => item.volume === 'data')?.totalBytes) {
+            setVolume('data'); setSegments([]);
+          }
+        }
+      }
     }).catch(error => {
       if (!cancelled) { setStorage([]); setStorageError(errorText(error)); }
     }).finally(() => { if (!cancelled) setStorageLoading(false); });
@@ -326,12 +341,12 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
     try {
       const { rootName, rootPath, entries, folders } = browserFolderFiles(files, directory);
       const identity = (await usbFilePing()).identity;
-      if (identity !== 'lmx93-usb-file/4' && identity !== 'lmx93-usb-file/5' && identity !== 'lmx93-usb-file/6') {
+      if (identity !== 'nuttx-network-files/1' && identity !== 'lmx93-usb-file/4' && identity !== 'lmx93-usb-file/5' && identity !== 'lmx93-usb-file/6') {
         throw new Error(isZh ? '文件夹上传需要 lmx93-usb-file/4 或更新板端固件' : 'Folder upload requires lmx93-usb-file/4 or newer board firmware');
       }
       const longName = [rootName, ...entries.flatMap(({ relative }) => relative.split('/'))]
         .some(name => new TextEncoder().encode(name).length > 32);
-      if (longName && identity !== 'lmx93-usb-file/5' && identity !== 'lmx93-usb-file/6') {
+      if (longName && identity !== 'nuttx-network-files/1' && identity !== 'lmx93-usb-file/5' && identity !== 'lmx93-usb-file/6') {
         throw new Error(isZh ? '文件夹包含超过 32 字节的名称，需要升级至 lmx93-usb-file/5 板端固件' : 'Folder has names over 32 bytes; install lmx93-usb-file/5 board firmware');
       }
       const siblings = await usbFileList(directory);
@@ -613,7 +628,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   return createPortal(<div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
     <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
     <header className="usb-fm-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
-      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? '通过 USB 管理 SD 与 eMMC · 拖动标题栏移动，右下角缩放' : 'Manage SD and eMMC over USB · Drag title to move, corner to resize'}</small></div>
+      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? `通过${transportMode === 'network' ? '网口' : transportMode === 'usb' ? ' USB ' : '自动连接'}管理 SD 与 eMMC · 拖动标题栏移动，右下角缩放` : `Manage SD and eMMC via ${transportMode === 'network' ? 'network' : transportMode === 'usb' ? 'USB' : 'Auto'} · Drag title to move, corner to resize`}</small></div>
       <button onClick={closeManager} disabled={busy || savingBuiltIn} aria-label={isZh ? '关闭' : 'Close'}>×</button>
     </header>
     <div className="usb-fm-volumes" aria-label={isZh ? '存储容量' : 'Storage capacity'} aria-busy={storageLoading}>

@@ -3,6 +3,8 @@ import { listenSceneFrames, listenTelemetry, simInstanceControl } from '../../ut
 import { FlightSceneFeed, demoPackets, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode, type ScenePose } from '../../sim/flightSceneState';
 import { listenSceneMonitor, type SceneMonitorTarget } from '../../sim/sceneSignals';
 import { useSignalMonitorStore } from '../../store/signalMonitorStore';
+import { rotorCount, rotorLabel, rotorReading } from '../../sim/sceneRotors';
+import { isMorphQuad, MORPHQUAD_ARMS } from '../../sim/sceneMorphQuad';
 import FlightSceneCanvas, { type SceneLayers } from './FlightSceneCanvas';
 import './flightScene.css';
 
@@ -122,6 +124,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         state: measured?.state, monitorError: monitorState.error, source: measured?.tiltSource, tilt: measured?.tilt, tiltAgeMs: propertyAgeMs(measured?.tiltSampleAt),
         motors: measured?.motors, motorAgeMs: measured?.motorSampleAt.map(time => propertyAgeMs(time)),
         bodyAgeMs: measured ? performance.now() - measured.receivedAt : null,
+        rpm: measured?.rpm, rpmModelVersion: measured?.rpmModelVersion, rpmTailCalibrated: measured?.rpmTailCalibrated,
         observer: observed ? { source: observed.source, sequence: observed.sequence, generation: observed.generation,
           ageMs: performance.now() - observed.seen } : null, requestedRevision: monitorState.revisions[selected] });
     };
@@ -173,7 +176,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
           </button>;
         }) : <p className="scene-muted">尚无飞行器数据</p>}</div>
         <section className="scene-layer-list"><strong>场景图层</strong>{LAYERS.map(([key, label]) => <label key={key}><input type="checkbox" checked={layers[key]} onChange={e => setLayers(current => ({ ...current, [key]: e.target.checked }))} />{label}</label>)}</section>
-        <div className="scene-environment"><strong>△ 离线试验场</strong><span>{ground === null ? '参考平面 · 地面高程未知' : `地面海拔 ${format(ground)} m`}</span><small>场景比例 1 m / 单位</small></div>
+        <div className="scene-environment"><strong>△ 离线试验场</strong><span>{ground === null ? '参考平面 · 地面高程未知' : `地面海拔 ${format(ground)} m`}</span><small>场景比例 1 m / 单位</small><small>场景素材：Poly Haven · CC0</small></div>
       </aside>
       <main className="scene-main"><div className="scene-viewport">
         <SceneBoundary resetKey={cameraVersion}>{visible && <FlightSceneCanvas feed={feed} revision={revision} selected={selected} onSelect={setSelected} mode={mode} layers={layers} onFps={setFps} groundAltitude={groundPlane.current.altitude} cameraVersion={cameraVersion} />}</SceneBoundary>
@@ -194,13 +197,21 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
           <div className="scene-horizon"><div style={{ transform: `rotate(${-(pose?.roll ?? 0)}deg) translateY(${Math.max(-25, Math.min(25, pose?.pitch ?? 0))}px)` }} /><i>— · —</i></div>
           <dl><dt>横滚</dt><dd>{format(pose?.roll)}°</dd><dt>俯仰</dt><dd>{format(pose?.pitch)}°</dd><dt>偏航</dt><dd>{format(pose?.yaw)}°</dd></dl>
         </div></section>
-        <section><h3>{/voliro/i.test(pose?.model ?? '') ? '倾转与推力' : '执行器状态'}</h3>
+        {isMorphQuad(selectedModel) ? <section className="scene-gimbals"><h3>双轴云台 · 四组共轴桨</h3>
+          {MORPHQUAD_ARMS.map((arm, i) => <div key={i} className="scene-gimbal-row" data-arm={i}>
+            <span>{arm.label}<small>M{i * 2 + 1} / M{i * 2 + 2}</small></span>
+            <div><span>外环 α <SampleValue sampleAt={pose?.gimbals[i]?.outerSampleAt} now={now}>{format(pose?.gimbals[i]?.outer == null ? null : pose.gimbals[i].outer! * 180 / Math.PI)}°</SampleValue></span>
+              <span>内环 β <SampleValue sampleAt={pose?.gimbals[i]?.innerSampleAt} now={now}>{format(pose?.gimbals[i]?.inner == null ? null : pose.gimbals[i].inner! * 180 / Math.PI)}°</SampleValue></span></div>
+          </div>)}
+          <p className="scene-muted">显示模型云台角；灰色为上次采样，未收到的角度显示为空，外形暂用零位。</p>
+        </section> : <section><h3>{/voliro/i.test(pose?.model ?? '') ? '倾转与推力' : '执行器状态'}</h3>
           <div className="scene-sampling-status scene-mechanism-status" data-source={pose?.tiltSource ?? 'none'}>{pose?.tilt == null ? '等待机构属性' : (propertyAgeMs(pose.tiltSampleAt, now) ?? Infinity) >= STALE_MS ? '保留上次采样' : pose.tiltSource === 'monitor' ? '机构高速采样' : '属性轮询采样'}<span>{sampleAgeText(pose?.tiltSampleAt, now)}</span></div>
           <div className="scene-tilt"><span>共用倾转角</span><SampleValue sampleAt={pose?.tiltSampleAt} now={now}>{pose?.tilt == null ? '—' : `${format(pose.tilt * 180 / Math.PI)}°`}</SampleValue></div>
           <div className="scene-tilt-track"><i style={{ width: `${Math.min(100, Math.abs(pose?.tilt ?? 0) / Math.PI * 100)}%` }} /></div>
           {(pose?.motors ?? [null, null, null, null, null]).map((value, i) => <div className={`scene-motor ${(propertyAgeMs(pose?.motorSampleAt[i], now) ?? 0) >= STALE_MS ? 'stale' : ''}`} key={i}><span>M{i + 1}</span><div className={i === 4 ? 'signed' : ''}>{value !== null && <i style={{ width: `${Math.min(1, Math.abs(value)) * (i === 4 ? 50 : 100)}%`, ...(i === 4 ? { left: value < 0 ? `${50 - Math.min(1, Math.abs(value)) * 50}%` : '50%' } : {}) }} />}</div><SampleValue sampleAt={pose?.motorSampleAt[i]} now={now}>{value === null ? '—' : `${Math.round(value * 100)}%`}</SampleValue></div>)}
           <div className="scene-total"><span>合计有符号推力</span><SampleValue sampleAt={pose?.thrustSampleAt} now={now}>{format(pose?.thrust)} N</SampleValue></div><p className="scene-muted">显示实际采样值；灰色数值为上次采样，悬停可查看采样年龄。尚未收到的属性显示为空。</p>
-        </section>
+        </section>}
+        <RotorMetrics pose={pose} model={selectedModel} now={now} />
         <section className="scene-position"><h3>位置</h3><span>纬度 <b>{format(pose?.latitude, 7)}°</b></span><span>经度 <b>{format(pose?.longitude, 7)}°</b></span><span>垂直速度 <b>{format(pose?.verticalSpeed)} m/s</b></span></section>
       </aside>
     </div>
@@ -219,4 +230,19 @@ function SampleValue({ children, sampleAt, now }: { children: ReactNode; sampleA
 
 function Metric({ label, value, unit }: { label: string; value: number | null | undefined; unit: string }) {
   return <div><span>{label}</span><strong>{format(value)}<small>{unit}</small></strong></div>;
+}
+
+function RotorMetrics({ pose, model, now }: { pose: ScenePose | undefined; model: string; now: number }) {
+  const labels = { model: 'JSBSim RPM 状态', bench: '台架估算 · 非模型 RPM', visual: '旋转示意 · 未提供 RPM', none: '未提供模型 RPM' };
+  return <section className="scene-rpm"><h3>螺旋桨转速</h3>
+    {Array.from({ length: rotorCount(model) }, (_, index) => {
+      const reading = pose ? rotorReading(pose, index, now) : null;
+      const source = reading?.source ?? 'none';
+      return <div className="scene-rpm-row" key={index} data-rotor={index} data-source={source}>
+        <span>{rotorLabel(model, index)}<small>{labels[source]}{source === 'model' && index === 4 && pose?.rpmModelVersion != null && pose.rpmTailCalibrated !== true ? ' · 未标定' : ''}</small></span>
+        <div><SampleValue sampleAt={reading?.sampleAt} now={now}>{reading?.rpm != null ? `${source === 'bench' ? '≈ ' : ''}${format(reading.rpm, 0)}` : source === 'visual' ? '随输出' : '—'}</SampleValue>{reading?.rpm != null && <small>RPM</small>}</div>
+      </div>;
+    })}
+    <p className="scene-muted">{pose?.rpmModelVersion != null ? '直接读取 JSBSim 独立转速状态。尾桨未标定时采用 KV 空载参考模型。' : /voliro/i.test(model) ? '尚未收到模型 RPM；≈ 为台架估算，尾桨仅旋转示意。' : '显示 JSBSim 螺旋桨 RPM；未提供的转速留空。'} 动画作可视化降速，RPM 数值保持原值。</p>
+  </section>;
 }

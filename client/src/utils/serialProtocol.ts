@@ -1,5 +1,6 @@
 export type SerialDirection = 'rx' | 'tx';
-export type SerialChunk = { direction: SerialDirection; timeMs: number; elapsedUs: number; bytes: number[] };
+type PacketMeta = { peer?: string; streamId?: number; datagram?: boolean };
+export type SerialChunk = PacketMeta & { direction: SerialDirection; timeMs: number; elapsedUs: number; bytes: number[] };
 export type FramingMode = 'fixed' | 'headerLength' | 'headerFooter' | 'delimiter' | 'gap';
 export type ChecksumMode = 'none' | 'sum8' | 'xor8' | 'crc16Modbus';
 export type FieldType = 'u8' | 's8' | 'u16' | 's16' | 'u32' | 's32' | 'f32' | 'f64' | 'ascii' | 'hex';
@@ -20,7 +21,7 @@ export type FramingRule = {
   checksumStart: number;
   fields: SerialField[];
 };
-export type SerialFrame = {
+export type SerialFrame = PacketMeta & {
   id: number;
   direction: SerialDirection;
   timeMs: number;
@@ -94,7 +95,7 @@ export function checkFrame(bytes: readonly number[], rule: FramingRule): { valid
   return crc === received ? { valid: true } : { valid: false, problem: `CRC16 错误：应为 ${toHex([crc & 255, crc >> 8])}` };
 }
 
-type TimedByte = { value: number; timeMs: number; elapsedUs: number };
+type TimedByte = PacketMeta & { value: number; timeMs: number; elapsedUs: number };
 
 export class FrameDecoder {
   private buffers: Record<SerialDirection, TimedByte[]> = { rx: [], tx: [] };
@@ -103,6 +104,21 @@ export class FrameDecoder {
   constructor(public readonly rule: FramingRule) { validateFramingRule(rule); }
 
   push(chunk: SerialChunk): SerialFrame[] {
+    const buffer = this.buffers[chunk.direction];
+    const first = buffer[0];
+    const results: SerialFrame[] = [];
+    // A UDP datagram and a new TCP connection cannot complete an older frame.
+    if (first && (chunk.datagram || first.peer !== chunk.peer || first.streamId !== chunk.streamId)) {
+      results.push(this.consume(chunk.direction, buffer.length, this.rule.mode === 'gap' ? undefined : '未完成的帧'));
+    }
+    results.push(...this.pushStream(chunk));
+    if (chunk.datagram && buffer.length) {
+      results.push(this.consume(chunk.direction, buffer.length, this.rule.mode === 'gap' ? undefined : '报文内未完成的帧'));
+    }
+    return results;
+  }
+
+  private pushStream(chunk: SerialChunk): SerialFrame[] {
     const results: SerialFrame[] = [];
     const buffer = this.buffers[chunk.direction];
     const previous = this.lastElapsed[chunk.direction];
@@ -110,7 +126,8 @@ export class FrameDecoder {
       results.push(this.consume(chunk.direction, buffer.length));
     }
     this.lastElapsed[chunk.direction] = chunk.elapsedUs;
-    for (const value of chunk.bytes) buffer.push({ value, timeMs: chunk.timeMs, elapsedUs: chunk.elapsedUs });
+    for (const value of chunk.bytes) buffer.push({ value, timeMs: chunk.timeMs, elapsedUs: chunk.elapsedUs,
+      peer: chunk.peer, streamId: chunk.streamId, datagram: chunk.datagram });
     if (this.rule.mode === 'gap') {
       if (buffer.length > this.rule.maxLength) results.push(this.consume(chunk.direction, buffer.length, '超过最大帧长'));
       return results;
@@ -192,7 +209,8 @@ export class FrameDecoder {
     const bytes = part.map(item => item.value);
     const checked = problem ? { valid: false as const, problem } : checkFrame(bytes, this.rule);
     return { id: this.nextId++, direction, timeMs: part[0].timeMs, elapsedUs: part[0].elapsedUs,
-      bytes, valid: checked.valid, problem: checked.problem };
+      bytes, valid: checked.valid, problem: checked.problem,
+      peer: part[0].peer, streamId: part[0].streamId, datagram: part[0].datagram };
   }
 }
 

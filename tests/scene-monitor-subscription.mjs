@@ -11,7 +11,10 @@ try {
   await build({ entryPoints: [fileURLToPath(new URL('../client/src/sim/sceneSignals.ts', import.meta.url))], outfile: output, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
   const { SCENE_POSE_KEYS, sceneSignalKeys, mergeSceneMonitorKeys } = createRequire(import.meta.url)(output);
   const scene = sceneSignalKeys('voliro_t');
-  assert.equal(scene.length, 19); assert.equal(scene[0], 'fcs/voliro_t/pitch-rad');
+  assert.equal(scene.length, 26); assert.equal(scene[0], 'fcs/voliro_t/pitch-rad');
+  assert.ok(scene.includes('fcs/voliro_t/rpm[4]'));
+  assert.ok(sceneSignalKeys('F450').includes('propulsion/engine[3]/propeller-rpm'));
+  assert.ok(sceneSignalKeys('F450').includes('propulsion/engine[3]/propeller-sense'));
   assert.ok(SCENE_POSE_KEYS.every(key => scene.includes(key)), 'all six measured position and attitude channels are subscribed');
   const user = ['fcs/esc-out', '_monitor/value/n123'];
   const merged = mergeSceneMonitorKeys(user, scene);
@@ -23,6 +26,15 @@ try {
   const partial = mergeSceneMonitorKeys(full.slice(0, 30), scene);
   assert.equal(partial.length, 32); assert.ok(partial.includes('fcs/voliro_t/pitch-rad'));
   assert.deepEqual(mergeSceneMonitorKeys(user, []), [...user].sort(), 'leaving scene restores user signals');
-  assert.equal(sceneSignalKeys('F450').length, 8);
+  assert.equal(sceneSignalKeys('F450').length, 16);
+  const morph = sceneSignalKeys('MorphQuad');
+  assert.equal(morph.length, 32); assert.equal(new Set(morph).size, 32);
+  assert.deepEqual(morph.slice(0, 6), [...SCENE_POSE_KEYS], 'MorphQuad retains measured pose priority');
+  for (let i = 0; i < 4; i++) for (const axis of ['outer', 'inner']) assert.ok(morph.includes(`fcs/gimbal-${axis}-rad[${i}]`));
+  assert.ok(morph.includes('propulsion/engine[7]/propeller-rpm'));
+  assert.ok(morph.includes('propulsion/engine[7]/propeller-sense'));
+  const constrained = mergeSceneMonitorKeys(['user/signal'], morph);
+  assert.equal(constrained.length, 32); assert.ok(constrained.includes('user/signal'));
+  assert.ok(SCENE_POSE_KEYS.every(key => constrained.includes(key)));
   console.log('Scene monitor subscriptions: actual servo priority, merged user signals, alias deduplication, limits and restoration passed.');
 } finally { await rm(directory, { recursive: true, force: true }); }

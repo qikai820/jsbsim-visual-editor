@@ -170,6 +170,14 @@ export default function PropertyPanel() {
   }
 
   const node = nodes.find(n => n.id === selectedNodeId);
+  if (node?.data.params?.disabled) return <div className="property-panel">
+    <h3>模块属性</h3><span className="module-status-badge">已注释 · 不参与计算</span>
+    <p className="module-disabled-summary">{node.data.label}</p>
+    <p className="module-disabled-summary">{String(node.data.params.name || node.data.params.file || '')}</p>
+    <p className="module-disabled-summary">位置、参数与连线已保留。保存并重新加载模型后生效。</p>
+    <button className="module-enable-button" onClick={() => updateNodeParams(node.id, { disabled: false })}>取消注释（启用）</button>
+    <button className="module-enable-button" onClick={() => useFlowStore.getState().setFocusedNodeId(node.id)}>查看模块内部</button>
+  </div>;
 
   // System expression editor overlay
   if (sysEditingExpr && (node?.data.componentType === 'system' || node?.data.componentType === 'flight_control')) {

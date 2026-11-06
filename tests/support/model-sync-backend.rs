@@ -1,8 +1,10 @@
+#[allow(dead_code)] #[path = "../../src-tauri/src/disabled_xml.rs"] mod disabled_xml;
 // Tiny stdin/stdout adapter for browser regressions using production XML code.
 #[allow(dead_code)] #[path = "../../src-tauri/src/xml_generator.rs"] mod xml_generator;
 #[allow(dead_code)] #[path = "../../src-tauri/src/xml_parser.rs"] mod xml_parser;
 #[allow(dead_code)] #[path = "../../src-tauri/src/expression_xml.rs"] mod expression_xml;
 #[allow(dead_code)] #[path = "../../src-tauri/src/xml_diagnostics.rs"] mod xml_diagnostics;
+#[allow(dead_code)] #[path = "../../src-tauri/src/remote_model.rs"] mod remote_model;
 use serde_json::{json, Value};
 use std::io::{self, Read};
 fn main() {
@@ -11,6 +13,23 @@ fn main() {
     let request: Value = serde_json::from_str(&input).unwrap();
     let args = &request["args"];
     let result = match request["command"].as_str().unwrap() {
+        "load_model" => {
+            let model = args["model"].as_str().unwrap();
+            let documents = args["documents"].as_object().unwrap();
+            remote_model::load(model, |path| documents.get(path).and_then(Value::as_str)
+                .map(str::to_string).ok_or_else(|| "not found".into()))
+                .and_then(|(main, refs)| {
+                    let mut files = std::collections::HashMap::new();
+                    for file in &refs {
+                        let name = file.path.rsplit('/').next().unwrap();
+                        files.insert(name.trim_end_matches(".xml").to_string(), file.xml.clone());
+                        files.insert(name.to_string(), file.xml.clone());
+                    }
+                    let mut graph = xml_parser::parse_xml(&main, &files)?;
+                    remote_model::attach_sources(&mut graph, model, &main, &refs);
+                    Ok(graph)
+                })
+        },
         "generate_xml" => xml_generator::generate_xml(&args["data"]).map(|xml| json!({"xml":xml})),
         "generate_subfile" => {
             let r = &args["req"];

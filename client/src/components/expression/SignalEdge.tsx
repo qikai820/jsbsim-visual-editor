@@ -97,7 +97,7 @@ export default function SignalEdge(props: EdgeProps) {
 
   const isHighlighted = useStore(state => !!(state.nodeLookup.get(source)?.selected || state.nodeLookup.get(target)?.selected));
   const showLabel = selected || hovered || isHighlighted;
-  const edgeStyle = isHighlighted || selected
+  const edgeStyle = data?.moduleDisabled ? { stroke: '#94a3b8', strokeWidth: 1.4, strokeDasharray: '5 4' } : isHighlighted || selected
     ? { stroke: '#f59e0b', strokeWidth: 2.6 }
     : data?.routingBlocked ? { stroke: '#b45309', strokeWidth: 1.4, strokeDasharray: '5 3' }
     : { stroke: '#475569', strokeWidth: 1.4 };

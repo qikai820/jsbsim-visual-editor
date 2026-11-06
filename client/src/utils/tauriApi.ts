@@ -99,14 +99,19 @@ export async function setPlotJugglerRate(rateHz: number): Promise<PlotJugglerSta
   return status;
 }
 
-// Local computer serial assistant; deliberately separate from simulator transport.
+// Local serial/network assistant; separate from simulator transport.
 export interface LocalSerialPort { path: string; label: string }
 export interface LocalSerialConfig {
   path: string; baudRate: number; dataBits: number; parity: 'none' | 'even' | 'odd';
   stopBits: number; flowControl: 'none' | 'software' | 'hardware';
 }
+export interface LocalNetworkConfig {
+  mode: 'tcpClient' | 'tcpServer' | 'udp';
+  host: string; port: number; localHost: string; localPort: number;
+}
 export type LocalSerialEvent =
-  | { kind: 'data'; sessionId: number; direction: 'rx' | 'tx'; timeMs: number; elapsedUs: number; bytes: number[] }
+  | { kind: 'data'; sessionId: number; direction: 'rx' | 'tx'; timeMs: number; elapsedUs: number; bytes: number[]; peer?: string; streamId?: number; datagram?: boolean }
+  | { kind: 'endpoint'; sessionId: number; localAddr: string; peerAddr: string | null }
   | { kind: 'status'; sessionId: number; connected: boolean; recording: boolean; error: string | null }
   | { kind: 'replayDone'; sessionId: number; records: number };
 
@@ -116,6 +121,12 @@ export async function localSerialOpen(config: LocalSerialConfig, onEvent: (event
   const channel = new Channel<LocalSerialEvent>();
   channel.onmessage = onEvent;
   return call('serial_assistant_open', { config, onEvent: channel });
+}
+export async function localNetworkOpen(config: LocalNetworkConfig, onEvent: (event: LocalSerialEvent) => void): Promise<{ sessionId: number; path: string }> {
+  const { Channel } = await import('@tauri-apps/api/core');
+  const channel = new Channel<LocalSerialEvent>();
+  channel.onmessage = onEvent;
+  return call('serial_assistant_network_open', { config, onEvent: channel });
 }
 export async function localSerialClose(sessionId: number): Promise<void> { return call('serial_assistant_close', { sessionId }); }
 export async function localSerialWrite(sessionId: number, bytes: number[]): Promise<number> { return call('serial_assistant_write', { sessionId, bytes }); }

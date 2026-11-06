@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
   ReactFlow, Background, Controls, ControlButton, MiniMap, SelectionMode,
   type ReactFlowInstance,
@@ -11,6 +11,7 @@ import { withSignalMonitor } from './monitor/MonitoredEdge';
 import { addScopeInView } from './monitor/scopePlacement';
 import BendableEdge from './edges/BendableEdge';
 import type { ComponentType } from '../types';
+import NodeContextMenu from './NodeContextMenu';
 
 const nodeTypes = { aircraftComponent: AircraftNode, ...monitorNodeTypes };
 // Map the built-in 'smoothstep' edge type (used by onConnect) to the bendable
@@ -27,8 +28,15 @@ interface CanvasProps {
 const MODULE_TYPES = new Set(['system', 'flight_control', 'aero_coefficients']);
 
 export default function Canvas({ dragType }: CanvasProps) {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, setSelectedNode, updateNodeParams, setFocusedNodeId, restoreLayout } = useFlowStore();
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, removeNode, setSelectedNode, updateNodeParams, setFocusedNodeId, restoreLayout } = useFlowStore();
   const monitor = useMonitorGraph('main', nodes, edges);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const contextNode = nodes.find(node => node.id === contextMenu?.id);
+  const disabledNodeIds = useMemo(() => new Set(nodes.filter(node => node.data.params?.disabled).map(node => node.id)), [nodes]);
+  const displayedEdges = useMemo(() => monitor.edges.map(edge =>
+    disabledNodeIds.has(edge.source) || disabledNodeIds.has(edge.target)
+      ? { ...edge, style: { ...edge.style, stroke: '#94a3b8', strokeDasharray: '5 4' } } : edge), [monitor.edges, disabledNodeIds]);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const rfInstance = useRef<ReactFlowInstance<any, any> | null>(null);
   const fitInProgress = useRef(false);
@@ -142,17 +150,25 @@ export default function Canvas({ dragType }: CanvasProps) {
   return (
     <div className="canvas-wrapper" ref={reactFlowWrapper}>
       <MonitorGraphProvider value={monitor.context}><ReactFlow
-        nodes={monitor.nodes}
-        edges={monitor.edges}
+        nodes={monitor.nodes.map(node => disabledNodeIds.has(node.id) ? { ...node, connectable: false } : node)}
+        edges={displayedEdges}
         onNodesChange={changes => { const modelChanges = monitor.filterChanges(changes); if (modelChanges.length) onNodesChange(modelChanges); }}
         onEdgesChange={onEdgesChange}
-        onConnect={connection => { if (!monitor.connect(connection)) onConnect(connection); }}
+        onConnect={connection => {
+          if (disabledNodeIds.has(connection.source!) || disabledNodeIds.has(connection.target!)) return;
+          if (!monitor.connect(connection)) onConnect(connection);
+        }}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onInit={(instance) => { rfInstance.current = instance; }}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onNodeClick={onNodeClick}
+        onNodeContextMenu={(event, node) => {
+          event.preventDefault(); event.stopPropagation();
+          setSelectedNode(node.id);
+          setContextMenu({ x: event.clientX, y: event.clientY, id: node.id });
+        }}
         onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={onPaneClick}
         onMoveEnd={onMoveEnd}
@@ -172,6 +188,14 @@ export default function Canvas({ dragType }: CanvasProps) {
         </Controls>
         <MiniMap />
       </ReactFlow></MonitorGraphProvider>
+      {contextMenu && contextNode && <NodeContextMenu {...contextMenu} title={contextNode.data.label} onClose={closeContextMenu} actions={[
+        { label: '查看属性', run: () => setSelectedNode(contextNode.id) },
+        { label: contextNode.data.params?.disabled ? '取消注释（启用）' : '注释模块（停用）',
+          disabled: !['system', 'flight_control'].includes(contextNode.data.componentType),
+          hint: !['system', 'flight_control'].includes(contextNode.data.componentType) ? '支持系统和飞控模块；内部算子请注释所属函数' : undefined,
+          run: () => updateNodeParams(contextNode.id, { disabled: !contextNode.data.params?.disabled }) },
+        { label: '删除模块', danger: true, run: () => removeNode(contextNode.id) },
+      ]} />}
     </div>
   );
 }

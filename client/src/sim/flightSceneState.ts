@@ -1,5 +1,8 @@
 import { Euler, Matrix4, Quaternion, Vector3 } from 'three';
 import { SCENE_POSE_KEYS, sceneSignalKeys } from './sceneSignals';
+import { rotorCount, rotorRpmKey } from './sceneRotors';
+import { ScenePlaybackClock } from './scenePlayback';
+import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
 
 export type ScenePacket = Record<string, unknown>;
 export type SceneOrigin = { latitude: number; longitude: number; altitude: number };
@@ -11,12 +14,15 @@ export type ScenePose = {
   roll: number; pitch: number; yaw: number; speed: number | null; verticalSpeed: number | null;
   agl: number | null; ground: number | null; tilt: number | null;
   motors: (number | null)[]; thrust: number | null;
+  rpm: (number | null)[]; rpmSampleAt: (number | null)[]; rpmSense: (number | null)[];
+  rpmModelVersion: number | null; rpmTailCalibrated: boolean | null;
+  gimbals: { outer: number | null; inner: number | null; outerSampleAt: number | null; innerSampleAt: number | null }[];
   tiltSampleAt: number | null; motorSampleAt: (number | null)[];
   thrustSampleAt: number | null; groundSampleAt: number | null;
   tiltSource: 'monitor' | 'tree' | null;
 };
 type SceneAircraft = { latest: ScenePose; samples: ScenePose[]; trail: ScenePose[]; history: ScenePose[];
-  retired: string[]; source: 'scene' | 'fallback'; telemetryTime?: number };
+  retired: string[]; source: 'scene' | 'fallback'; telemetryTime?: number; playback: ScenePlaybackClock };
 export const SCENE_COLORS = ['#3b82f6', '#12b9b1', '#e7a43a', '#a77beb', '#ee718b', '#63a878', '#6f91c6', '#bf946d'];
 export const STALE_MS = 2000;
 const rad = Math.PI / 180;
@@ -28,7 +34,7 @@ export const bodyToSceneBasis = () => basis.clone();
 export const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const number = (...values: unknown[]) => values.find(finite) as number | undefined;
 const canonical = (path: string) => path.replace(/\[0\]/g, '').replace(/^\/(?:\d+\/)?jsbsim\//, '/');
-const scenePropertyKeys = new Set(sceneSignalKeys('voliro_t').map(key => canonical('/' + key)));
+const scenePropertyKeys = new Set([...sceneSignalKeys('voliro_t'), ...sceneSignalKeys('F450'), ...sceneSignalKeys('MorphQuad')].map(key => canonical('/' + key)));
 
 export interface ScenePropertyReading { value: number; age: number; source: 'monitor' | 'tree' }
 /** Keep measured values separate from freshness; a rotating tree is not a 2 s stream. */
@@ -93,14 +99,28 @@ export function decodeScenePose(packet: ScenePacket, now: number): ScenePose | n
   const thrusts = Array.from({ length: 5 }, (_, i) => scenePropertyReading(packet, `fcs/voliro_t/thrust-lbf[${i}]`));
   const thrust = thrusts.every(reading => reading !== undefined)
     ? (thrusts as ScenePropertyReading[]).reduce((sum, reading) => sum + reading.value, 0) * 4.4482216153 : null;
+  const model = typeof packet.model === 'string' ? packet.model : '未知机型';
+  const rpm = Array.from({ length: rotorCount(model) }, (_, i) => scenePropertyReading(packet, rotorRpmKey(model, i)));
+  const rpmSense = rpm.map((_, i) => scenePropertyReading(packet, `propulsion/engine[${i}]/propeller-sense`));
+  const gimbals = isMorphQuad(model) ? MORPHQUAD_ARMS.map((_, i) => {
+    const outer = scenePropertyReading(packet, gimbalKey(i, 'outer'));
+    const inner = scenePropertyReading(packet, gimbalKey(i, 'inner'));
+    return { outer: outer?.value ?? null, inner: inner?.value ?? null,
+      outerSampleAt: outer ? now - outer.age : null, innerSampleAt: inner ? now - inner.age : null };
+  }) : [];
   return {
-    id: String(idNumber).padStart(2, '0'), model: typeof packet.model === 'string' ? packet.model : '未知机型',
+    id: String(idNumber).padStart(2, '0'), model,
     generation: String(packet.tree_generation ?? ''), time: time!, capture: number(packet.capture_monotonic_us, packet.scene_sequence),
     poseSource: 'telemetry', epoch: number(packet.scene_epoch),
     receivedAt: now - Math.max(0, number(packet.age_ms) ?? 0), state: String(packet.state ?? 'running'),
     latitude: latitude!, longitude: longitude!, altitude: altitude!, roll: roll!, pitch: pitch!, yaw: yaw!,
     speed: number(packet.groundspeed_mps) ?? null, verticalSpeed: number(packet.vertical_speed_mps) ?? null,
-    ground, agl, tilt: tilt?.value ?? null, motors: motors.map(reading => reading?.value ?? null), thrust,
+    ground, agl, gimbals, tilt: tilt?.value ?? null, motors: motors.map(reading => reading?.value ?? null), thrust,
+    rpm: rpm.map(reading => reading?.value ?? null), rpmSampleAt: rpm.map(reading => reading ? now - reading.age : null),
+    rpmSense: rpmSense.map(reading => reading?.value === 1 || reading?.value === -1 ? reading.value : null),
+    rpmModelVersion: scenePropertyReading(packet, 'fcs/voliro_t/rpm-model/version')?.value ?? null,
+    rpmTailCalibrated: scenePropertyReading(packet, 'fcs/voliro_t/rpm-model/tail-calibrated')?.value == null ? null
+      : scenePropertyReading(packet, 'fcs/voliro_t/rpm-model/tail-calibrated')!.value >= .5,
     tiltSampleAt: tilt ? now - tilt.age : null, motorSampleAt: motors.map(reading => reading ? now - reading.age : null),
     thrustSampleAt: thrust !== null ? now - Math.max(...thrusts.map(reading => reading!.age)) : null,
     groundSampleAt: groundFeet || aglFeet ? now - (groundFeet ?? aglFeet)!.age : null, tiltSource: tilt?.source ?? null,
@@ -189,7 +209,7 @@ export class FlightSceneFeed {
           const pose = current && !cache.restart ? { ...current, latitude, longitude, altitude,
             roll: roll / rad, pitch: pitch / rad, yaw: yaw / rad, time: lastTime, state: String(frame.state) } : decoded;
           cache.poseSequence = monitor.sequence;
-          this.commitPose(this.withMonitor({ ...pose, receivedAt: oldest, poseSource: 'monitor' }, now), entry, false, cache.restart, 'scene');
+          this.commitPose(this.withMonitor({ ...pose, receivedAt: oldest, poseSource: 'monitor' }, now), entry, false, cache.restart, 'scene', now);
           cache.restart = false;
         }
       }
@@ -213,7 +233,19 @@ export class FlightSceneFeed {
       ...(thrust ? { thrust: fast.thrust, thrustSampleAt: fast.thrustSampleAt } : {}),
       ...(ground ? { ground: fast.ground ?? pose.ground, agl: fast.agl ?? pose.agl, groundSampleAt: fast.groundSampleAt } : {}),
       motors: pose.motors.map((value, i) => prefer(fast.motorSampleAt[i], pose.motorSampleAt[i]) ? fast.motors[i] : value),
-      motorSampleAt: pose.motorSampleAt.map((seen, i) => prefer(fast.motorSampleAt[i], seen) ? fast.motorSampleAt[i] : seen) };
+      motorSampleAt: pose.motorSampleAt.map((seen, i) => prefer(fast.motorSampleAt[i], seen) ? fast.motorSampleAt[i] : seen),
+      rpm: pose.rpm.map((value, i) => prefer(fast.rpmSampleAt[i], pose.rpmSampleAt[i]) ? fast.rpm[i] : value),
+      rpmSampleAt: pose.rpmSampleAt.map((seen, i) => prefer(fast.rpmSampleAt[i], seen) ? fast.rpmSampleAt[i] : seen),
+      rpmSense: pose.rpmSense.map((sense, i) => fast.rpmSense[i] ?? sense),
+      gimbals: pose.gimbals.map((gimbal, i) => {
+        const sample = fast.gimbals[i];
+        const newer = (fastAt: number | null, baseAt: number | null) => fastAt !== null && (baseAt === null || fastAt >= baseAt);
+        const outer = newer(sample.outerSampleAt, gimbal.outerSampleAt), inner = newer(sample.innerSampleAt, gimbal.innerSampleAt);
+        return { outer: outer ? sample.outer : gimbal.outer, inner: inner ? sample.inner : gimbal.inner,
+          outerSampleAt: outer ? sample.outerSampleAt : gimbal.outerSampleAt, innerSampleAt: inner ? sample.innerSampleAt : gimbal.innerSampleAt };
+      }),
+      rpmModelVersion: fast.rpmModelVersion ?? pose.rpmModelVersion,
+      rpmTailCalibrated: fast.rpmTailCalibrated ?? pose.rpmTailCalibrated };
   }
   ingest(packet: ScenePacket, now = performance.now(), source: 'scene' | 'fallback' = 'scene'): boolean {
     let pose = decodeScenePose(packet, now);
@@ -247,23 +279,34 @@ export class FlightSceneFeed {
           existing!.latest = this.withMonitor({ ...previous, state: pose.state, tilt: pose.tilt, motors: pose.motors,
             thrust: pose.thrust, ground: pose.ground, agl: pose.agl, tiltSampleAt: pose.tiltSampleAt,
             motorSampleAt: pose.motorSampleAt, thrustSampleAt: pose.thrustSampleAt,
-            groundSampleAt: pose.groundSampleAt, tiltSource: pose.tiltSource }, now);
+            groundSampleAt: pose.groundSampleAt, tiltSource: pose.tiltSource,
+            rpm: pose.rpm, rpmSampleAt: pose.rpmSampleAt, rpmSense: pose.rpmSense,
+            gimbals: pose.gimbals,
+            rpmModelVersion: pose.rpmModelVersion, rpmTailCalibrated: pose.rpmTailCalibrated }, now);
         }
         return false;
       }
     }
-    this.commitPose(pose, existing, !!changed, !!rewound, source);
+    this.commitPose(pose, existing, !!changed, !!rewound, source, now);
     return true;
   }
-  private commitPose(pose: ScenePose, existing: SceneAircraft | undefined, changed: boolean, rewound: boolean, source: 'scene' | 'fallback') {
+  private commitPose(pose: ScenePose, existing: SceneAircraft | undefined, changed: boolean, rewound: boolean, source: 'scene' | 'fallback', now: number) {
     const entry: SceneAircraft = !existing || changed || rewound
-      ? { latest: pose, samples: [], trail: [], history: [], retired: rewound ? [] : changed ? [...existing!.retired, `${existing!.latest.model}:${existing!.latest.generation}`].slice(-8) : existing?.retired || [], source }
+      ? { latest: pose, samples: [], trail: [], history: [], retired: rewound ? [] : changed ? [...existing!.retired, `${existing!.latest.model}:${existing!.latest.generation}`].slice(-8) : existing?.retired || [], source, playback: new ScenePlaybackClock() }
       : existing;
+    if (entry.samples.length && (pose.receivedAt - entry.latest.receivedAt >= STALE_MS
+      || pose.state !== entry.latest.state)) {
+      // Resume from the new measured pose, without interpolating through a pause
+      // or replaying the samples retained from before a connection outage.
+      entry.samples = [];
+      entry.playback = new ScenePlaybackClock();
+    }
     entry.source = source;
     entry.latest = pose;
     if (pose.poseSource === 'telemetry') entry.telemetryTime = pose.time;
     entry.samples.push(pose);
-    if (entry.samples.length > 16) entry.samples.shift();
+    if (entry.samples.length > 64) entry.samples.shift();
+    entry.playback.observe(entry.samples, now);
     const lastHistory = entry.history[entry.history.length - 1];
     if (!lastHistory || pose.time - lastHistory.time >= .1) entry.history.push(pose);
     if (entry.history.length > 300) entry.history.shift();
@@ -284,13 +327,13 @@ export class FlightSceneFeed {
     if (!entry || !this.origin) return null;
     const latest = entry.latest;
     const stale = now - latest.receivedAt > STALE_MS;
-    const target = latest.state !== 'running' || stale ? Infinity : now - 80;
-    let a = latest, b = latest;
+    const target = entry.playback.sample(entry.samples, now, latest.state !== 'running' || stale);
+    let a = entry.samples[0], b = latest;
     for (let i = 1; i < entry.samples.length; i++) {
-      if (entry.samples[i].receivedAt >= target) { a = entry.samples[i - 1]; b = entry.samples[i]; break; }
+      if (entry.samples[i].time >= target) { a = entry.samples[i - 1]; b = entry.samples[i]; break; }
     }
-    const fraction = a === b ? 1 : Math.max(0, Math.min(1, (target - a.receivedAt) / Math.max(1, b.receivedAt - a.receivedAt)));
-    return { position: localPosition(a, this.origin).lerp(localPosition(b, this.origin), fraction),
+    const fraction = a === b || b.time <= a.time ? 1 : Math.max(0, Math.min(1, (target - a.time) / (b.time - a.time)));
+    return { time: target, position: localPosition(a, this.origin).lerp(localPosition(b, this.origin), fraction),
       quaternion: sceneAttitude(a).slerp(sceneAttitude(b), fraction), stale, pose: latest };
   }
 }
@@ -304,7 +347,17 @@ export function demoPackets(time: number): ScenePacket[] {
       properties['/fcs/voliro_t/pitch-rad'] = (18 + Math.sin(time * .3) * 4) * rad;
       for (let m = 0; m < 5; m++) { properties[`/fcs/esc-out[${m}]`] = m === 4 ? -.08 : .5 + Math.sin(time + m) * .04; properties[`/fcs/voliro_t/thrust-lbf[${m}]`] = m === 4 ? -.1 : 2.9; }
     }
-    return { instance_id: String(i + 1).padStart(2, '0'), model: i ? 'F450' : 'voliro_t', tree_generation: 'demo',
+    const model = i === 0 ? 'voliro_t' : i === 7 ? 'MorphQuad' : 'F450';
+    if (isMorphQuad(model)) MORPHQUAD_ARMS.forEach((_, arm) => {
+      properties[gimbalKey(arm, 'outer')] = Math.sin(time * .45 + arm) * .6;
+      properties[gimbalKey(arm, 'inner')] = Math.cos(time * .35 + arm) * .35;
+    });
+    for (let m = 0; m < rotorCount(model); m++) {
+      properties[rotorRpmKey(model, m)] = i === 0 && m === 4 ? -4200 : 2800 + Math.sin(time + m) * 200;
+      if (i !== 0) properties[`/propulsion/engine[${m}]/propeller-sense`] = isMorphQuad(model)
+        ? MORPHQUAD_ARMS[Math.floor(m / 2)].senses[m % 2] : [1, -1, -1, 1][m];
+    }
+    return { instance_id: String(i + 1).padStart(2, '0'), model, tree_generation: 'demo',
       timestamp: time, capture_monotonic_us: time * 1e6, state: 'running', latitude_deg: 34.07189 + north / 110_900,
       longitude_deg: 108.99734 + east / 92_300, altitude_m: 595 + Math.sin(time * .2 + i) * .3,
       roll_deg: Math.sin(time * .4 + i) * 2.3, pitch_deg: -5.6 + Math.cos(time * .3) * 1.2, yaw_deg: 86.2,

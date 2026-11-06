@@ -46,7 +46,15 @@ fn simulator_ftp(address: Ipv4Addr) -> bool {
         return false;
     }
     line.clear();
-    reader.read_line(&mut line).is_ok_and(|length| length > 0 && line.starts_with("250 "))
+    if reader.read_line(&mut line).is_err() { return false; }
+    let sd_library = line.starts_with("250 ");
+    let missing_sd_library = line.starts_with("550 ");
+    let _ = stream.write_all(b"QUIT\r\n");
+    drop(reader);
+    drop(stream);
+    // A ROMFS-only board is still a simulator. Do not require a user model
+    // directory on the SD card, or register an arbitrary NuttX FTP server.
+    sd_library || (missing_sd_library && crate::romfs_network::verify_library(address))
 }
 
 pub fn verify(address: Ipv4Addr) -> bool {

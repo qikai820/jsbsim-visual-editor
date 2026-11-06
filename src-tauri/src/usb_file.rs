@@ -52,6 +52,8 @@ const NSH_EXEC: u16 = 12;
 const RENAME: u16 = 13;
 const CONSOLE_READ: u16 = 14;
 const NSH_EXEC_TIMEOUT: Duration = Duration::from_secs(8);
+// Match the board's 30 s PHY/ioctl budget, with room for its reply and USB I/O.
+const NSH_NETWORK_TIMEOUT: Duration = Duration::from_secs(35);
 
 static REQUEST_ID: OnceLock<AtomicU32> = OnceLock::new();
 static USB_ACCESS: UsbAccess = UsbAccess::new();
@@ -381,7 +383,11 @@ pub fn nsh_execute(command: &str) -> Result<String, String> {
         let handle = open()?;
         write_file_request(&handle, NSH_EXEC, 0, 0, command.as_bytes(), request_id, TIMEOUT)?;
     }
-    let deadline = std::time::Instant::now() + NSH_EXEC_TIMEOUT;
+    let timeout = match command.split_whitespace().next() {
+        Some("ifup" | "ifdown" | "ifconfig") => NSH_NETWORK_TIMEOUT,
+        _ => NSH_EXEC_TIMEOUT,
+    };
+    let deadline = std::time::Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -394,6 +400,9 @@ pub fn nsh_execute(command: &str) -> Result<String, String> {
         };
         if let Some(response) = response {
             if response.status < 0 {
+                if response.status == -libc::EBUSY {
+                    return Err("上一条 NSH 命令仍在板端执行；本次命令未执行。请稍后重试，可在「JSBSim 信息 → NSH 打印」查看驱动日志。".into());
+                }
                 return Err(format!("board file operation failed: errno {}", -response.status));
             }
             return Ok(String::from_utf8_lossy(&response.payload).into_owned());
