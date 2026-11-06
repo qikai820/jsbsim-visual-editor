@@ -1485,6 +1485,19 @@ html, body, #root {
 .library-select-sim-btn:hover:not(:disabled) { filter: brightness(0.97); }
 .library-load-btn:hover { opacity: 0.9; }
 .library-load-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.library-load-error {
+  margin: 10px 20px 0;
+  padding: 10px 12px;
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 130px;
+  overflow-y: auto;
+}
 .library-user-actions { display: flex; gap: 8px; margin-top: 8px; }
 .library-user-actions button {
   flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 8px;

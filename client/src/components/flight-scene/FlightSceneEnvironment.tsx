@@ -1,7 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid } from '@react-three/drei';
-import { BackSide, BufferGeometry, Color, Float32BufferAttribute, InstancedMesh, Mesh, Object3D } from 'three';
+import { BackSide, BufferGeometry, Color, Float32BufferAttribute, Mesh } from 'three';
 import type { SceneSurfaceTextures } from './sceneSurfaceTextures';
 
 // Cool grey haze follows the photographic panorama's horizon rather than the
@@ -22,47 +22,6 @@ export function SceneSky({ maps }: { maps: SceneSurfaceTextures }) {
   </mesh>;
 }
 
-const TREE_COUNT = 32;
-// Three draws for the entire grove, including its baked ground shade.
-function Trees({ maps }: { maps: SceneSurfaceTextures }) {
-  const trunks = useRef<InstancedMesh>(null), crowns = useRef<InstancedMesh>(null), shades = useRef<InstancedMesh>(null);
-  useLayoutEffect(() => {
-    if (!trunks.current || !crowns.current || !shades.current) return;
-    const pose = new Object3D(), color = new Color();
-    for (let i = 0; i < TREE_COUNT; i++) {
-      const x = i % 2 ? 115 + Math.sin(i * 17.1) * 38 : -105 + Math.sin(i * 17.1) * 35;
-      const z = 15 - (i / TREE_COUNT) * 380 + Math.cos(i * 13.3) * 12;
-      const size = .8 + (Math.sin(i * 7.7) + 1) * .25;
-      pose.position.set(x, size * 1.5, z); pose.rotation.set(0, i * 2.4, 0); pose.scale.set(size * .24, size * 3, size * .24); pose.updateMatrix();
-      trunks.current.setMatrixAt(i, pose.matrix);
-      for (let lobe = 0; lobe < 3; lobe++) {
-        pose.position.set(x + (lobe - 1) * size * .65, size * (lobe === 1 ? 5.2 : 4.1), z + Math.sin(i + lobe) * size * .5);
-        pose.scale.set(size * 1.9, size * (lobe === 1 ? 2.4 : 1.8), size * 1.8); pose.updateMatrix();
-        crowns.current.setMatrixAt(i * 3 + lobe, pose.matrix);
-        color.setHSL(.23 + Math.sin(i * 3.2) * .025, .22, .25 + Math.sin(i * 5.3 + lobe) * .035);
-        crowns.current.setColorAt(i * 3 + lobe, color);
-      }
-      pose.position.set(x + 1.8 * size, .012, z - size); pose.rotation.set(-Math.PI / 2, 0, -.35); pose.scale.set(size * 7, size * 5, 1); pose.updateMatrix();
-      shades.current.setMatrixAt(i, pose.matrix);
-    }
-    for (const mesh of [trunks.current, crowns.current, shades.current]) {
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
-    }
-    crowns.current.instanceColor!.needsUpdate = true;
-  }, []);
-  return <>
-    <instancedMesh ref={trunks} args={[undefined, undefined, TREE_COUNT]}>
-      <cylinderGeometry args={[.65, 1, 1, 5]} /><meshLambertMaterial color="#625b48" />
-    </instancedMesh>
-    <instancedMesh ref={crowns} args={[undefined, undefined, TREE_COUNT * 3]}>
-      <icosahedronGeometry args={[1, 0]} /><meshLambertMaterial />
-    </instancedMesh>
-    <instancedMesh ref={shades} args={[undefined, undefined, TREE_COUNT]}>
-      <planeGeometry /><meshBasicMaterial map={maps.shadow} color="#243024" transparent opacity={.32} depthWrite={false} polygonOffset polygonOffsetFactor={-1} />
-    </instancedMesh>
-  </>;
-}
 
 function Hills() {
   const geometry = useMemo(() => {
@@ -104,18 +63,15 @@ function Grass({ maps }: { maps: SceneSurfaceTextures }) {
   </mesh>;
 }
 
-export const Field = memo(function Field({ grid, groundY, maps }: { grid: boolean; groundY: number; maps: SceneSurfaceTextures }) {
+export const Field = memo(function Field({ grid, groundY, maps, scenery = true }: { grid: boolean; groundY: number; maps: SceneSurfaceTextures; scenery?: boolean }) {
   return <group position={[0, groundY, 0]}>
-    <Grass maps={maps} />
+    {scenery && <Grass maps={maps} />}
     {grid && <Grid position={[0, .03, 0]} args={[500, 500]} cellSize={5} sectionSize={25}
       cellColor="#718372" sectionColor="#a2b4a0" cellThickness={.4} sectionThickness={.65}
       fadeDistance={180} fadeStrength={1.7} />}
-    <mesh position={[50, .025, -100]} rotation={[-Math.PI / 2, 0, 0]}><planeGeometry args={[18, 320]} /><meshBasicMaterial map={maps.runway} toneMapped={false} /></mesh>
-    <mesh position={[-10, .028, 5]} rotation={[-Math.PI / 2, 0, 0]}><planeGeometry args={[8, 8]} /><meshBasicMaterial map={maps.pad} toneMapped={false} /></mesh>
-    <mesh position={[-35, .018, -32]} rotation={[-Math.PI / 2, 0, 0]}><planeGeometry args={[30, 22]} /><meshBasicMaterial map={maps.concrete} toneMapped={false} /></mesh>
-    <mesh position={[-32, .01, -51]} rotation={[-Math.PI / 2, 0, 0]} scale={[36, 27, 1]}><planeGeometry /><meshBasicMaterial map={maps.shadow} color="#18221c" transparent opacity={.45} depthWrite={false} /></mesh>
-    <mesh position={[-35, 4, -50]}><boxGeometry args={[22, 8, 16]} /><meshStandardMaterial color="#98a5a5" roughness={.85} /></mesh>
-    <mesh position={[-35, 3, -41.95]}><boxGeometry args={[13, 6, .1]} /><meshStandardMaterial color="#495756" roughness={.8} /></mesh>
-    <Trees maps={maps} /><Hills />
+    {scenery && <>
+      <mesh position={[-10, .028, 5]} rotation={[-Math.PI / 2, 0, 0]}><planeGeometry args={[8, 8]} /><meshBasicMaterial map={maps.pad} toneMapped={false} /></mesh>
+      <Hills />
+    </>}
   </group>;
 });

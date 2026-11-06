@@ -12,6 +12,7 @@ export type ScenePose = {
   poseSource: 'telemetry' | 'monitor'; epoch?: number;
   receivedAt: number; state: string; latitude: number; longitude: number; altitude: number;
   roll: number; pitch: number; yaw: number; speed: number | null; verticalSpeed: number | null;
+  sceneStatusSampleAt?: number | null; sceneLoaded?: number | null; sceneRevision?: number | null; sceneContacts?: number | null;
   agl: number | null; ground: number | null; tilt: number | null;
   motors: (number | null)[]; thrust: number | null;
   rpm: (number | null)[]; rpmSampleAt: (number | null)[]; rpmSense: (number | null)[];
@@ -90,6 +91,11 @@ export function decodeScenePose(packet: ScenePacket, now: number): ScenePose | n
   if ([latitude, longitude, altitude, roll, pitch, yaw, time].some(v => v === undefined)) return null;
   if (Math.abs(latitude!) > 90 || Math.abs(longitude!) > 180) return null;
   if (!finite(packet.latitude_deg) && packet.latitude_kind !== 'geodetic') latitude = geocentricLatitude(latitude!, altitude);
+  const statusReading = scenePropertyReading(packet, 'scene/loaded');
+  const sceneStatusSampleAt = statusReading ? now - statusReading.age : null;
+  const sceneLoaded = sceneProperty(packet, 'scene/loaded') ?? null;
+  const sceneRevision = sceneProperty(packet, 'scene/revision') ?? null;
+  const sceneContacts = sceneProperty(packet, 'scene/contact-count') ?? null;
   const groundFeet = scenePropertyReading(packet, 'position/terrain-elevation-asl-ft');
   const aglFeet = scenePropertyReading(packet, 'position/h-agl-ft');
   const ground = groundFeet === undefined ? null : groundFeet.value * .3048;
@@ -115,7 +121,7 @@ export function decodeScenePose(packet: ScenePacket, now: number): ScenePose | n
     receivedAt: now - Math.max(0, number(packet.age_ms) ?? 0), state: String(packet.state ?? 'running'),
     latitude: latitude!, longitude: longitude!, altitude: altitude!, roll: roll!, pitch: pitch!, yaw: yaw!,
     speed: number(packet.groundspeed_mps) ?? null, verticalSpeed: number(packet.vertical_speed_mps) ?? null,
-    ground, agl, gimbals, tilt: tilt?.value ?? null, motors: motors.map(reading => reading?.value ?? null), thrust,
+    sceneStatusSampleAt, sceneLoaded, sceneRevision, sceneContacts, ground, agl, gimbals, tilt: tilt?.value ?? null, motors: motors.map(reading => reading?.value ?? null), thrust,
     rpm: rpm.map(reading => reading?.value ?? null), rpmSampleAt: rpm.map(reading => reading ? now - reading.age : null),
     rpmSense: rpmSense.map(reading => reading?.value === 1 || reading?.value === -1 ? reading.value : null),
     rpmModelVersion: scenePropertyReading(packet, 'fcs/voliro_t/rpm-model/version')?.value ?? null,
@@ -229,7 +235,8 @@ export class FlightSceneFeed {
       (baseAt === null || fastAt > baseAt || now - fastAt < STALE_MS && pose.tiltSource !== 'monitor');
     const tilt = prefer(fast.tiltSampleAt, pose.tiltSampleAt), thrust = prefer(fast.thrustSampleAt, pose.thrustSampleAt);
     const ground = prefer(fast.groundSampleAt, pose.groundSampleAt);
-    return { ...pose, ...(tilt ? { tilt: fast.tilt, tiltSampleAt: fast.tiltSampleAt, tiltSource: fast.tiltSource } : {}),
+    const scene = prefer(fast.sceneStatusSampleAt ?? null, pose.sceneStatusSampleAt ?? null);
+    return { ...pose, ...(scene ? { sceneStatusSampleAt: fast.sceneStatusSampleAt, sceneLoaded: fast.sceneLoaded, sceneRevision: fast.sceneRevision, sceneContacts: fast.sceneContacts } : {}), ...(tilt ? { tilt: fast.tilt, tiltSampleAt: fast.tiltSampleAt, tiltSource: fast.tiltSource } : {}),
       ...(thrust ? { thrust: fast.thrust, thrustSampleAt: fast.thrustSampleAt } : {}),
       ...(ground ? { ground: fast.ground ?? pose.ground, agl: fast.agl ?? pose.agl, groundSampleAt: fast.groundSampleAt } : {}),
       motors: pose.motors.map((value, i) => prefer(fast.motorSampleAt[i], pose.motorSampleAt[i]) ? fast.motors[i] : value),
@@ -277,6 +284,7 @@ export class FlightSceneFeed {
         // Cached IPC snapshots carry increasing age_ms. Never revive a stale pose.
         if (packet.scene_property_age_ms) {
           existing!.latest = this.withMonitor({ ...previous, state: pose.state, tilt: pose.tilt, motors: pose.motors,
+            sceneStatusSampleAt: pose.sceneStatusSampleAt, sceneLoaded: pose.sceneLoaded, sceneRevision: pose.sceneRevision, sceneContacts: pose.sceneContacts,
             thrust: pose.thrust, ground: pose.ground, agl: pose.agl, tiltSampleAt: pose.tiltSampleAt,
             motorSampleAt: pose.motorSampleAt, thrustSampleAt: pose.thrustSampleAt,
             groundSampleAt: pose.groundSampleAt, tiltSource: pose.tiltSource,

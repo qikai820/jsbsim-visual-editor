@@ -59,7 +59,7 @@ try {
   await until(`(${assetStates}).length===5 && (${assetStates}).every(asset=>asset.state==='ready')`);
   assert.deepEqual(await evaluate(`(${assetStates}).map(asset=>asset.asset).sort()`), ['asphalt_02','concrete_floor_01','concrete_floor_01','grass_ground','kloppenheim_03_puresky'], 'all photographic surfaces are loaded from the bundle');
   assert.equal(await evaluate(`document.querySelector('[data-testid=flight-scene]').dataset.mode`), 'live');
-  await until(`window.__calls.some(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.includes('fcs/voliro_t/pitch-rad')&&c.args.keys.length===26)`);
+  await until(`window.__calls.some(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.includes('fcs/voliro_t/pitch-rad')&&c.args.keys.length===29)`);
   await evaluate(`(async()=>{const{demoPackets}=await import('/src/sim/flightSceneState.ts');window.__packets=demoPackets(12);window.__emit('scene-frames',window.__packets)})()`);
   await until(`document.querySelectorAll('[data-aircraft]').length===8 && !document.querySelector('.scene-empty')`);
   await until(`document.querySelector('.scene-status').textContent.includes('8 / 8 在线')`);
@@ -211,7 +211,7 @@ try {
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-4').userData.angularVelocity<0`);
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-ground-shade-01').visible`);
   await evaluate(`(()=>{const input=document.querySelector('input[aria-label="参考地面海拔"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'650');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
-  await until(`!window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-ground-shade-01').visible`);
+  await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-ground-shade-01').visible`); // Fixed georeference keeps the field/shade baseline stable.
   await evaluate(`(()=>{const input=document.querySelector('input[aria-label="参考地面海拔"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-ground-shade-01').visible`);
   const rotatingAngle=await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').rotation.y`);

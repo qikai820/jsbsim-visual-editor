@@ -1,5 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod scene_collision;
 
 mod disabled_xml;
 mod xml_parser;
@@ -9,6 +10,7 @@ mod xml_generator;
 mod expression_xml;
 mod sim_client;
 mod scene_telemetry;
+mod scene_files;
 mod signal_monitor;
 mod runtime_tuning;
 mod flight_controller_status;
@@ -41,6 +43,11 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
+
+#[tauri::command]
+async fn scene_import_directory(window: tauri::WebviewWindow) -> Result<Option<Vec<scene_files::SceneSourceFile>>, String> {
+    scene_files::pick_directory(window).await
+}
 
 // ── Shared application state ────────────────────────────────────────────────
 
@@ -905,6 +912,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             "cpuCores": cpu_cores,
             "healthAgeMs": health_age_ms,
             "memory": memory,
+            "temperatures": client.temperatures(),
             "network": client.network_counters(),
             "mcap": client.mcap_status(),
             "fdmRunMs": fdm_run_ms,
@@ -1125,6 +1133,15 @@ async fn ftp_upload_file(path: String, content: String) -> Result<serde_json::Va
         ftp_sync::upload_file(&path, &content)?;
         Ok(serde_json::json!({ "path": path, "uploaded": true, "source": ftp_sync::transport_source() }))
     }).await
+}
+
+#[tauri::command]
+async fn scene_upload_collision(model: String, content: String) -> Result<serde_json::Value, String> {
+    let revision = scene_collision::validate(&content)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        ftp_sync::upload_model_asset(&model, "scene.collision", content.as_bytes())?;
+        Ok(serde_json::json!({ "revision": revision, "path": format!("jsbsim/aircraft/{model}/scene.collision"), "readback_verified": true, "active": false }))
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1743,6 +1760,7 @@ fn main() {
             ftp_delete_log,
             ftp_download_dsdl,
             ftp_upload_file,
+            scene_upload_collision,
             ftp_upload_model_assets,
             check_model_assets,
             ftp_download_script,
@@ -1769,6 +1787,7 @@ fn main() {
             usb_file_finish_editor,
             usb_file_upload_local,
             usb_file_upload_folder,
+            scene_import_directory,
             select_firmware_file,
             firmware_stage_file,
             firmware_stage,

@@ -26,9 +26,19 @@ pub fn parse(output: &str) -> Result<Vec<StorageUsage>, String> {
             has_header = true;
             continue;
         }
-        let Some(volume) = volumes.iter_mut().find(|volume| fields.last() == Some(&volume.mount_path)) else {
+        let mount = match fields.last().copied() {
+            Some("/mnt/sdcard") => "/mnt/sdcard",
+            Some("/data") => "/data",
+            Some("/mnt/home") => "/mnt/home",
+            _ => continue,
+        };
+        let key = if mount == "/mnt/sdcard" { "sd" } else { "data" };
+        let Some(volume) = volumes.iter_mut().find(|volume| volume.volume == key) else {
             continue;
         };
+        // Reject ambiguous data roots rather than writing to an arbitrary disk.
+        if volume.total_bytes.is_some() { return Err("Multiple mounted data volumes".into()); }
+        volume.mount_path = mount;
         let invalid = || format!("Invalid storage statistics for {}", volume.mount_path);
         if fields.len() != 5 || volume.total_bytes.is_some() { return Err(invalid()); }
         let counts = fields[..4].iter().map(|field| field.parse::<u64>())
@@ -67,6 +77,16 @@ mod tests {
         assert_eq!(volumes[1].available_bytes, Some(0));
         let empty = parse(&format!("{HEADER}512 100 0 100 /data\n")).unwrap();
         assert_eq!(empty[1].used_bytes, Some(0));
+    }
+
+    #[test]
+    fn recognizes_orangepi_ssd_and_rejects_ambiguous_data_roots() {
+        let output = format!("{HEADER}4096 1000000 400000 600000 /mnt/home\n");
+        let volumes = parse(&output).unwrap();
+        assert_eq!(volumes[1].volume, "data");
+        assert_eq!(volumes[1].mount_path, "/mnt/home");
+        assert_eq!(volumes[1].total_bytes, Some(4_096_000_000));
+        assert!(parse(&format!("{output}4096 10 1 9 /data\n")).is_err());
     }
 
     #[test]

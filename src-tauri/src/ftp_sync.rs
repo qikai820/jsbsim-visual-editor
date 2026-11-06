@@ -774,10 +774,10 @@ pub fn download_config(path: &str) -> Result<String, String> {
     if use_usb() {
         return read_usb_library(path, false);
     }
-    let url = format!("{}/jsbsim/{}", endpoint()?, path);
-    let auth = credentials();
-    String::from_utf8(curl_output(&["--user", &auth, &url])?)
-        .map_err(|e| format!("remote config is not UTF-8: {e}"))
+    // Runtime JSON ships in ROMFS alongside the model XML and sidecars.
+    // A ROMFS-only board may have NSH but no FTP service or mounted SD card.
+    // Use the same SD-first, ROMFS-fallback read path as the model itself.
+    read_ftp_library(path)
 }
 
 pub fn upload_config(path: &str, content: &str) -> Result<(), String> {

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 const baseUrl = process.argv[2] || 'http://127.0.0.1:5179';
+const ssd = process.argv.includes('--ssd');
 const profile = await mkdtemp(path.join(tmpdir(), 'jsbsim-import-ui-'));
 const chrome = spawn('/usr/bin/google-chrome-stable', [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run',
@@ -76,7 +77,7 @@ try {
         if(command==='usb_file_edit_sessions')return [];
         if(command==='usb_file_storage')return [
           {volume:'sd',mountPath:'/mnt/sdcard',totalBytes:null,usedBytes:null,availableBytes:null},
-          {volume:'data',mountPath:'/data',totalBytes:7529250816,usedBytes:146784256,availableBytes:7382466560}];
+          {volume:'data',mountPath:'${ssd ? '/mnt/home' : '/data'}',totalBytes:7529250816,usedBytes:146784256,availableBytes:7382466560}];
         if(command==='usb_file_list'||command==='usb_file_list_with_modified'){
           if(args.path==='sd')throw 'SD 卡未挂载，无法访问文件 (/mnt/sdcard)';
           return {files:[{name:'emmc_test.txt',directory:false,size:13,modified:1789803300},{name:'jsbsim',directory:true,size:0}]};
@@ -94,7 +95,7 @@ try {
   await evaluate('Array.from(document.querySelectorAll("[role=menuitem]")).find(b=>/Simulator Files|仿真机文件管理/.test(b.textContent)).click()');
   await until('document.querySelector(".usb-fm-list")?.textContent.includes("emmc_test.txt")');
   assert.match(await evaluate('document.querySelector(".usb-fm-header").textContent'),/网口|network/);
-  assert.equal(await evaluate('document.querySelector(".usb-fm-volumes button.active strong").textContent'),'eMMC (data)');
+  assert.equal(await evaluate('document.querySelector(".usb-fm-volumes button.active strong").textContent'),ssd ? 'SSD (NVMe)' : 'eMMC (data)');
   assert.match(await evaluate('document.querySelector(".usb-fm-volumes button").textContent'),/未挂载|Not mounted/);
   assert.equal(await evaluate('document.querySelector(".usb-fm-breadcrumb").textContent'),'data');
   assert.ok(await evaluate('window.__calls.some(c=>c.command==="usb_file_list"&&c.args.path==="data")'));
@@ -104,7 +105,7 @@ try {
   await until('document.querySelector(".usb-fm")?.textContent.includes("SD 卡未挂载")');
   await evaluate('document.querySelectorAll(".usb-fm-volumes button")[1].click()');
   await until('document.querySelector(".usb-fm-list")?.textContent.includes("emmc_test.txt")');
-  console.log('PASS: network label, mounted eMMC selected, SD unavailable, data listing and volume switching. IPC mocked.');
+  console.log('PASS: network label, mounted data volume selected, SD unavailable, data listing and volume switching. IPC mocked.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getAircraftLibrary, loadAircraft, simListTests, ftpDownloadScript, ftpListEngineCatalog } from '../utils/tauriApi';
 import { fleetSlotIds, normalizeFleetSlots, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, readFleetModelGroups, saveFleetModelGroups, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from '../utils/fleetModelGroups';
 
@@ -40,13 +40,20 @@ interface Props {
 
 interface ScriptEntry { name: string; file: string; path: string; aircraft?: string; initialize?: string; start?: string; end?: string; dt?: string; events?: number; error?: string; sourcePath?: string }
 
-function waitForModelLoad<T>(request: Promise<T>, stage: string): Promise<T> {
+function waitForModelLoad<T>(request: Promise<T>, stage: string, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(`${stage}超过 90 秒，请检查仿真机连接后重试`)), 90_000);
+    const cleanup = () => { window.clearTimeout(timer); signal.removeEventListener('abort', abort); };
+    const abort = () => { cleanup(); reject(new DOMException('已取消加载', 'AbortError')); };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(`${stage}超过 90 秒，请检查仿真机连接后重试`));
+    }, 90_000);
+    signal.addEventListener('abort', abort, { once: true });
     request.then(
-      value => { window.clearTimeout(timer); resolve(value); },
-      error => { window.clearTimeout(timer); reject(error); },
+      value => { cleanup(); resolve(value); },
+      error => { cleanup(); reject(error); },
     );
+    if (signal.aborted) abort();
   });
 }
 
@@ -61,6 +68,8 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const [loadingAircraft, setLoadingAircraft] = useState(false);
   const [loadStage, setLoadStage] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [modelLoadError, setModelLoadError] = useState('');
+  const loadController = useRef<AbortController | null>(null);
   const [selectedScript, setSelectedScript] = useState<ScriptEntry | null>(null);
   const [fleetGroups, setFleetGroups] = useState(readFleetModelGroups);
   const [selectedFleetGroup, setSelectedFleetGroup] = useState<FleetModelGroup | null>(null);
@@ -71,6 +80,12 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   const [propellerFiles, setPropellerFiles] = useState<string[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+
+  useEffect(() => () => { loadController.current?.abort(); }, []);
+  const closeLibrary = () => {
+    loadController.current?.abort();
+    onClose();
+  };
 
   useEffect(() => {
     let active = true;
@@ -261,25 +276,39 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   };
 
   const handleLoad = async (aircraft: AircraftEntry) => {
+    if (loadController.current) return;
     const controller = new AbortController();
+    loadController.current = controller;
+    setModelLoadError('');
     setLoadingAircraft(true);
     setLoadStage('读取模型文件');
     try {
-      const data = await waitForModelLoad(loadAircraft(aircraft.sourceId || aircraft.id), '读取模型文件');
-      setLoadStage('导入编辑画布');
-      await waitForModelLoad(Promise.resolve().then(() => onLoad(data, controller.signal)), '导入编辑画布');
+      const data = await waitForModelLoad(loadAircraft(aircraft.sourceId || aircraft.id), '读取模型文件', controller.signal);
+      if (controller.signal.aborted) return;
+      setLoadStage('读取附加配置并导入画布');
+      await waitForModelLoad(Promise.resolve().then(() => {
+        if (!controller.signal.aborted) return onLoad(data, controller.signal);
+      }), '读取附加配置并导入画布', controller.signal);
+      if (controller.signal.aborted) return;
       // Loading a model into the editor also makes it the launch target.
       // Keeping these as separate actions left simStart() without a model
       // parameter even though the canvas already showed that aircraft.
       onSelectForSimulation?.(aircraft.sourceId || aircraft.id);
       onClose();
     } catch (err: any) {
+      const cancelled = controller.signal.aborted;
       controller.abort();
-      const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || '未知错误');
-      alert('加载失败：' + msg);
+      if (!cancelled) {
+        const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || '未知错误');
+        setModelLoadError(`加载 ${aircraft.name} 失败：${msg}`);
+      }
+    } finally {
+      if (loadController.current === controller) {
+        loadController.current = null;
+        setLoadingAircraft(false);
+        setLoadStage('');
+      }
     }
-    setLoadingAircraft(false);
-    setLoadStage('');
   };
 
   const typeCounts = {
@@ -291,13 +320,15 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
   };
 
   return (
-    <div className="wizard-overlay" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="wizard-overlay" onPointerDown={event => { if (event.target === event.currentTarget) closeLibrary(); }}>
       <div className="library-modal" onClick={e => e.stopPropagation()}>
         <div className="library-header">
           <h2>📚 模型与脚本库</h2>
           <span className="library-count">{library.length} 个模型 · {fleetGroups.length} 个多机模型组 · {scripts.length} 个脚本 · {engineFiles.length} 个发动机 · {propellerFiles.length} 个螺旋桨</span>
-          <button className="wizard-close" onClick={onClose}>✕</button>
+          <button className="wizard-close" onClick={closeLibrary}>✕</button>
         </div>
+
+        {modelLoadError && <div className="library-load-error" role="alert">{modelLoadError}</div>}
 
         <div className="library-resource-tabs"><button className={tab === 'models' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('models', 'nuttx')}>🛩️ NuttX 模型库 <b>{library.length}</b></button><button className={tab === 'fleet' ? 'active' : ''} onClick={() => selectResource('fleet', 'user')}>🛩️ 多机模型组 <b>{fleetGroups.length}</b></button><button className={tab === 'scripts' && group === 'nuttx' ? 'active' : ''} onClick={() => selectResource('scripts', 'nuttx')}>📋 NuttX 脚本库 <b>{scripts.length}</b></button><button className={tab === 'engines' ? 'active' : ''} onClick={() => selectResource('engines', 'nuttx')}>⚙️ 发动机/电机库 <b>{engineFiles.length}</b></button><button className={tab === 'propellers' ? 'active' : ''} onClick={() => selectResource('propellers', 'nuttx')}>🌀 螺旋桨库 <b>{propellerFiles.length}</b></button><button className={tab === 'models' && group === 'user' ? 'active' : ''} onClick={() => selectResource('models', 'user')}>👤 用户模型 <b>{userModels.length}</b></button><button className={tab === 'scripts' && group === 'user' ? 'active' : ''} onClick={() => selectResource('scripts', 'user')}>👤 用户脚本 <b>{userScripts.length}</b></button></div>
         <div className="library-toolbar">
@@ -401,6 +432,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
               >
                 {loadingAircraft ? `⏳ ${loadStage}...` : '📥 加载此模型'}
               </button>
+              {loadingAircraft && <button className="library-select-sim-btn" onClick={() => loadController.current?.abort()}>取消加载</button>}
               {group === 'nuttx' && <button className="library-select-sim-btn" onClick={() => copyModel(activeModel)}>📄 复制到用户模型并重命名</button>}
               {group === 'user' && <div className="library-user-actions"><button onClick={() => renameUserModel(activeModel)}>✎ 重命名</button><button className="library-delete-btn" onClick={() => deleteUserModel(activeModel)}>删除</button></div>}
               {onSelectForSimulation && (

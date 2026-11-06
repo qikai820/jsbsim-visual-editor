@@ -347,6 +347,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   const [mcapPopupOpen, setMcapPopupOpen] = useState(false);
   const mcapRef = useRef<HTMLDivElement>(null);
   const [healthFresh, setHealthFresh] = useState(false);
+  const [temperatures, setTemperatures] = useState<{ cpuC: number | null; ssdC: number | null }>({ cpuC: null, ssdC: null });
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
   const [fdmIsWindow, setFdmIsWindow] = useState(false);
@@ -483,6 +484,12 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
       const fresh = !!status.connected && typeof status.healthAgeMs === 'number' &&
         status.healthAgeMs <= 1500;
       setHealthFresh(fresh);
+      const validTemperature = (value: unknown, min: number, max: number) =>
+        fresh && typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : null;
+      setTemperatures({
+        cpuC: validTemperature(status.temperatures?.cpuC, -40, 125),
+        ssdC: validTemperature(status.temperatures?.ssdC, -100.15, 199.85),
+      });
       const mcap = fresh ? status.mcap || null : null;
       setMcapStatus(mcap);
       if (!mcap?.recording || mcap.stopping || mcap.bufferFull || !Number.isSafeInteger(mcap.recordedBytes)) {
@@ -621,7 +628,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
       setCurrentScript(status.script || null);
       setCurrentModel(status.model || null);
     } catch {
-      // ignore
+      setTemperatures({ cpuC: null, ssdC: null });
     }
   }, [appendLog]);
 
@@ -1149,7 +1156,9 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   const cpuSummary = cpuPeak == null ? '--' : `${cpuPeak.toFixed(1)}%`;
   const memorySummary = healthFresh && memory ? `${memory.percent.toFixed(1)}%` : '--';
   const fdmSummary = fdmLoading ? '…' : fdmRunMs == null ? '--' : `${fdmRunMs.toFixed(3)}ms`;
-  const metricsDescription = `CPU 最高核心 ${cpuSummary}${healthFresh && cpuCores.length > 0 ? `（${cpuCores.map((value, index) => `${index}: ${value.toFixed(1)}%`).join('，')}）` : ''}；内存 ${memorySummary}${memory ? `（已用 ${(memory.used / 1048576).toFixed(1)} / ${(memory.total / 1048576).toFixed(1)} MiB）` : ''}；FDM ${fdmLoading ? '加载中' : fdmRunMs == null ? '等待更新' : `${fdmRunMs.toFixed(3)} ms`}。点击查看性能曲线`;
+  const cpuTemperature = healthFresh && temperatures.cpuC != null ? `${temperatures.cpuC.toFixed(1)}°C` : '不可用';
+  const ssdTemperature = healthFresh && temperatures.ssdC != null ? `${temperatures.ssdC.toFixed(1)}°C` : '不可用';
+  const metricsDescription = `CPU 最高核心 ${cpuSummary}${healthFresh && cpuCores.length > 0 ? `（${cpuCores.map((value, index) => `${index}: ${value.toFixed(1)}%`).join('，')}）` : ''}；内存 ${memorySummary}${memory ? `（已用 ${(memory.used / 1048576).toFixed(1)} / ${(memory.total / 1048576).toFixed(1)} MiB）` : ''}；FDM ${fdmLoading ? '加载中' : fdmRunMs == null ? '等待更新' : `${fdmRunMs.toFixed(3)} ms`}；CPU 温度 ${cpuTemperature}（处理器温区最高值）；SSD 温度 ${ssdTemperature}。点击查看性能曲线`;
   const mcapState = !healthFresh || !mcapStatus ? '待更新'
     : mcapStatus.stopping ? '保存中' : mcapStatus.bufferFull ? '缓存已满'
       : mcapStatus.recording ? '录制中' : '未录制';
@@ -1233,6 +1242,12 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
           <span className="sim-metric-item sim-metric-fdm" aria-hidden="true">
             <svg viewBox="0 0 20 20" focusable="false"><circle cx="10" cy="11" r="6.5" /><path d="M10 4.5v-3M7 1.5h6M10 11l2.8-2.8" /></svg>
             <span>{fdmSummary}</span>
+          </span>
+          <span className="sim-metric-item sim-metric-temperature" data-testid="cpu-temperature" title="板端 CPU 温度：A55/A76 温区最高值，每 5 秒采样">
+            <span>CPU {cpuTemperature}</span>
+          </span>
+          <span className="sim-metric-item sim-metric-temperature" data-testid="ssd-temperature" title="板端 SSD 温度：NVMe SMART 综合温度，每 5 秒采样">
+            <span>SSD {ssdTemperature}</span>
           </span>
           <span className="sim-metric-caret" aria-hidden="true">⌄</span>
         </button>

@@ -61,6 +61,18 @@ pub fn verify(address: Ipv4Addr) -> bool {
     simulator_ftp(address)
 }
 
+/// Existing wired neighbors to probe with a read-only JSBSim heartbeat.
+/// UDP telemetry establishes the simulator connection independently of FTP.
+pub fn heartbeat_candidates(preferred: Option<Ipv4Addr>) -> Vec<Ipv4Addr> {
+    let mut hosts = preferred.filter(Ipv4Addr::is_private).into_iter().collect::<Vec<_>>();
+    if let Ok(arp) = std::fs::read_to_string("/proc/net/arp") {
+        for address in candidates(&arp) {
+            if !hosts.contains(&address) { hosts.push(address); }
+        }
+    }
+    hosts
+}
+
 /// Inspect only neighbors already learned by the operating system. A board
 /// absent from ARP may still be found by UDP discovery or incoming telemetry.
 pub fn discover(preferred: Option<Ipv4Addr>) -> Option<Ipv4Addr> {

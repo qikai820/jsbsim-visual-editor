@@ -628,7 +628,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
   return createPortal(<div className="usb-fm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeManager(); }}>
     <div className="usb-fm" ref={windowRef} style={windowRect ? { position: 'fixed', ...windowRect } : undefined} role="dialog" aria-label={isZh ? '仿真机文件管理' : 'Simulator Files'}>
     <header className="usb-fm-header" onPointerDown={event => beginWindowGesture(event, 'drag')} onPointerMove={updateWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
-      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? `通过${transportMode === 'network' ? '网口' : transportMode === 'usb' ? ' USB ' : '自动连接'}管理 SD 与 eMMC · 拖动标题栏移动，右下角缩放` : `Manage SD and eMMC via ${transportMode === 'network' ? 'network' : transportMode === 'usb' ? 'USB' : 'Auto'} · Drag title to move, corner to resize`}</small></div>
+      <div><strong>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</strong><small>{isZh ? `通过${transportMode === 'network' ? '网口' : transportMode === 'usb' ? ' USB ' : '自动连接'}管理仿真机文件 · 拖动标题栏移动，右下角缩放` : `Manage simulator files via ${transportMode === 'network' ? 'network' : transportMode === 'usb' ? 'USB' : 'Auto'} · Drag title to move, corner to resize`}</small></div>
       <button onClick={closeManager} disabled={busy || savingBuiltIn} aria-label={isZh ? '关闭' : 'Close'}>×</button>
     </header>
     <div className="usb-fm-volumes" aria-label={isZh ? '存储容量' : 'Storage capacity'} aria-busy={storageLoading}>
@@ -641,7 +641,7 @@ export default function UsbFileManager({ onClose }: { onClose: () => void }) {
           : (isZh ? '未挂载或存储不可用' : 'Not mounted or unavailable');
         return <button key={key} className={volume === key ? 'active' : ''} onClick={() => chooseVolume(key)} disabled={busy}
           aria-pressed={volume === key} title={storageError || usage?.mountPath}>
-          <span className="usb-fm-volume-title"><strong>{key === 'sd' ? 'SD' : 'eMMC (data)'}</strong>
+          <span className="usb-fm-volume-title"><strong>{key === 'sd' ? 'SD' : usage?.mountPath === '/mnt/home' ? 'SSD (NVMe)' : 'eMMC (data)'}</strong>
             {percent !== null && <small>{percent.toFixed(1)}% {isZh ? '已用' : 'used'}</small>}</span>
           <span className="usb-fm-volume-capacity">{known
             ? `${isZh ? '已用' : 'Used'} ${formatSize(usage.usedBytes!)} / ${isZh ? '总容量' : 'Total'} ${formatSize(usage.totalBytes!)}`

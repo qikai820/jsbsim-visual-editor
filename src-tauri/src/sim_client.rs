@@ -376,6 +376,9 @@ fn merge_task_top_packet(existing: &mut Option<Value>, incoming: &Value) {
         *target = json!({});
     }
     let target = target.as_object_mut().unwrap();
+    if source.contains_key("cpu_cores") && !source.contains_key("temperatures") {
+        target.remove("temperatures");
+    }
     for (key, value) in source {
         /* Compact 10 Hz health frames intentionally contain no task list.
          * If an older board sends an empty list, retain the independently
@@ -564,6 +567,9 @@ impl SimClient {
                                              * must never leave the UI receiving telemetry from one
                                              * target while controlling another. */
                                             if !peer.ip().is_loopback() {
+                                              if let std::net::IpAddr::V4(host) = peer.ip() {
+                                                crate::transport::set_network_host_override(host);
+                                              }
                                               if let Ok(mut address) = telemetry_ctrl_addr.lock() {
                                                 *address = SocketAddr::new(peer.ip(), ctrl_port);
                                               }
@@ -790,6 +796,15 @@ impl SimClient {
                             last_neighbor_probe.elapsed() >= Duration::from_secs(5) &&
                             discovery_inner.lock().is_ok_and(|state| !state.connected) {
                             last_neighbor_probe = Instant::now();
+                            // Some board profiles provide JSBSim UDP without
+                            // an FTP server or a discovery responder. Probe
+                            // only existing wired neighbors; the telemetry
+                            // receiver selects a host only after its reply.
+                            for host in crate::network_discovery::heartbeat_candidates(
+                                crate::transport::network_host_override()) {
+                                let _ = discover_send.send_to(b"VCMD\x07",
+                                    SocketAddr::new(host.into(), ctrl_port));
+                            }
                             if let Some(host) = crate::network_discovery::discover(
                                 crate::transport::network_host_override()) {
                                 if let Ok(mut addr) = discovered_ctrl.lock() {
@@ -1049,6 +1064,18 @@ impl SimClient {
         let state = self.inner.lock().unwrap();
         state.latest_task_top.as_ref()?
             .get("task_top")?.get("memory").cloned()
+    }
+
+    /// Board sensors, independent of simulated atmosphere/IMU temperature.
+    pub fn temperatures(&self) -> Option<Value> {
+        let state = self.inner.lock().unwrap();
+        let value = state.latest_task_top.as_ref()?.get("task_top")?.get("temperatures")?;
+        let reading = |key: &str, min: f64, max: f64| {
+            value.get(key).and_then(Value::as_f64)
+                .filter(|number| number.is_finite() && (min..=max).contains(number))
+        };
+        Some(json!({"cpuC": reading("cpuC", -40.0, 125.0),
+                    "ssdC": reading("ssdC", -100.15, 199.85)}))
     }
 
     /// Cumulative byte counters for the board's Ethernet interfaces.
@@ -1440,6 +1467,21 @@ mod tests {
         let top = stored.as_ref().unwrap().get("task_top").unwrap();
         assert_eq!(top.get("tasks").and_then(Value::as_array).map(Vec::len), Some(1));
         assert_eq!(top.get("cpu_cores").and_then(Value::as_array).map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn temperature_errors_and_old_firmware_clear_previous_readings() {
+        let mut stored = Some(json!({"task_top": {
+            "temperatures": {"cpuC": 55.0, "ssdC": 42.0}
+        }}));
+        merge_task_top_packet(&mut stored, &json!({"task_top": {"tasks": []}}));
+        assert_eq!(stored.as_ref().unwrap()["task_top"]["temperatures"]["cpuC"], 55.0);
+        merge_task_top_packet(&mut stored, &json!({"task_top": {
+            "cpu_cores": [1.0], "temperatures": {"cpuC": 56.0, "ssdC": null}
+        }}));
+        assert!(stored.as_ref().unwrap()["task_top"]["temperatures"]["ssdC"].is_null());
+        merge_task_top_packet(&mut stored, &json!({"task_top": {"cpu_cores": [1.0]}}));
+        assert!(stored.as_ref().unwrap()["task_top"].get("temperatures").is_none());
     }
 
     #[test]

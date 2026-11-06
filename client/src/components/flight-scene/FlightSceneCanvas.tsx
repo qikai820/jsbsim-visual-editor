@@ -1,18 +1,21 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Html, Line, OrbitControls } from '@react-three/drei';
-import { ArrowHelper, Color, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Vector3 } from 'three';
+import { ArrowHelper, Box3, Color, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Vector3 } from 'three';
 import { bodyToSceneBasis, FlightSceneFeed, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode } from '../../sim/flightSceneState';
 import { rotorReading } from '../../sim/sceneRotors';
 import { isMorphQuad, MORPHQUAD_ARMS, MORPHQUAD_ROTOR_RADIUS } from '../../sim/sceneMorphQuad';
 import { Field, SCENE_FOG, SceneSky } from './FlightSceneEnvironment';
 import { createSceneSurfaceTextures, loadSceneSurfaceTextures, type SceneSurfaceTextures } from './sceneSurfaceTextures';
+import SceneObjects from './SceneObjects';
+import type { SceneEditor } from './useSceneEditor';
 
 export type SceneLayers = { grid: boolean; trails: boolean; labels: boolean; thrust: boolean; axes: boolean };
 type Props = {
   feed: FlightSceneFeed; revision: number; selected: string; onSelect: (id: string) => void;
   mode: CameraMode; layers: SceneLayers; onFps: (fps: number) => void; groundAltitude: number | null;
   cameraVersion: number;
+  editor: SceneEditor;
 };
 
 const Rotor = memo(function Rotor({ x, y, z, radius = .28, feed, id, index, blades = 2 }: {
@@ -196,16 +199,33 @@ function Aircraft({ id, feed, layers, selected, onSelect, revision, groundY, gro
   </>;
 }
 
-function Rig({ feed, selected, mode, onFps, cameraVersion, groundAltitude }: Props) {
+function Rig({ feed, selected, mode, onFps, cameraVersion, groundAltitude, editor }: Props) {
   const controls = useRef<any>(null);
   const previous = useRef(new Vector3());
   const reset = useRef(true);
   const fps = useRef({ elapsed: 0, frames: 0 });
+  const focus = useRef(-1);
   useEffect(() => { reset.current = true; }, [selected, mode, cameraVersion, feed.origin]);
-  useFrame(({ camera, clock }, dt) => {
+  useFrame(({ camera, clock, scene }, dt) => {
     fps.current.elapsed += dt; fps.current.frames++;
     if (fps.current.elapsed > 1) { onFps(Math.round(fps.current.frames / fps.current.elapsed)); fps.current = { elapsed: 0, frames: 0 }; }
     if (!controls.current) return;
+    if (editor.enabled && editor.selectedId && (focus.current !== editor.focusRevision || reset.current)) {
+      const object = scene.getObjectByName(`scene-object-${editor.selectedId}`);
+      if (object) {
+        object.updateWorldMatrix(true, true);
+        const bounds = object.userData.sceneFocusBounds;
+        const box = bounds ? new Box3(new Vector3().fromArray(bounds[0]), new Vector3().fromArray(bounds[1])).applyMatrix4(object.matrixWorld)
+          : new Box3().setFromObject(object);
+        if (!box.isEmpty()) {
+          const center = box.getCenter(new Vector3()), radius = Math.max(1, box.getSize(new Vector3()).length() * .5);
+          camera.position.copy(center).add(new Vector3(1, .7, 1.2).normalize().multiplyScalar(radius * 3));
+          camera.up.set(0, 1, 0); controls.current.target.copy(center); controls.current.update();
+          reset.current = false;
+        }
+        focus.current = editor.focusRevision;
+      }
+    }
     const sample = feed.sample(selected, clock.oldTime);
     const target = sample?.position ?? new Vector3(0, 1, 0);
     if (mode === 'cockpit' && sample) {
@@ -247,15 +267,17 @@ export default function FlightSceneCanvas(props: Props) {
     const stop = loadSceneSurfaceTextures(maps);
     return () => { stop(); for (const map of Object.values(maps)) map.dispose(); };
   }, [maps]);
-  const groundY = props.groundAltitude !== null && props.feed.origin ? props.groundAltitude - props.feed.origin.altitude : 0;
+  const baseline = props.editor.document.georeference?.altitude ?? props.groundAltitude;
+  const groundY = baseline !== null && props.feed.origin ? baseline - props.feed.origin.altitude : 0;
   return <Canvas className="flight-scene-webgl" dpr={[1, 1.5]} camera={{ position: [10, 8, 18], near: .05, far: 5000, fov: 55 }}
     gl={{ antialias: true, powerPreference: 'low-power' }}>
     <color attach="background" args={[SCENE_FOG.color]} /><fog attach="fog" args={[SCENE_FOG.color, SCENE_FOG.near, SCENE_FOG.far]} />
     <SceneSky maps={maps} />
     <hemisphereLight args={['#d6e7f5', '#74795e', 1.7]} /><directionalLight position={[-30, 60, 20]} intensity={2} color="#fff1d6" />
-    <Field grid={props.layers.grid} groundY={groundY} maps={maps} />
+    <Field grid={props.layers.grid} groundY={groundY} maps={maps} scenery={props.editor.document.showBase} />
+    <SceneObjects editor={props.editor} groundY={groundY} maps={maps} />
     {[...props.feed.aircraft.keys()].map(id => <Aircraft key={id} id={id} {...props} selected={props.selected === id}
       groundY={groundY} groundKnown={props.groundAltitude !== null} maps={maps} />)}
-    <Rig {...props} />
+    <Rig {...props} groundAltitude={baseline} />
   </Canvas>;
 }

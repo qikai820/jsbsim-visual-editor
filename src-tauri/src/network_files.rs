@@ -1,14 +1,40 @@
-//! Managed SD/eMMC files over the board's existing Telnet NSH service.
+//! Managed SD/eMMC/NVMe files over the board's existing Telnet NSH service.
 //! Binary data uses hexdump/printf rather than a text cat round trip. Writes
 //! are staged, read back, and renamed only after size and CRC verification.
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::romfs_network::{with_session, NshSession};
+use crate::romfs_network::NshSession;
 use crate::usb_file::{crc32_fold, managed_volume, UsbFileEntry};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 const READ_CHUNK: usize = 16 * 1024;
+
+struct FileSession<'a, 'b> {
+    nsh: &'a mut NshSession<'b>,
+    volumes: Vec<crate::storage_usage::StorageUsage>,
+}
+
+impl FileSession<'_, '_> {
+    fn command(&mut self, command: &str) -> Result<String, String> {
+        self.nsh.command(command)
+    }
+
+    fn resolve(&self, path: &str, allow_root: bool) -> Result<String, String> {
+        absolute(path, allow_root)?; // Preserve the managed-path validation.
+        let (key, tail) = path.split_once('/').unwrap_or((path, ""));
+        let root = self.volumes.iter().find(|volume| volume.volume == key)
+            .ok_or("Unknown file volume")?.mount_path;
+        Ok(if tail.is_empty() { root.into() } else { format!("{root}/{tail}") })
+    }
+}
+
+fn with_session<T>(operation: impl FnOnce(&mut FileSession<'_, '_>) -> Result<T, String>) -> Result<T, String> {
+    crate::romfs_network::with_session(|nsh| {
+        let volumes = crate::storage_usage::parse(&nsh.command(crate::storage_usage::COMMAND)?)?;
+        operation(&mut FileSession { nsh, volumes })
+    })
+}
 
 fn absolute(path: &str, allow_root: bool) -> Result<String, String> {
     if allow_root && matches!(path, "sd" | "data") {
@@ -26,7 +52,7 @@ fn quote(path: &str) -> String {
         .replace('$', "\\$").replace('`', "\\`"))
 }
 
-fn checked(session: &mut NshSession<'_>, command: &str) -> Result<String, String> {
+fn checked(session: &mut FileSession<'_, '_>, command: &str) -> Result<String, String> {
     // The shipping board's NSH LINE_MAX is 80, including the terminator.
     // Oversized input is executed as separate truncated commands by readline.
     if command.len() >= 80 { return Err("网络文件命令超过板端行长度限制".into()); }
@@ -37,7 +63,7 @@ fn checked(session: &mut NshSession<'_>, command: &str) -> Result<String, String
     Ok(output)
 }
 
-fn set_path(session: &mut NshSession<'_>, variable: char, path: &str) -> Result<String, String> {
+fn set_path(session: &mut FileSession<'_, '_>, variable: char, path: &str) -> Result<String, String> {
     checked(session, &format!("set {variable} ''"))?;
     let mut chunk = String::new();
     for ch in path.chars() {
@@ -55,17 +81,21 @@ fn set_path(session: &mut NshSession<'_>, variable: char, path: &str) -> Result<
     Ok(format!("\"${variable}\""))
 }
 
-fn ensure_mounted(session: &mut NshSession<'_>, path: &str) -> Result<(), String> {
-    let root = absolute(path.split('/').next().unwrap_or(""), true)?;
-    let volumes = crate::storage_usage::parse(&checked(session, crate::storage_usage::COMMAND)?)?;
-    if !volumes.iter().any(|volume| volume.mount_path == root && volume.total_bytes.is_some()) {
-        return Err(format!("{} 未挂载，无法访问文件 ({root})", if root == "/data" { "eMMC data" } else { "SD 卡" }));
+fn set_file_path(session: &mut FileSession<'_, '_>, variable: char, path: &str, allow_root: bool) -> Result<String, String> {
+    let target = session.resolve(path, allow_root)?;
+    set_path(session, variable, &target)
+}
+
+fn ensure_mounted(session: &mut FileSession<'_, '_>, path: &str) -> Result<(), String> {
+    let root = session.resolve(path.split('/').next().unwrap_or(""), true)?;
+    if !session.volumes.iter().any(|volume| volume.mount_path == root && volume.total_bytes.is_some()) {
+        return Err(format!("{} 未挂载，无法访问文件 ({root})", if path.starts_with("data") { "数据分区" } else { "SD 卡" }));
     }
     Ok(())
 }
 
 pub fn storage() -> Result<Vec<crate::storage_usage::StorageUsage>, String> {
-    with_session(|session| crate::storage_usage::parse(&checked(session, crate::storage_usage::COMMAND)?))
+    crate::romfs_network::with_session(|session| crate::storage_usage::parse(&session.command(crate::storage_usage::COMMAND)?))
 }
 
 fn take_field<'a>(rest: &mut &'a str) -> &'a str {
@@ -114,8 +144,8 @@ fn parse_listing(output: &str) -> Result<Vec<UsbFileEntry>, String> {
     Ok(entries)
 }
 
-fn list_in(session: &mut NshSession<'_>, path: &str) -> Result<Vec<UsbFileEntry>, String> {
-    let target = set_path(session, 'A', &absolute(path, true)?)?;
+fn list_in(session: &mut FileSession<'_, '_>, path: &str) -> Result<Vec<UsbFileEntry>, String> {
+    let target = set_file_path(session, 'A', path, true)?;
     let output = checked(session, &format!("ls -l {target}"))?;
     let entries = parse_listing(&output)?;
     // Validate board-returned names as well as UI paths before recursion.
@@ -128,7 +158,7 @@ pub fn list(path: &str) -> Result<Vec<UsbFileEntry>, String> {
     with_session(|session| { ensure_mounted(session, path)?; list_in(session, path) })
 }
 
-fn stat_in(session: &mut NshSession<'_>, path: &str) -> Result<UsbFileEntry, String> {
+fn stat_in(session: &mut FileSession<'_, '_>, path: &str) -> Result<UsbFileEntry, String> {
     absolute(path, true)?;
     if matches!(path, "sd" | "data") {
         return Ok(UsbFileEntry { name: path.into(), directory: true, size: 0, modified: None });
@@ -161,13 +191,13 @@ fn parse_hex(output: &str, expected: usize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn read_into(session: &mut NshSession<'_>, path: &str, writer: &mut impl Write, limit: u64) -> Result<(u64, u32), String> {
+fn read_into(session: &mut FileSession<'_, '_>, path: &str, writer: &mut impl Write, limit: u64) -> Result<(u64, u32), String> {
     let info = stat_in(session, path)?;
     if info.directory { return Err("请选择普通文件".into()); }
     if info.size > limit { return Err(format!("文件大小超过读取限制 ({limit} bytes)")); }
     let mut offset = 0u64;
     let mut checksum = u32::MAX;
-    let target = set_path(session, 'A', &absolute(path, false)?)?;
+    let target = set_file_path(session, 'A', path, false)?;
     while offset < info.size {
         let count = (info.size - offset).min(READ_CHUNK as u64) as usize;
         let output = checked(session, &format!("hexdump {target} skip={offset} count={count}"))?;
@@ -206,7 +236,7 @@ pub fn fingerprint(path: &str) -> Result<(u64, u32), String> {
     with_session(|session| { ensure_mounted(session, path)?; read_into(session, path, &mut std::io::sink(), u64::MAX) })
 }
 
-fn temporary(session: &mut NshSession<'_>, parent: &str) -> Result<String, String> {
+fn temporary(session: &mut FileSession<'_, '_>, parent: &str) -> Result<String, String> {
     let entries = list_in(session, parent)?;
     for _ in 0..16 {
         let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
@@ -243,13 +273,13 @@ fn printf_arguments(bytes: &[u8], budget: usize) -> (String, usize) {
     (arguments.join(" "), used)
 }
 
-fn upload_in(session: &mut NshSession<'_>, path: &str, reader: &mut impl Read) -> Result<u64, String> {
+fn upload_in(session: &mut FileSession<'_, '_>, path: &str, reader: &mut impl Read) -> Result<u64, String> {
     let (parent, name) = path.rsplit_once('/').ok_or("invalid file path")?;
     if list_in(session, parent)?.iter().any(|entry| entry.name == name && entry.directory) {
         return Err("目标已有同名目录".into());
     }
     let staging = temporary(session, parent)?;
-    let parent_arg = set_path(session, 'A', &absolute(parent, true)?)?;
+    let parent_arg = set_file_path(session, 'A', parent, true)?;
     checked(session, &format!("cd {parent_arg}"))?;
     let quoted = quote(staging.rsplit('/').next().unwrap());
     let result = (|| {
@@ -272,8 +302,28 @@ fn upload_in(session: &mut NshSession<'_>, path: &str, reader: &mut impl Read) -
         }
         let actual = read_into(session, &staging, &mut std::io::sink(), size)?;
         if actual != (size, !checksum) { return Err("网络上传读回校验失败，未替换目标文件".into()); }
-        let destination = set_path(session, 'B', &absolute(path, false)?)?;
-        checked(session, &format!("mv {quoted} {destination}"))?;
+        let destination = set_file_path(session, 'B', path, false)?;
+        // Some board filesystems refuse rename over an existing name. Keep
+        // the old file until the verified staging file has been committed.
+        let existing = list_in(session, parent)?.into_iter().find(|entry| entry.name == name);
+        if existing.as_ref().is_some_and(|entry| entry.directory) {
+            return Err("目标已有同名目录".into());
+        }
+        let backup = if existing.is_some() {
+            let backup = temporary(session, parent)?;
+            let backup_name = quote(backup.rsplit('/').next().unwrap());
+            checked(session, &format!("mv {destination} {backup_name}"))?;
+            Some(backup_name)
+        } else { None };
+        if let Err(error) = checked(session, &format!("mv {quoted} {destination}")) {
+            if let Some(backup) = &backup {
+                if let Err(restore) = checked(session, &format!("mv {backup} {destination}")) {
+                    return Err(format!("{error}; 恢复失败: {restore}; 原文件保留在 {parent}/{backup}"));
+                }
+            }
+            return Err(error);
+        }
+        if let Some(backup) = backup { checked(session, &format!("rm {backup}"))?; }
         Ok(size)
     })();
     if result.is_err() { let _ = checked(session, &format!("rm {quoted}")); }
@@ -294,7 +344,7 @@ pub fn upload_from(path: &str, source: &Path) -> Result<u64, String> {
     with_session(|session| { ensure_mounted(session, path)?; upload_in(session, path, &mut file) })
 }
 
-fn remove_in(session: &mut NshSession<'_>, path: &str, recursive: bool) -> Result<(), String> {
+fn remove_in(session: &mut FileSession<'_, '_>, path: &str, recursive: bool) -> Result<(), String> {
     absolute(path, false)?;
     let info = stat_in(session, path)?;
     if info.directory && recursive {
@@ -310,15 +360,15 @@ fn remove_in(session: &mut NshSession<'_>, path: &str, recursive: bool) -> Resul
             directories.push(parent);
         }
         for file in files {
-            let target = set_path(session, 'A', &absolute(&file, false)?)?;
+            let target = set_file_path(session, 'A', &file, false)?;
             checked(session, &format!("rm {target}"))?;
         }
         for directory in directories.into_iter().rev() {
-            let target = set_path(session, 'A', &absolute(&directory, false)?)?;
+            let target = set_file_path(session, 'A', &directory, false)?;
             checked(session, &format!("rmdir {target}"))?;
         }
     } else {
-        let target = set_path(session, 'A', &absolute(path, false)?)?;
+        let target = set_file_path(session, 'A', path, false)?;
         checked(session, &format!("{} {target}", if info.directory { "rmdir" } else { "rm" }))?;
     }
     Ok(())
@@ -335,25 +385,25 @@ pub fn delete_directory_tree(path: &str) -> Result<(), String> {
 }
 
 pub fn mkdir(path: &str) -> Result<(), String> {
-    let target = absolute(path, false)?;
+    absolute(path, false)?;
     with_session(|session| {
         ensure_mounted(session, path)?;
-        let target = set_path(session, 'A', &target)?;
+        let target = set_file_path(session, 'A', path, false)?;
         checked(session, &format!("mkdir {target}")).map(|_| ())
     })
 }
 
-fn copy_in(session: &mut NshSession<'_>, source: &str, destination: &str) -> Result<(), String> {
+fn copy_in(session: &mut FileSession<'_, '_>, source: &str, destination: &str) -> Result<(), String> {
     if stat_in(session, source)?.directory {
-        let target = set_path(session, 'A', &absolute(destination, false)?)?;
+        let target = set_file_path(session, 'A', destination, false)?;
         checked(session, &format!("mkdir {target}"))?;
         for entry in list_in(session, source)? {
             copy_in(session, &format!("{source}/{}", entry.name), &format!("{destination}/{}", entry.name))?;
         }
     } else {
         let before = read_into(session, source, &mut std::io::sink(), u64::MAX)?;
-        let from = set_path(session, 'A', &absolute(source, false)?)?;
-        let to = set_path(session, 'B', &absolute(destination, false)?)?;
+        let from = set_file_path(session, 'A', source, false)?;
+        let to = set_file_path(session, 'B', destination, false)?;
         checked(session, &format!("cp {from} {to}"))?;
         if read_into(session, destination, &mut std::io::sink(), u64::MAX)? != before ||
             read_into(session, source, &mut std::io::sink(), u64::MAX)? != before {
@@ -373,16 +423,16 @@ pub fn transfer(source: &str, destination: &str, move_source: bool) -> Result<()
         let (parent, name) = destination.rsplit_once('/').unwrap();
         if list_in(session, parent)?.iter().any(|entry| entry.name == name) { return Err("目标位置已有同名文件或目录".into()); }
         if move_source && source_volume == destination_volume {
-            let from = set_path(session, 'A', &absolute(source, false)?)?;
-            let to = set_path(session, 'B', &absolute(destination, false)?)?;
+            let from = set_file_path(session, 'A', source, false)?;
+            let to = set_file_path(session, 'B', destination, false)?;
             checked(session, &format!("mv {from} {to}"))?;
             return Ok(());
         }
         let staging = temporary(session, parent)?;
         let result = (|| {
             copy_in(session, source, &staging)?;
-            let from = set_path(session, 'A', &absolute(&staging, false)?)?;
-            let to = set_path(session, 'B', &absolute(destination, false)?)?;
+            let from = set_file_path(session, 'A', &staging, false)?;
+            let to = set_file_path(session, 'B', destination, false)?;
             checked(session, &format!("mv {from} {to}"))?;
             Ok::<(), String>(())
         })();

@@ -6,6 +6,8 @@ import { useSignalMonitorStore } from '../../store/signalMonitorStore';
 import { rotorCount, rotorLabel, rotorReading } from '../../sim/sceneRotors';
 import { isMorphQuad, MORPHQUAD_ARMS } from '../../sim/sceneMorphQuad';
 import FlightSceneCanvas, { type SceneLayers } from './FlightSceneCanvas';
+import SceneEditorPanel from './SceneEditorPanel';
+import { useSceneEditor } from './useSceneEditor';
 import './flightScene.css';
 
 const MODES: [CameraMode, string][] = [['free', '自由'], ['follow', '跟随'], ['ground', '地面'], ['cockpit', '机载'], ['fleet', '编队']];
@@ -76,6 +78,8 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(!document.hidden);
+  const editor = useSceneEditor();
+  const viewMode = editor.enabled ? 'free' : mode;
   const demoTime = useRef(0);
   const groundPlane = useRef<{ feed: FlightSceneFeed; altitude: number | null }>({ feed, altitude: null });
   useEffect(() => {
@@ -115,6 +119,11 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const selectedFresh = fresh(pose, now);
   const state = !pose ? '等待数据' : !selectedFresh ? '数据过期' : pose.state === 'running' ? '运行中' : pose.state === 'paused' ? '已暂停' : '已停止';
   const ground = groundAltitude ?? pose?.ground ?? (pose?.agl != null ? pose.altitude - pose.agl : null);
+  useEffect(() => {
+    const geo = editor.document.georeference;
+    if (geo) { if (feed.origin !== geo) feed.origin = geo; }
+    else if (feed.origin && ground !== null) editor.updateDocument({ georeference: { ...feed.origin, altitude: ground } });
+  }, [feed, revision, editor.document.georeference, ground]);
   useEffect(() => {
     if (!import.meta.env.DEV || import.meta.env.VITE_SCENE_DIAGNOSTICS !== '1') return;
     const publish = () => {
@@ -158,11 +167,12 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
       <button className="scene-action" onClick={() => { feed.clearTrails(); setRevision(v => v + 1); }}>清除航迹</button>
       <span className="scene-clock">仿真时间 <b>{clock(pose?.time)}</b></span>
       <div className="scene-toolbar-right">
+        <button className={`scene-action ${editor.enabled ? 'active' : ''}`} aria-pressed={editor.enabled} onClick={() => editor.setEnabled(value => !value)}>编辑场景</button>
         <button className={`scene-action ${demo ? 'active' : ''}`} onClick={toggleDemo}>{demo ? '退出演示' : '演示场景'}</button>
         <details className="scene-settings"><summary>视图设置</summary><div>
           <label>参考地面海拔 / m<input aria-label="参考地面海拔" type="number" placeholder="使用遥测地面" value={groundAltitude ?? ''} onChange={e => setGroundAltitude(e.target.value === '' || !Number.isFinite(e.target.valueAsNumber) ? null : e.target.valueAsNumber)} /></label>
           <p>未收到地面高程时显示参考平面，离地高度留空。所有距离按米显示。</p>
-          <button className="scene-action" disabled={!pose} onClick={() => { feed.recenter(selected); setCameraVersion(v => v + 1); }}>以所选飞机重设场景原点</button>
+          <button className="scene-action" disabled={!pose || !!editor.document.georeference} onClick={() => { feed.recenter(selected); setCameraVersion(v => v + 1); }}>以所选飞机重设场景原点</button>
         </div></details>
       </div>
     </div>
@@ -176,23 +186,24 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
           </button>;
         }) : <p className="scene-muted">尚无飞行器数据</p>}</div>
         <section className="scene-layer-list"><strong>场景图层</strong>{LAYERS.map(([key, label]) => <label key={key}><input type="checkbox" checked={layers[key]} onChange={e => setLayers(current => ({ ...current, [key]: e.target.checked }))} />{label}</label>)}</section>
-        <div className="scene-environment"><strong>△ 离线试验场</strong><span>{ground === null ? '参考平面 · 地面高程未知' : `地面海拔 ${format(ground)} m`}</span><small>场景比例 1 m / 单位</small><small>场景素材：Poly Haven · CC0</small></div>
+        <div className="scene-environment"><strong>△ 离线试验场</strong><span>{ground === null ? '参考平面 · 地面高程未知' : `地面海拔 ${format(ground)} m`}</span><small>{editor.document.georeference ? `固定场景基准 ${format(editor.document.georeference.altitude)} m` : "场景尚未固定地理基准"}</small><small>场景比例 1 m / 单位</small><small>场景素材：Poly Haven · CC0</small></div>
       </aside>
       <main className="scene-main"><div className="scene-viewport">
-        <SceneBoundary resetKey={cameraVersion}>{visible && <FlightSceneCanvas feed={feed} revision={revision} selected={selected} onSelect={setSelected} mode={mode} layers={layers} onFps={setFps} groundAltitude={groundPlane.current.altitude} cameraVersion={cameraVersion} />}</SceneBoundary>
-        <div className="scene-viewport-caption">◉ {MODES.find(m => m[0] === mode)?.[1]}视角 <span>{selected} · {pose?.model || slots[selected] || '等待数据'}</span></div>
+        <SceneBoundary resetKey={cameraVersion}>{visible && <FlightSceneCanvas feed={feed} revision={revision} selected={selected} onSelect={setSelected} mode={viewMode} layers={layers} onFps={setFps} groundAltitude={groundPlane.current.altitude} cameraVersion={cameraVersion} editor={editor} />}</SceneBoundary>
+        <div className="scene-viewport-caption">◉ {editor.enabled ? '场景编辑' : `${MODES.find(m => m[0] === mode)?.[1]}视角`} <span>{selected} · {pose?.model || slots[selected] || '等待数据'}</span></div>
         <div className="scene-viewport-tools"><span>N ↑</span><button title="重新定位相机" aria-label="重新定位相机" onClick={() => setCameraVersion(v => v + 1)}>◎</button></div>
-        {!feed.aircraft.size && <div className="scene-empty"><span>飞行视景已就绪</span><p>连接仿真机后显示实时飞机与航迹</p><button onClick={toggleDemo}>浏览演示场景 →</button></div>}
+        {!feed.aircraft.size && !editor.enabled && !editor.document.objects.some(object => object.assetId) && <div className="scene-empty"><span>飞行视景已就绪</span><p>连接仿真机后显示实时飞机与航迹</p><button onClick={toggleDemo}>浏览演示场景 →</button></div>}
         {pose && !selectedFresh && <div className="scene-stale" role="status">遥测已过期 · 飞机保持最后位姿</div>}
-        <div className="scene-camera-tabs" aria-label="相机视角">{MODES.map(([key, label]) => <button key={key} aria-pressed={mode === key} className={mode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}</button>)}</div>
+        <div className="scene-camera-tabs" aria-label="相机视角">{MODES.map(([key, label]) => <button key={key} disabled={editor.enabled && key !== 'free'} aria-pressed={viewMode === key} className={viewMode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}</button>)}</div>
         <MiniMap feed={feed} selected={selected} onSelect={setSelected} />
         <span className="scene-view-hint">拖动旋转 · 右键平移 · 滚轮缩放</span>
       </div><Trend history={entry?.history ?? []} selected={selected} /></main>
-      <aside className="scene-inspector"><header><strong>{selected} · {pose?.model || slots[selected] || '未选择'}</strong><span className={selectedFresh ? 'live' : ''}>{demo ? '演示' : selectedFresh ? '实时' : '等待'}</span></header>
+      {editor.enabled ? <SceneEditorPanel model={selectedModel} sceneLoaded={selectedFresh && (propertyAgeMs(pose?.sceneStatusSampleAt) ?? Infinity) < 2000 ? pose?.sceneLoaded ?? null : null} sceneRevision={pose?.sceneRevision ?? null} sceneContacts={pose?.sceneContacts ?? null} editor={editor} groundAltitude={ground} onGroundLoaded={setGroundAltitude} /> : <aside className="scene-inspector"><header><strong>{selected} · {pose?.model || slots[selected] || '未选择'}</strong><span className={selectedFresh ? 'live' : ''}>{demo ? '演示' : selectedFresh ? '实时' : '等待'}</span></header>
         <section><h3>飞行状态</h3><div className="scene-metrics">
           <Metric label="离地高度" value={agl} unit="m" /><Metric label="地速" value={pose?.speed} unit="m/s" />
           <Metric label="海拔高度" value={pose?.altitude} unit="m" /><Metric label="航向" value={pose?.yaw} unit="°" />
         </div>{ground === null && <p className="scene-muted">地面高程未知，可在视图设置中指定。</p>}</section>
+        <section><h3>地图碰撞</h3><p className="scene-muted">{!selectedFresh || (propertyAgeMs(pose?.sceneStatusSampleAt) ?? Infinity) >= 2000 ? '状态未知 / 数据过期' : pose?.sceneLoaded === 1 ? `已加载版本 ${pose.sceneRevision ?? '未知'} · 接触 ${pose.sceneContacts ?? '未知'}` : pose?.sceneLoaded === -1 ? '地图加载失败' : '未加载碰撞地图'}</p></section>
         <section><h3>姿态</h3><div className="scene-sampling-status scene-pose-status" data-source={pose?.poseSource ?? 'none'}>{!pose ? '等待位姿采样' : !selectedFresh ? '保留上次位姿' : pose.poseSource === 'monitor' ? '位姿高速采样' : '位姿遥测采样'}<span>{sampleAgeText(pose?.receivedAt, now)}</span></div><div className="scene-attitude">
           <div className="scene-horizon"><div style={{ transform: `rotate(${-(pose?.roll ?? 0)}deg) translateY(${Math.max(-25, Math.min(25, pose?.pitch ?? 0))}px)` }} /><i>— · —</i></div>
           <dl><dt>横滚</dt><dd>{format(pose?.roll)}°</dd><dt>俯仰</dt><dd>{format(pose?.pitch)}°</dd><dt>偏航</dt><dd>{format(pose?.yaw)}°</dd></dl>
@@ -213,7 +224,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         </section>}
         <RotorMetrics pose={pose} model={selectedModel} now={now} />
         <section className="scene-position"><h3>位置</h3><span>纬度 <b>{format(pose?.latitude, 7)}°</b></span><span>经度 <b>{format(pose?.longitude, 7)}°</b></span><span>垂直速度 <b>{format(pose?.verticalSpeed)} m/s</b></span></section>
-      </aside>
+      </aside>}
     </div>
     <footer className="scene-status"><span><i className={`scene-dot ${online ? 'online' : ''}`} />{demo ? '演示模式' : online ? '正在接收仿真数据' : '等待仿真遥测'}</span><span>位姿 {format(hz, 0)} Hz</span><span>渲染 {visible ? fps : 0} FPS</span><span>数据年龄 {pose ? Math.max(0, Math.round(now - pose.receivedAt)) : '—'} ms</span><span>{online} / {ids.length} 在线</span><small>{demo ? '演示数据 · 不控制仿真机' : '实时视景 · 本地资源'}</small></footer>
   </div>;

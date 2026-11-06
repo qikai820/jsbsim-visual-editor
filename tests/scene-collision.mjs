@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
+const directory = await mkdtemp(path.join(tmpdir(), 'scene-collision-'));
+try {
+ const output = path.join(directory,'collision.cjs');
+ await build({stdin:{contents:`export * from './client/src/sim/sceneDocument'; export * from './client/src/sim/sceneCollision'; export * from 'three';`,resolveDir:process.cwd()},outfile:output,bundle:true,platform:'node',format:'cjs',logLevel:'silent'});
+ const {newSceneDocument,validateSceneDocument,exportSceneCollision,Object3D,Mesh,BoxGeometry}=createRequire(import.meta.url)(output);
+ const doc=newSceneDocument();doc.georeference={latitude:30,longitude:120,altitude:100};
+ const parse=text=>{const tokens=text.trim().split(/\s+/);return {revision:tokens[1],count:Number(tokens[6]),values:tokens.slice(7).map(Number)};};
+ const original=exportSceneCollision(doc,new Map());assert.equal(exportSceneCollision(doc,new Map()),original,'stable map version');
+ await writeFile("/tmp/default-scene.collision", original);
+ const tree=newSceneDocument();tree.georeference={latitude:0,longitude:0,altitude:0};tree.objects=tree.objects.filter(o=>o.builtin==="tree").slice(0,1);tree.objects[0].position=[10,0,0];tree.objects[0].scale=[1,1,1];await writeFile("/tmp/tree-scene.collision",exportSceneCollision(tree,new Map()));
+ const parsed=parse(original);assert.equal(parsed.values.length,parsed.count*9);
+ doc.objects=doc.objects.filter(o=>o.builtin==='hangar');doc.objects[0].position=[100,0,50];doc.objects[0].rotation=[0,90,0];doc.objects[0].scale=[2,3,4];
+ const transformed=parse(exportSceneCollision(doc,new Map()));assert.notEqual(transformed.revision,parsed.revision);
+ const xyz=transformed.values.slice(36).reduce((a,n,i)=>(a[i%3].push(n),a),[[],[],[]]);assert(Math.max(...xyz[1])===24);assert(Math.min(...xyz[0])>=68-1e-8);assert(Math.max(...xyz[2])<=80+1e-8);
+ doc.objects[0].collision=false;doc.showBase=false;assert.throws(()=>exportSceneCollision(doc,new Map()),/没有/);
+ assert.throws(()=>validateSceneDocument({...newSceneDocument(),georeference:{latitude:91,longitude:0,altitude:0}}));
+ const model=new Object3D();model.add(new Mesh(new BoxGeometry(2,4,6)));const imported=newSceneDocument();imported.georeference=doc.georeference;imported.assets=[{id:'a',entry:'a.gltf',files:[{path:'a.gltf',data:'data:application/json;base64,e30='}]}];imported.showBase=false;imported.objects=[{id:'a',assetId:'a',name:'test',visible:true,position:[1,2,3],rotation:[0,0,0],scale:[1,1,1]}];assert.equal(parse(exportSceneCollision(imported,new Map([['a',model]]))).count,12);
+ const mountain=JSON.parse(await readFile('../scenes/mountain-range/mountain-terrain.scene.json','utf8'));
+ const {GLTFLoader}=await import('three/examples/jsm/loaders/GLTFLoader.js');
+ const bytes=await readFile('../scenes/mountain-range/mountain-range.glb');
+ const loader=new GLTFLoader(); loader.register(()=>({name:'collision-test-no-textures',loadTexture:()=>Promise.resolve(null)}));
+ const gltf=await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'');
+ mountain.georeference={latitude:30,longitude:120,altitude:0};
+ const maps=new Map(mountain.assets.map(a=>[a.id,gltf.scene]));
+ const started=performance.now();const terrain=exportSceneCollision(mountain,maps);const elapsed=performance.now()-started;
+ assert(parse(terrain).count>100);await writeFile('/tmp/mountain-scene.collision',terrain);
+ console.log(`PASS stable version, transformed hangar, disabled collision, imported geometry, validation, real mountain export: ${parse(terrain).count} triangles / ${(terrain.length/1048576).toFixed(2)} MiB / ${elapsed.toFixed(0)} ms`);
+}finally{await rm(directory,{recursive:true,force:true});}
