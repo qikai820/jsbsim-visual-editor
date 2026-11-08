@@ -1,6 +1,10 @@
 //! Backward-compatible LOAD correlation and board diagnostic decoding.
 use serde_json::Value;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+// Persistent startup logging on NuttX can take longer than 30 seconds.
+pub const MODEL_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub fn request_id() -> u32 {
     static NEXT: AtomicU32 = AtomicU32::new(0);

@@ -20,6 +20,10 @@ fn safe_path(path: &str) -> Result<(), String> {
 }
 
 fn read_until(stream: &mut TcpStream, marker: &[u8], deadline: Instant) -> Result<Vec<u8>, String> {
+    read_until_progress(stream, marker, deadline, |_| {})
+}
+
+fn read_until_progress(stream: &mut TcpStream, marker: &[u8], deadline: Instant, mut progress: impl FnMut(&[u8])) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -33,6 +37,7 @@ fn read_until(stream: &mut TcpStream, marker: &[u8], deadline: Instant) -> Resul
         match stream.read(&mut buffer) {
             Ok(0) => return Err("NSH connection closed before prompt".into()),
             Ok(length) => {
+                progress(&buffer[..length]);
                 output.extend_from_slice(&buffer[..length]);
                 if output.len() > MAX_RESPONSE { return Err("NSH response exceeds 2 MiB".into()); }
             }
@@ -79,12 +84,16 @@ pub(crate) struct NshSession<'a> {
 
 impl NshSession<'_> {
     pub(crate) fn command(&mut self, command: &str) -> Result<String, String> {
+        self.command_progress(command, Duration::from_secs(30), |_| {})
+    }
+
+    pub(crate) fn command_progress(&mut self, command: &str, timeout: Duration, progress: impl FnMut(&[u8])) -> Result<String, String> {
         if command.contains(['\n', '\r', '\0']) || command.len() >= 2048 {
             return Err("invalid or oversized NSH command".into());
         }
         self.stream.write_all(command.as_bytes()).and_then(|_| self.stream.write_all(b"\n"))
             .map_err(|error| format!("cannot send NSH command: {error}"))?;
-        let raw = read_until(self.stream, PROMPT, Instant::now() + Duration::from_secs(30))
+        let raw = read_until_progress(self.stream, PROMPT, Instant::now() + timeout, progress)
             .map_err(|error| format!("NSH {}: {error}", command.split_whitespace().next().unwrap_or("command")))?;
         parse_response(&raw)
     }
@@ -100,7 +109,7 @@ fn run_on_host(host: Ipv4Addr, command: &str) -> Result<String, String> {
     with_host_session(host, |session| session.command(command))
 }
 
-fn with_host_session<T>(host: Ipv4Addr, operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_host_session<T>(host: Ipv4Addr, operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
     let _guard = NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
     let port = std::env::var("NSH_TELNET_PORT")
         .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);

@@ -3,7 +3,7 @@ import FloatInput from './FloatInput';
 import { environmentEdits, environmentFields, projectModelNames } from '../sim/runtimeParameters';
 import { submitRuntimeEdits } from '../store/runtimeTuningStore';
 import { useEffect, useMemo, useState } from 'react';
-import { firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
+import { firmwareRollback, firmwareInfo, type FirmwareInfo, firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 import { useSimSocket } from '../sim/useSimSocket';
 import { fleetSlotIds } from '../utils/fleetModelGroups';
@@ -29,7 +29,7 @@ const defaults = {
   integrators: { rotationalRate: 1, translationalRate: 3, rotationalPosition: 1, translationalPosition: 4 },
   initial: { latitudeDeg: 0, longitudeDeg: 0, altitudeM: 0, rollDeg: 0, pitchDeg: 0, yawDeg: 0, airspeedMps: 0, trim: false },
   environment: { pressureSlPsf: 2116.22, temperatureBiasR: 0, relativeHumidityPct: 0, windNorthFps: 0, windEastFps: 0, windDownFps: 0, turbulenceType: 0, turbulenceWindspeed20ftFps: 0, turbulenceSeverity: 0 },
-  mcap: { enabled: true, rateHz: 50, backgroundRateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 1024, bufferMb: 500, minFreeMb: 128, selectedVariables: [] as string[], criticalVariables: [] as string[] },
+  mcap: { enabled: true, rateHz: 50, backgroundRateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 1024, bufferMb: 8, minFreeMb: 128, selectedVariables: [] as string[], criticalVariables: [] as string[] },
   safety: { cpuCore: 0, taskPriority: 120, stackKb: 256, fdmTimeoutMs: 4, cpuWarningPercent: 90, ramWarningPercent: 85, nanCheck: true, faultAction: 'stop' },
   diagnostics: { usbDebugPrint: false },
 };
@@ -261,6 +261,33 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
     }
   };
 
+  const [firmwareTarget, setFirmwareTarget] = useState<FirmwareInfo | null>(null);
+  useEffect(() => {
+    if (tab !== '固件升级') return;
+    let active = true;
+    setFirmwareTarget(null);
+    void firmwareInfo().then(info => { if (active) setFirmwareTarget(info); })
+      .catch(error => { if (active) setFirmwareStatus(`${tr('无法读取升级通道', 'Upgrade service unavailable')}: ${error}`); });
+    return () => { active = false; };
+  }, [tab]);
+
+  const refreshFirmwareTarget = async () => {
+    setFirmwareTarget(null);
+    try { setFirmwareTarget(await firmwareInfo()); setFirmwareStatus(tr('已读取升级通道和槽位', 'Upgrade service and slots refreshed')); }
+    catch (error) { setFirmwareStatus(`${tr('无法读取升级通道', 'Upgrade service unavailable')}: ${error}`); }
+  };
+
+  const rollbackFirmware = async () => {
+    if (firmwareUpdating || firmwareTarget?.target !== 'rk3588') return;
+    if (!window.confirm(tr('回退到保留的另一槽固件？重启仿真机后生效。', 'Switch to the retained firmware slot? Reboot the simulator to activate.'))) return;
+    setFirmwareUpdating(true);
+    try {
+      await firmwareRollback();
+      setFirmwareStatus(tr('已选择上一固件，重启仿真机后生效', 'Previous firmware selected; reboot the simulator to activate'));
+    } catch (error) { setFirmwareStatus(`${tr('回退失败', 'Rollback failed')}: ${error}`); }
+    finally { setFirmwareUpdating(false); }
+  };
+
   const updateFirmware = async () => {
     if (!firmwareFile || firmwareUpdating) return;
     if (!firmwareFile.name.toLowerCase().endsWith('.bin')) {
@@ -271,9 +298,12 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
       setFirmwareStatus(tr('固件大小必须在 64 KiB 到 64 MiB 之间', 'Firmware size must be between 64 KiB and 64 MiB'));
       return;
     }
+    let target: FirmwareInfo;
+    try { target = await firmwareInfo(); setFirmwareTarget(target); }
+    catch (error) { setFirmwareStatus(`${tr('无法读取升级通道', 'Upgrade service unavailable')}: ${error}`); return; }
     if (!window.confirm(tr(
-      `即将升级仿真机固件：\n${firmwareFile.name}\n${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB\n\n文件将先完整上传到 /data/fireware/nuttx.bin，校验后写入 eMMC。写入期间不要断电或拔除USB。确认继续吗？`,
-      `Upgrade simulator firmware?\n${firmwareFile.name}\n${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB\n\nThe complete file is staged at /data/fireware/nuttx.bin before verified eMMC installation. Do not remove power or USB during installation.`
+      `即将升级仿真机固件：\n${firmwareFile.name}\n${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB\n\n文件将先完整上传并校验，再写入 ${target.storage} 并回读校验。写入期间请保持供电和连接。确认继续吗？`,
+      `Upgrade simulator firmware?\n${firmwareFile.name}\n${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB\n\nThe complete file is uploaded and checked before installation and readback verification on ${target.storage}. Keep power and the connection stable.`
     ))) return;
 
     setFirmwareUpdating(true);
@@ -281,13 +311,13 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
     setFirmwareInstallProgress(0);
     setFirmwareInstallStage('idle');
     try {
-      setFirmwareStatus(tr('正在通过USB上传到 /data/fireware…', 'Uploading to /data/fireware over USB…'));
+      setFirmwareStatus(target.source === 'usb-bulk' ? tr('正在通过 USB 上传固件…', 'Uploading firmware over USB…') : tr('正在通过网口上传固件…', 'Uploading firmware over Ethernet…'));
       const staged = 'path' in firmwareFile
         ? await firmwareStageFile(firmwareFile.path)
         : await firmwareStage(firmwareFile.name, new Uint8Array(await firmwareFile.arrayBuffer()));
       setFirmwareUploadProgress(100);
       setFirmwareInstallStage('write');
-      setFirmwareStatus(tr('上传完成，仿真机正在写入并回读校验 eMMC…', 'Upload complete; simulator is writing and verifying eMMC…'));
+      setFirmwareStatus(tr(`上传完成，正在写入并回读校验 ${target.storage}…`, `Upload complete; writing and verifying ${target.storage}…`));
       const result = await firmwareApply(staged.size, staged.crc32);
       setFirmwareInstallProgress(100);
       setFirmwareInstallStage('success');
@@ -445,9 +475,10 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
             <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 MCAP 日志','Enable MCAP logging')}</label>
             <NumberField label={tr('状态与关键字段频率','State and critical field rate')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',Math.min(500,v))} /><NumberField label={tr('普通字段频率','Background field rate')} value={config.mcap.backgroundRateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','backgroundRateHz',Math.min(500,v))} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',Math.min(2048,v))} />
-            <NumberField label={tr('RAM日志缓冲区','RAM log buffer')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>set('mcap','bufferMb',Math.min(1536,v))} />
+            <NumberField label={tr('日志缓存容量','Log buffer capacity')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>set('mcap','bufferMb',Math.max(1, Math.min(1536, Math.trunc(v))))} />
             <NumberField label={tr('单文件上限','Maximum file size')} value={config.mcap.maxFileMb} min={16} unit="MiB" onChange={(v:any)=>set('mcap','maxFileMb',v)} /><NumberField label={tr('最长记录时间','Maximum duration')} value={config.mcap.maxDurationMin} min={1} unit="min" onChange={(v:any)=>set('mcap','maxDurationMin',v)} /><NumberField label={tr('最小剩余空间','Minimum free space')} value={config.mcap.minFreeMb} min={32} unit="MiB" onChange={(v:any)=>set('mcap','minFreeMb',v)} />
           </div>
+          <p>{tr('日志缓存容量在下次加载模型时生效；已同步写入存储的数据会回收，缓存循环使用。', 'Buffer capacity applies on the next model load. Blocks are reused after data is written and synced to storage.')}</p>
           <div className="mcap-variable-selector">
             <div>
               <b>{tr('记录变量选择器', 'Recorded Variable Selector')}</b>
@@ -491,18 +522,23 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           </div></section>}
           {tab === '固件升级' && <section className="firmware-upgrade-page">
             <h3>{tr('固件升级', 'Firmware Upgrade')}</h3>
-            <p>{tr('先完整上传固件，再由仿真机写入 eMMC 固件分区并回读校验。升级成功后手动重启生效。', 'The image is staged first, then written to the eMMC firmware partition and read back for verification. Reboot manually after success.')}</p>
+            <p>{tr('先完整上传并校验固件，再写入仿真机启动存储并回读校验。升级成功后手动重启生效。', 'Upload and check the complete image, then install and verify it on the simulator boot storage. Reboot manually after success.')}</p>
             <div className="firmware-upgrade-card">
-              <div className="firmware-target"><span>{tr('暂存位置', 'Staging')}</span><b>/data/fireware/nuttx.bin</b><span>{tr('启动位置', 'Boot slot')}</span><b>SIM_FW · slot A</b></div>
+              <button type="button" disabled={firmwareUpdating} onClick={() => void refreshFirmwareTarget()}>{tr('刷新设备与槽位', 'Refresh device and slots')}</button>
+              <div className="firmware-target"><span>{tr('暂存位置', 'Staging')}</span><b>{firmwareTarget?.path || '—'}</b><span>{firmwareTarget?.target === 'rk3588' ? tr('运行槽 → 升级槽', 'Running → Update slot') : tr('启动位置', 'Boot slot')}</span><b>{firmwareTarget?.boot || '—'}</b></div>
               {isTauri && /Linux/i.test(navigator.userAgent)
                 ? <button type="button" className="firmware-file-picker" disabled={firmwareUpdating} onClick={() => void chooseFirmware()} title={firmwareFile && 'path' in firmwareFile ? firmwareFile.path : undefined}><span>{firmwareFile ? firmwareFile.name : tr('选择 nuttx.bin 固件', 'Choose nuttx.bin firmware')}</span></button>
                 : <label className="firmware-file-picker"><input type="file" accept=".bin,application/octet-stream" disabled={firmwareUpdating} onChange={event => { const file = event.target.files?.[0] || null; setFirmwareFile(file); setFirmwareUploadProgress(0); setFirmwareInstallProgress(0); setFirmwareInstallStage('idle'); setFirmwareStatus(file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MiB` : tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image')); }} /><span>{firmwareFile ? firmwareFile.name : tr('选择 nuttx.bin 固件', 'Choose nuttx.bin firmware')}</span></label>}
               <div className="firmware-file-details">{firmwareFile ? `${(firmwareFile.size / 1024 / 1024).toFixed(2)} MiB · ${tr('允许 64 KiB–64 MiB', '64 KiB–64 MiB allowed')}` : tr('请选择 AArch64 NuttX .bin 文件', 'Select an AArch64 NuttX .bin file')}</div>
               <div className="firmware-progress-row"><div><span>{tr('上传到数据分区', 'Upload to data partition')}</span><b>{firmwareUploadProgress}%</b></div><div className="firmware-progress-track"><i style={{ width: `${firmwareUploadProgress}%` }} /></div></div>
-              <div className="firmware-progress-row"><div><span>{firmwareInstallStage === 'verify' ? tr('eMMC 回读校验', 'eMMC readback verification') : tr('写入 eMMC 固件分区', 'Write eMMC firmware partition')}</span><b>{firmwareInstallProgress}%</b></div><div className={`firmware-progress-track ${firmwareInstallStage}`}><i style={{ width: `${firmwareInstallProgress}%` }} /></div></div>
-              <button type="button" className="firmware-update-button" disabled={!firmwareFile || firmwareUpdating} onClick={() => void updateFirmware()}>{firmwareUpdating ? tr('升级中…', 'Updating…') : tr('开始升级', 'Start Upgrade')}</button>
+              <div className="firmware-progress-row"><div><span>{firmwareInstallStage === 'verify' ? tr(`${firmwareTarget?.storage || ''} 回读校验`, `${firmwareTarget?.storage || ''} readback verification`) : tr(`写入 ${firmwareTarget?.storage || ''} 固件`, `Write ${firmwareTarget?.storage || ''} firmware`)}</span><b>{firmwareInstallProgress}%</b></div><div className={`firmware-progress-track ${firmwareInstallStage}`}><i style={{ width: `${firmwareInstallProgress}%` }} /></div></div>
+              <button type="button" className="firmware-update-button" disabled={!firmwareFile || !firmwareTarget || firmwareUpdating} onClick={() => void updateFirmware()}>{firmwareUpdating ? tr('升级中…', 'Updating…') : tr('开始升级', 'Start Upgrade')}</button>
+              {firmwareTarget?.target === 'rk3588' && <>
+                <button type="button" disabled={firmwareUpdating} onClick={() => void rollbackFirmware()}>{tr('回退到上一固件', 'Roll back to previous firmware')}</button>
+                <small>{tr('升级写入备用槽并保留当前槽。新固件在服务启动后确认；未确认则下次重启回退。', 'Updates write the standby slot and retain the current slot. The new image confirms after service startup; an unconfirmed image rolls back on the next reboot.')}</small>
+              </>}
               <p className={firmwareInstallStage === 'error' ? 'error' : ''}>{firmwareStatus}</p>
-              <small>{tr('写入期间请勿断电或拔出 USB。固件采用单槽写入，异常中断需通过 U-Boot 恢复。', 'Do not remove power or USB during installation. This is a single-slot update; recover through U-Boot if it is interrupted.')}</small>
+              <small>{tr('写入期间请保持供电和连接。升级完成后重启生效。', 'Keep power and the connection stable during installation. Reboot after a successful upgrade.')}</small>
             </div>
           </section>}
         </main>

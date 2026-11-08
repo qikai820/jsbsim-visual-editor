@@ -87,6 +87,29 @@ try {
   const ssd = `document.querySelector('[data-testid="ssd-temperature"]')`;
   await until(`${cpu}?.textContent.includes('57.3°C') && ${ssd}?.textContent.includes('36.9°C')`);
   assert.match(await evaluate('document.querySelector(".sim-runtime-metrics").title'),/CPU 温度 57.3°C/);
+  await evaluate('document.querySelector(".sim-runtime-metrics").click()');
+  const chart = `document.querySelector('.sim-temperature-chart')`;
+  const cpuPath = `${chart}?.querySelector('.temperature-cpuC')`;
+  const ssdPath = `${chart}?.querySelector('.temperature-ssdC')`;
+  await until(`${cpuPath}?.getAttribute('d').includes('L') && ${ssdPath}?.getAttribute('d').includes('L')`);
+  await evaluate(`document.querySelector('[aria-label="CPU 温度曲线"]').click()`);
+  await until(`!${cpuPath} && ${ssdPath}`);
+  await evaluate(`document.querySelector('[aria-label="CPU 温度曲线"]').click()`);
+  await until(`${cpuPath}`);
+  await evaluate(`document.querySelector('[aria-label="SSD 温度曲线"]').click()`);
+  await until(`!${ssdPath} && ${cpuPath}`);
+  await evaluate(`document.querySelector('[aria-label="SSD 温度曲线"]').click()`);
+  await until(`${ssdPath}`);
+  await evaluate(`Array.from(document.querySelectorAll('.sim-performance-window button')).find(button => button.textContent === '×4').click()`);
+  await until(`${chart}?.textContent.includes('-120s')`);
+  await evaluate(`Array.from(document.querySelectorAll('.sim-performance-window button')).find(button => button.textContent === '×1').click()`);
+  await until(`${chart}?.textContent.includes('-30s')`);
+  // Give the preview enough history to show both traces in the screenshot.
+  for (const cpuC of [59, 61, 60, 58]) {
+    await evaluate(`window.__health.temperatures={cpuC:${cpuC},ssdC:${cpuC - 20}}`);
+    await until(`${cpu}?.textContent.includes('${cpuC}.0°C')`);
+    await new Promise(resolve => setTimeout(resolve, 600));
+  }
   const shot=await send('Page.captureScreenshot',{format:'png'});
   await writeFile('/tmp/jsbsim-temperatures.png',Buffer.from(shot.data,'base64'));
   await evaluate('window.__health.temperatures={cpuC:0,ssdC:null}');
@@ -101,9 +124,12 @@ try {
   await until(`${cpu}?.textContent.includes('不可用') && ${ssd}?.textContent.includes('不可用')`);
   await evaluate('window.__health.temperatures={cpuC:58,ssdC:38}');
   await until(`${cpu}?.textContent.includes('58.0°C') && ${ssd}?.textContent.includes('38.0°C')`);
+  assert.ok(await evaluate(`(${cpuPath}.getAttribute('d').match(/M/g)||[]).length >= 2`), 'CPU trace breaks across unavailable readings');
+  assert.ok(await evaluate(`(${ssdPath}.getAttribute('d').match(/M/g)||[]).length >= 2`), 'SSD trace breaks across unavailable readings');
+  assert.equal(await evaluate(`/NaN|Infinity/.test(${cpuPath}.getAttribute('d')+${ssdPath}.getAttribute('d'))`), false);
   await evaluate('window.__failStatus=true');
   await until(`${cpu}?.textContent.includes('不可用') && ${ssd}?.textContent.includes('不可用')`);
-  console.log('PASS: CPU/SSD values, zero, invalid readings, missing sensor, stale/disconnected and older firmware. Mocked telemetry.');
+  console.log('PASS: CPU/SSD curves, visibility toggles, shared time range, gaps, zero, invalid readings, missing sensor, stale/disconnected and older firmware. Mocked telemetry.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));

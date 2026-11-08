@@ -316,6 +316,8 @@ type NetworkRate = { rx: number; tx: number };
 type NetworkPort = 'eth0' | 'eth1';
 type NetworkHistorySample = { at: number; name: NetworkPort; rx: number; tx: number };
 type McapCounter = { at: number; bytes: number };
+type Temperatures = { cpuC: number | null; ssdC: number | null };
+type TemperatureSample = Temperatures & { at: number };
 
 function formatMcapBytes(bytes: number): string {
   if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GiB`;
@@ -347,7 +349,20 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   const [mcapPopupOpen, setMcapPopupOpen] = useState(false);
   const mcapRef = useRef<HTMLDivElement>(null);
   const [healthFresh, setHealthFresh] = useState(false);
-  const [temperatures, setTemperatures] = useState<{ cpuC: number | null; ssdC: number | null }>({ cpuC: null, ssdC: null });
+  const [temperatures, setTemperatures] = useState<Temperatures>({ cpuC: null, ssdC: null });
+  const [temperatureHistory, setTemperatureHistory] = useState<TemperatureSample[]>([]);
+  const recordTemperatures = useCallback((values: Temperatures) => {
+    setTemperatures(values);
+    const now = Date.now();
+    setTemperatureHistory(history => {
+      const last = history[history.length - 1];
+      // Keep a one-second trace of the latest reported sensor values, while
+      // recording changes and missing readings immediately to preserve gaps.
+      if (last && now - last.at < 1000 && last.cpuC === values.cpuC && last.ssdC === values.ssdC) return history;
+      return [...history, { at: now, ...values }]
+        .filter(sample => now - sample.at <= MAX_PERFORMANCE_PERIOD_SECONDS * 4 * 1000);
+    });
+  }, []);
   const [memory, setMemory] = useState<{ total: number; used: number; free: number; percent: number } | null>(null);
   const [fdmRunMs, setFdmRunMs] = useState<number | null>(null);
   const [fdmIsWindow, setFdmIsWindow] = useState(false);
@@ -486,7 +501,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
       setHealthFresh(fresh);
       const validTemperature = (value: unknown, min: number, max: number) =>
         fresh && typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : null;
-      setTemperatures({
+      recordTemperatures({
         cpuC: validTemperature(status.temperatures?.cpuC, -40, 125),
         ssdC: validTemperature(status.temperatures?.ssdC, -100.15, 199.85),
       });
@@ -628,9 +643,9 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
       setCurrentScript(status.script || null);
       setCurrentModel(status.model || null);
     } catch {
-      setTemperatures({ cpuC: null, ssdC: null });
+      recordTemperatures({ cpuC: null, ssdC: null });
     }
-  }, [appendLog]);
+  }, [appendLog, recordTemperatures]);
 
   // Refresh the remote lists only when the menu is opened.
   useEffect(() => {
@@ -1080,6 +1095,13 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   const fdmVisibleHistory = fdmHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
   const cpuVisibleHistory = cpuHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
   const networkVisibleHistory = networkHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
+  const temperatureVisibleHistory = temperatureHistory.filter(sample => chartNow - sample.at <= fdmWindow * 1000);
+  const temperatureValues = temperatureVisibleHistory.flatMap(sample => [sample.cpuC, sample.ssdC])
+    .filter((value): value is number => value != null);
+  const temperatureMin = temperatureValues.length ? Math.min(...temperatureValues) : 20;
+  const temperatureMax = temperatureValues.length ? Math.max(...temperatureValues) : 60;
+  const temperatureChartMin = Math.floor((temperatureMin - 5) / 5) * 5;
+  const temperatureChartMax = Math.max(temperatureChartMin + 20, Math.ceil((temperatureMax + 5) / 5) * 5);
   const networkPeak = networkVisibleHistory.reduce((peak, sample) => Math.max(peak, sample.rx, sample.tx), 0);
   const networkUnitBytes = networkPeak >= 1048576 ? 1048576 : 1024;
   const networkUnitLabel = networkUnitBytes === 1048576 ? 'MiB/s' : 'KiB/s';
@@ -1097,6 +1119,23 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
     ? '板端统计窗口内的周期平均耗时，包含输入、输出等待'
     : '板端每次上报最近一个周期的耗时，包含输入、输出等待；下方统计覆盖收到的样本';
   const chartX = (at: number) => 35 + (1 - Math.min(fdmWindow * 1000, Math.max(0, chartNow - at)) / (fdmWindow * 1000)) * 290;
+  const temperatureChartPath = (sensor: keyof Temperatures) => {
+    let path = '';
+    let previousAt: number | null = null;
+    for (const sample of temperatureVisibleHistory) {
+      const value = sample[sensor];
+      if (value == null) {
+        previousAt = null;
+        continue;
+      }
+      const x = chartX(sample.at).toFixed(1);
+      const y = (104 - (value - temperatureChartMin) * 80 / (temperatureChartMax - temperatureChartMin)).toFixed(1);
+      // A zero-length segment makes even a single valid sample visible.
+      path += previousAt != null && sample.at - previousAt <= 3000 ? `L${x} ${y} ` : `M${x} ${y} L${x} ${y} `;
+      previousAt = sample.at;
+    }
+    return path;
+  };
   const cpuChartPoints = cpuCores.map((_, core) => cpuVisibleHistory.map(sample => {
     const x = chartX(sample.at);
     const y = 122 - Math.max(0, Math.min(cpuChartMax, sample.values[core] ?? 0)) * 96 / cpuChartMax;
@@ -1319,15 +1358,18 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
               </div>
               {!mcapStatus && <p>等待任务机上报 MCAP 状态</p>}
               {mcapStatus && <>
-                {mcapStatus.bufferFull && <p>录制缓存已满，后续数据无法继续录入。</p>}
+                {mcapStatus.bufferFull && <p>日志缓存暂满，新数据可能丢弃；写盘释放空间后自动恢复。</p>}
                 <dl>
                   <dt>录制状态</dt><dd>{mcapState}</dd>
                   <dt>已录制数据</dt><dd>{formatMcapBytes(mcapStatus.recordedBytes)}</dd>
+                  {typeof mcapStatus.bufferCapacityBytes === 'number' && mcapStatus.bufferCapacityBytes > 0 && <>
+                    <dt>缓存占用 / 容量</dt><dd>{formatMcapBytes(mcapStatus.bufferUsedBytes ?? 0)} / {formatMcapBytes(mcapStatus.bufferCapacityBytes)}</dd>
+                  </>}
                   <dt>录制速度</dt><dd>{mcapRate == null ? (mcapStatus.recording ? '计算中' : '--') : formatNetworkRate(mcapRate)}</dd>
                   <dt>SD 写入</dt><dd>{mcapWriteState}</dd>
                   <dt>已写入 SD</dt><dd>{formatMcapBytes(mcapStatus.writtenBytes)}</dd>
                 </dl>
-                <p className="sim-mcap-note">已录制数据是内存中的 MCAP 记录量。最终文件经压缩，停止后完成校验，大小可能不同。</p>
+                <p className="sim-mcap-note">已录制数据为累计原始数据量。已同步写盘的数据会释放缓存，最终文件大小随压缩率变化。</p>
               </>}
             </div>
           )}
@@ -1414,6 +1456,32 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
               return !hiddenPerformanceSeries[key] && <path key={key} d={networkChartPath(name, direction)} className={`sim-network-line network-${key}`} />;
             }))}
             {!networkVisibleHistory.length && <text x="180" y="68" textAnchor="middle">等待网速采样</text>}
+            <text x="35" y="123">-{fdmWindow}s</text><text x="325" y="123" textAnchor="end">现在</text>
+          </svg>
+          <div className="sim-performance-legend" aria-label="板端温度">
+            {(['cpuC', 'ssdC'] as const).map(sensor => {
+              const label = sensor === 'cpuC' ? 'CPU 温度' : 'SSD 温度';
+              const key = `temperature-${sensor}`;
+              return <button key={sensor} type="button" className={`sim-performance-series ${key}`}
+                aria-label={`${label}曲线`} aria-pressed={!hiddenPerformanceSeries[key]}
+                title={`${hiddenPerformanceSeries[key] ? '显示' : '隐藏'} ${label}曲线`}
+                onClick={() => togglePerformanceSeries(key)}>
+                <i aria-hidden="true" />{label} <b>{sensor === 'cpuC' ? cpuTemperature : ssdTemperature}</b>
+              </button>;
+            })}
+          </div>
+          <svg className="sim-performance-chart sim-temperature-chart" viewBox="0 0 360 128" role="img" aria-label="CPU 与 SSD 温度曲线，纵轴单位摄氏度，共用性能曲线时间范围">
+            <text x="35" y="14">温度 °C</text>
+            {[0, 1, 2, 3, 4].map(step => {
+              const y = 104 - step * 20;
+              return <g key={step}>
+                <line x1="35" x2="325" y1={y} y2={y} className="sim-performance-grid" />
+                <text x="30" y={y + 3} textAnchor="end">{(temperatureChartMin + (temperatureChartMax - temperatureChartMin) * step / 4).toFixed(0)}</text>
+              </g>;
+            })}
+            {(['cpuC', 'ssdC'] as const).map(sensor => !hiddenPerformanceSeries[`temperature-${sensor}`] &&
+              <path key={sensor} d={temperatureChartPath(sensor)} className={`sim-performance-line temperature-${sensor}`} />)}
+            {!temperatureValues.length && <text x="180" y="68" textAnchor="middle">等待温度采样</text>}
             <text x="35" y="123">-{fdmWindow}s</text><text x="325" y="123" textAnchor="end">现在</text>
           </svg>
           {!fdmLoading && fdmVisibleHistory.length > 0 && <div className="sim-performance-stats">

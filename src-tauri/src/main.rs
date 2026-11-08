@@ -33,6 +33,7 @@ mod sim_network;
 mod model_import;
 mod remote_model;
 mod firmware_picker;
+mod firmware_update;
 mod usb_file_picker;
 mod usb_file_editor;
 mod serial_assistant;
@@ -556,7 +557,8 @@ fn sim_start_blocking(
 ) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
         let state = app.state::<AppState>();
-        /* Model load can take 30 seconds.  Do not hold this shared mutex
+        /* Model load with persistent startup diagnostics can exceed 30 seconds.
+         * Do not hold this shared mutex
          * while the background command waits for board confirmation. */
         let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         // MCAP chooses its directory and filename as soon as the bridge loads
@@ -590,13 +592,13 @@ fn sim_start_blocking(
         let expected_model = model.as_deref()
             .or_else(|| script.as_deref())
             .ok_or("The selected launch has no model")?;
-        let result = client.wait_for_running_model(expected_model, request_id, std::time::Duration::from_secs(30));
+        let result = client.wait_for_running_model(expected_model, request_id, load_diagnostics::MODEL_LOAD_TIMEOUT);
         if !matches!(result, Ok(true)) {
             client.clear_lifecycle_request("running");
             if let Err(error) = result { return Err(error); }
             return Err(format!(
-                "NuttX did not confirm model '{}' running within 30 seconds",
-                expected_model
+                "NuttX did not confirm model '{}' running within {} seconds",
+                expected_model, load_diagnostics::MODEL_LOAD_TIMEOUT.as_secs()
             ));
         }
         return Ok(serde_json::json!({"running": true, "external": true,
@@ -679,10 +681,10 @@ async fn sim_restart(app: tauri::AppHandle) -> Result<serde_json::Value, String>
         let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
         let request = client.send_restart().map_err(|e| e.to_string())?;
         client.request_lifecycle_state("running");
-        let result = client.wait_for_running_model("", request, Duration::from_secs(30));
+        let result = client.wait_for_running_model("", request, load_diagnostics::MODEL_LOAD_TIMEOUT);
         if !matches!(result, Ok(true)) {
             client.clear_lifecycle_request("running");
-            return Err(result.err().unwrap_or_else(|| "仿真机未在 30 秒内确认重新加载成功".into()));
+            return Err(result.err().unwrap_or_else(|| format!("仿真机未在 {} 秒内确认重新加载成功", load_diagnostics::MODEL_LOAD_TIMEOUT.as_secs())));
         }
         return Ok(serde_json::json!({"running": true, "restarting": true, "external": true}));
     }
@@ -1027,7 +1029,10 @@ async fn ftp_list_dsdl() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn ftp_list_logs() -> Result<serde_json::Value, String> {
-    run_blocking(|| Ok(serde_json::json!({ "files": ftp_sync::list_logs()?, "root": "/mnt/sdcard/LOG", "source": ftp_sync::transport_source() }))).await
+    run_blocking(|| {
+        let listing = ftp_sync::list_logs()?;
+        Ok(serde_json::json!({ "files": listing.files, "root": listing.root, "source": ftp_sync::transport_source() }))
+    }).await
 }
 
 #[tauri::command]
@@ -1396,7 +1401,6 @@ async fn usb_file_upload_folder(
     usb_file_picker::pick_and_upload_folder(window, directory, previous_path).await
 }
 
-const FIRMWARE_REMOTE_PATH: &str = "fireware/nuttx.bin";
 const FIRMWARE_MIN_SIZE: usize = 64 * 1024;
 const FIRMWARE_MAX_SIZE: usize = 64 * 1024 * 1024;
 
@@ -1430,90 +1434,26 @@ async fn firmware_stage(
 }
 
 fn stage_firmware_bytes(app: &tauri::AppHandle, file_name: String, bytes: Vec<u8>) -> Result<serde_json::Value, String> {
-    if !file_name.to_ascii_lowercase().ends_with(".bin") {
-        return Err("firmware file must have a .bin extension".to_owned());
-    }
-    if bytes.len() < FIRMWARE_MIN_SIZE || bytes.len() > FIRMWARE_MAX_SIZE {
-        return Err(format!(
-            "firmware size must be between {} and {} bytes",
-            FIRMWARE_MIN_SIZE, FIRMWARE_MAX_SIZE
-        ));
-    }
-
-    let crc32 = usb_file::crc32(&bytes);
-    let _ = app.emit("firmware-progress", serde_json::json!({
-        "stage": "upload",
-        "completed": 0,
-        "total": bytes.len()
-    }));
-    usb_file::write_all_with_progress(FIRMWARE_REMOTE_PATH, &bytes,
-        |completed, total| {
-            let _ = app.emit("firmware-progress", serde_json::json!({
-                "stage": "upload",
-                "completed": completed,
-                "total": total
-            }));
-        })?;
-    let remote = usb_file::stat(FIRMWARE_REMOTE_PATH)?;
-    if remote.directory || remote.size != bytes.len() as u64 {
-        return Err(format!(
-            "staged firmware size mismatch: local={} remote={}",
-            bytes.len(), remote.size
-        ));
-    }
-
-    Ok(serde_json::json!({
-        "fileName": file_name,
-        "path": format!("/data/{}", FIRMWARE_REMOTE_PATH),
-        "size": remote.size,
-        "crc32": crc32,
-        "staged": true,
-        "source": "usb-bulk"
-    }))
+    firmware_update::stage(&|stage, completed, total| {
+        let _ = app.emit("firmware-progress", serde_json::json!({"stage":stage,"completed":completed,"total":total}));
+    }, file_name, bytes)
 }
 
 #[tauri::command]
-async fn firmware_apply(
-    app: tauri::AppHandle,
-    expected_size: u64,
-    expected_crc32: u32,
-) -> Result<serde_json::Value, String> {
-    run_blocking(move || {
-        let _ = app.emit("firmware-progress", serde_json::json!({
-            "stage": "write",
-            "completed": 0,
-            "total": expected_size
-        }));
-        let verification = usb_file::apply_firmware_with_progress(
-            FIRMWARE_REMOTE_PATH,
-            |progress| {
-                let stage = match progress.phase {
-                    usb_file::FirmwareUpdatePhase::Write => "write",
-                    usb_file::FirmwareUpdatePhase::Verify => "verify",
-                };
-                let _ = app.emit("firmware-progress", serde_json::json!({
-                    "stage": stage,
-                    "completed": progress.completed,
-                    "total": progress.total
-                }));
-            },
-        )?;
-        let expected = format!("size={expected_size} crc32={expected_crc32:08x}");
-        if verification.trim() != expected {
-            return Err(format!(
-                "installed firmware verification mismatch: expected '{expected}', board returned '{}'",
-                verification.trim()
-            ));
-        }
+async fn firmware_info() -> Result<serde_json::Value, String> {
+    run_blocking(firmware_update::info).await
+}
 
-        Ok(serde_json::json!({
-            "path": format!("/data/{}", FIRMWARE_REMOTE_PATH),
-            "installed": true,
-            "verification": verification,
-            "rebootRequired": true,
-            "source": "usb-bulk"
-        }))
-    }).await
+#[tauri::command]
+async fn firmware_rollback() -> Result<serde_json::Value,String> {
+    run_blocking(firmware_update::rollback).await
+}
+
+#[tauri::command]
+async fn firmware_apply(app: tauri::AppHandle, expected_size: u64, expected_crc32: u32) -> Result<serde_json::Value, String> {
+    run_blocking(move || firmware_update::apply(&|stage, completed, total| {
+        let _ = app.emit("firmware-progress", serde_json::json!({"stage":stage,"completed":completed,"total":total}));
+    }, expected_size, expected_crc32)).await
 }
 
 #[tauri::command]
@@ -1792,6 +1732,8 @@ fn main() {
             firmware_stage_file,
             firmware_stage,
             firmware_apply,
+            firmware_info,
+            firmware_rollback,
             simulator_transport_get,
             simulator_network_target_get,
             simulator_transport_set,

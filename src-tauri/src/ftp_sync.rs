@@ -89,6 +89,12 @@ pub struct LogFileInfo {
     pub modified: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct LogListing {
+    pub files: Vec<LogFileInfo>,
+    pub root: String,
+}
+
 fn endpoint() -> Result<String, String> {
     // The running Tauri dev process can retain an old launcher environment
     // after a Rust hot reload. A board verified by discovery or USB readback
@@ -399,12 +405,80 @@ fn list_ftp_relative(path: &str) -> Result<Vec<String>, String> {
             return Ok(entries.into_iter().map(|entry| entry.name).collect());
         } else { return Err(usb_entries.unwrap_err()); }
     }
-    let url = format!("{}/{}/", endpoint()?, path.trim_matches('/'));
+    list_network_ftp_relative(path)
+}
+
+fn list_network_ftp_relative(path: &str) -> Result<Vec<String>, String> {
+    if !path.is_empty() { safe_relative_path(path)?; }
+    let url = format!("{}/{}", endpoint()?, if path.is_empty() { String::new() }
+                      else { format!("{}/", path.trim_matches('/')) });
     let auth = credentials();
     let bytes = curl_output(&["--user", &auth, "--list-only", &url])?;
     Ok(String::from_utf8_lossy(&bytes).lines().map(str::trim)
         .filter(|name| !name.is_empty() && safe_component(name.trim_end_matches('/')).is_ok())
         .map(|name| name.trim_end_matches('/').to_string()).collect())
+}
+
+fn log_ftp_host() -> Result<std::net::Ipv4Addr, String> {
+    let url = endpoint()?;
+    url.strip_prefix("ftp://").and_then(|host| host.parse().ok())
+        .ok_or_else(|| "无法通过控制台检查此 FTP 地址的日志服务".into())
+}
+
+fn check_log_storage(session: &mut crate::romfs_network::NshSession<'_>) -> Result<(), String> {
+    // On Orange Pi the FTP directory can exist in the pseudo filesystem even
+    // when mounting SIMDATA failed. An empty listing must not hide that failure.
+    if session.command("uname -a")?.contains("orangepi-5-plus") {
+        let mounts = session.command("mount")?;
+        if !mounts.lines().any(|line| line.trim() == "/mnt/home type ext4") {
+            return Err("仿真机 SSD 数据分区未挂载（/mnt/home），暂时无法读取历史日志；请检查板端 ext4 挂载错误".into());
+        }
+    }
+    Ok(())
+}
+
+fn network_log_directory() -> Result<(String, Vec<String>), String> {
+    let entries = match list_network_ftp_relative("") {
+        Ok(entries) => entries,
+        Err(error) if error.contains("curl: (7)") ||
+            (error.contains("curl: (28)") && error.contains("Failed to connect")) => {
+            // Recover the existing service without rebooting the simulator or
+            // attempting any disk repair. Pin NSH to the failed FTP endpoint.
+            crate::romfs_network::with_host_session(log_ftp_host()?, |session| {
+                check_log_storage(session)?;
+                let output = session.command("ftpd_start -4")?;
+                if output.contains("nsh:") || output.contains("failed") || output.contains("ERROR") {
+                    return Err(format!("仿真机文件服务启动失败：{}", output.trim()));
+                }
+                Ok(())
+            }).map_err(|reason| format!("无法连接仿真机文件服务：{reason}（{error}）"))?;
+            list_network_ftp_relative("")?
+        }
+        Err(error) => return Err(error),
+    };
+    let root = select_network_log_root(&entries)?;
+    if root == "jsbsim/LOG" {
+        // FTP remains usable on boards without NSH. Only a confirmed storage
+        // failure should replace an otherwise valid directory response.
+        if let Ok(host) = log_ftp_host() {
+            if let Err(error) = crate::romfs_network::with_host_session(host, check_log_storage) {
+                if error.starts_with("仿真机 SSD 数据分区未挂载") { return Err(error); }
+            }
+        }
+    }
+    let files = list_network_ftp_relative(root)?;
+    Ok((root.into(), files))
+}
+
+fn select_network_log_root(entries: &[String]) -> Result<&'static str, String> {
+    if entries.iter().any(|name| name == "LOG") { return Ok("LOG"); }
+    if entries.iter().any(|name| name == "jsbsim") { return Ok("jsbsim/LOG"); }
+    Err("仿真机文件服务中没有日志目录（LOG 或 jsbsim/LOG）；请检查日志存储是否已挂载".into())
+}
+
+fn network_log_url(file: &str) -> Result<String, String> {
+    let (root, _) = network_log_directory()?;
+    Ok(format!("{}/{root}/{file}", endpoint()?))
 }
 
 fn log_name_timestamp(name: &str) -> Option<String> {
@@ -417,7 +491,7 @@ fn log_name_timestamp(name: &str) -> Option<String> {
     Some(format!("epoch:{seconds}"))
 }
 
-fn log_info(name: String) -> LogFileInfo {
+fn log_info(name: String, root: &str) -> LogFileInfo {
     if use_usb() {
         let size = usb_file::stat(&format!("LOG/{name}")).ok().map(|entry| entry.size);
         return LogFileInfo { modified: log_name_timestamp(&name), name, size };
@@ -425,7 +499,7 @@ fn log_info(name: String) -> LogFileInfo {
     let Ok(ftp_endpoint) = endpoint() else {
         return LogFileInfo { modified: log_name_timestamp(&name), name, size: None };
     };
-    let url = format!("{}/LOG/{}", ftp_endpoint, name);
+    let url = format!("{}/{root}/{}", ftp_endpoint, name);
     let auth = credentials();
     let output = Command::new("curl")
         .args(["--silent", "--show-error", "--noproxy", "*", "--disable-epsv",
@@ -445,23 +519,23 @@ fn log_info(name: String) -> LogFileInfo {
     LogFileInfo { modified: modified.or_else(|| log_name_timestamp(&name)), name, size }
 }
 
-pub fn list_logs() -> Result<Vec<LogFileInfo>, String> {
-    let entries = list_ftp_relative("LOG")?;
+pub fn list_logs() -> Result<LogListing, String> {
+    let (root, entries) = if use_usb() { ("LOG".to_string(), list_ftp_relative("LOG")?) }
+                          else { network_log_directory()? };
     let mut files = Vec::new();
     for entry in entries {
         if entry.to_ascii_lowercase().ends_with(".mcap") {
             files.push(entry);
         } else if is_day_directory(&entry) {
-            if let Ok(day_files) = list_ftp_relative(&format!("LOG/{entry}")) {
-                files.extend(day_files.into_iter()
-                    .filter(|name| name.to_ascii_lowercase().ends_with(".mcap"))
-                    .map(|name| format!("{entry}/{name}")));
-            }
+            let day_files = list_ftp_relative(&format!("{root}/{entry}"))?;
+            files.extend(day_files.into_iter()
+                .filter(|name| name.to_ascii_lowercase().ends_with(".mcap"))
+                .map(|name| format!("{entry}/{name}")));
         }
     }
     files.sort();
     files.reverse();
-    Ok(files.into_iter().map(log_info).collect())
+    Ok(LogListing { files: files.into_iter().map(|name| log_info(name, &root)).collect(), root })
 }
 
 pub fn log_download_directory(configured_directory: Option<&str>) -> Result<std::path::PathBuf, String> {
@@ -539,7 +613,7 @@ pub fn download_log(file: &str, configured_directory: Option<&str>, expected_siz
         .map_err(|e| format!("cannot create download directory: {e}"))?;
     let valid_partial = || usable(&partial);
     let ftp_transfer = || -> Result<(), String> {
-        let url = format!("{}/LOG/{}", endpoint()?, file); let auth = credentials();
+        let url = network_log_url(file)?; let auth = credentials();
         match if for_viewing { check_remote_mcap_header(&url, &auth) } else { Ok(()) } {
             Err(error) => Err(error),
             Ok(()) => {
@@ -596,7 +670,8 @@ pub fn delete_log(file: &str) -> Result<(), String> {
      * LOG/, which NuttX reports as command-handler error -2 (ENOENT). */
     let url = format!("{}/", endpoint()?);
     let auth = credentials();
-    let command = format!("DELE /LOG/{file}");
+    let (root, _) = network_log_directory()?;
+    let command = format!("DELE /{root}/{file}");
     let output = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
                "--disable-epsv", "--connect-timeout", "3", "--max-time", "8",
@@ -928,7 +1003,14 @@ pub fn upload_model(model: &str, xml: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{complete_mcap_file, is_day_directory, log_info_command};
+    use super::{complete_mcap_file, is_day_directory, log_info_command, select_network_log_root};
+
+    #[test]
+    fn log_paths_follow_the_ftp_storage_layout() {
+        assert_eq!(select_network_log_root(&["jsbsim".into(), "LOG".into()]).unwrap(), "LOG");
+        assert_eq!(select_network_log_root(&["jsbsim".into()]).unwrap(), "jsbsim/LOG");
+        assert!(select_network_log_root(&[]).is_err());
+    }
 
     #[test]
     fn log_info_only_accepts_shell_safe_log_paths() {
@@ -963,4 +1045,74 @@ mod tests {
             std::fs::remove_file(&path).unwrap();
         }
     }
+}
+
+/// Firmware-only FTP account stages in RAM, independently of SIMDATA.
+/// Pin the host chosen before upload; do not rediscover or fall back mid-update.
+pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], mut progress: impl FnMut(u64)) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::net::{SocketAddr, TcpStream, Shutdown};
+    fn reply(control: &mut BufReader<TcpStream>) -> Result<(u16,String),String> {
+        let mut result=String::new();
+        let mut code=None;
+        for _ in 0..32 {
+            let mut line=String::new();
+            let n=control.read_line(&mut line).map_err(|e|e.to_string())?;
+            if n==0 || n>4096 {return Err("Invalid FTP reply".into());}
+            if line.len()>=4 && line.as_bytes()[..3].iter().all(u8::is_ascii_digit) {
+                let value=line[..3].parse::<u16>().map_err(|e|e.to_string())?;
+                if code.is_none() {code=Some(value);}
+                if code==Some(value) && line.as_bytes()[3]==b' ' {result.push_str(&line);return Ok((value,result));}
+            }
+            result.push_str(&line);
+        }
+        Err("FTP reply too long".into())
+    }
+    fn command(control:&mut BufReader<TcpStream>,command:&str,allowed:&[u16])->Result<String,String> {
+        control.get_mut().write_all(format!("{command}\r\n").as_bytes()).map_err(|e|e.to_string())?;
+        let (code,text)=reply(control)?;
+        if !allowed.contains(&code) {return Err(format!("FTP rejected command ({code})"));}
+        Ok(text)
+    }
+    let _guard=FTP_LOCK.lock().map_err(|e|e.to_string())?;
+    let socket=TcpStream::connect_timeout(&SocketAddr::from((host,21)),Duration::from_secs(3)).map_err(|e|e.to_string())?;
+    socket.set_read_timeout(Some(Duration::from_secs(30))).map_err(|e|e.to_string())?;
+    socket.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e|e.to_string())?;
+    let mut control=BufReader::new(socket);
+    if reply(&mut control)?.0!=220 {return Err("FTP not ready".into());}
+    let auth=format!("{}:{}",
+        std::env::var("NUTTX_FW_FTP_USER").unwrap_or_else(|_|"firmware".into()),
+        std::env::var("NUTTX_FW_FTP_PASSWORD").or_else(|_|std::env::var("NUTTX_FTP_PASSWORD")).unwrap_or_else(|_|"abc123".into()));
+    let (user,password)=auth.split_once(':').ok_or("Invalid FTP credentials")?;
+    if [user,password].iter().any(|s|s.contains(['\r','\n'])) {return Err("Invalid FTP credentials".into());}
+    let response=command(&mut control,&format!("USER {user}"),&[230,331])?;
+    if response.starts_with("331") {command(&mut control,&format!("PASS {password}"),&[230])?;}
+    command(&mut control,"TYPE I",&[200])?;
+    command(&mut control,"MKD fireware",&[257,250,550,521])?;
+    command(&mut control,"CWD fireware",&[250])?;
+    let pasv=command(&mut control,"PASV",&[227])?;
+    let tuple=pasv.split_once('(').and_then(|(_,r)|r.split_once(')')).map(|(v,_)|v).ok_or("Invalid FTP passive reply")?;
+    let values=tuple.split(',').map(|s|s.trim().parse::<u8>()).collect::<Result<Vec<_>,_>>().map_err(|_|"Invalid FTP passive port")?;
+    if values.len()!=6 {return Err("Invalid FTP passive reply".into());}
+    let port=u16::from(values[4])*256+u16::from(values[5]);
+    if port==0 {return Err("Invalid FTP passive port".into());}
+    // Pin data connection to the verified board instead of trusting PASV's IP.
+    let mut data=TcpStream::connect_timeout(&SocketAddr::from((host,port)),Duration::from_secs(3)).map_err(|e|e.to_string())?;
+    data.set_nodelay(true).map_err(|e|e.to_string())?;
+    data.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e|e.to_string())?;
+    command(&mut control,"STOR nuttx.bin",&[125,150])?;
+    let mut done=0u64;let mut notified=0u64;
+    for chunk in bytes.chunks(1024) {
+        data.write_all(chunk).map_err(|e|e.to_string())?;
+        done+=chunk.len() as u64;
+        if done-notified>=65536 || done==bytes.len() as u64 {progress(done);notified=done;}
+        // Avoid bursts overflowing the NuttX polling receive path.
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    data.shutdown(Shutdown::Write).map_err(|e|e.to_string())?;
+    drop(data);
+    let (code,_)=reply(&mut control)?;
+    if code!=226 && code!=250 {return Err(format!("FTP upload incomplete ({code})"));}
+    command(&mut control,"QUIT",&[221])?;
+    Ok(())
 }

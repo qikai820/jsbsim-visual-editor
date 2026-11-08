@@ -2471,6 +2471,9 @@ html, body, #root {
 .sim-performance-series.core-0 { --series-color:#0284c7; }.sim-performance-series.core-1 { --series-color:#7c3aed; }
 .sim-performance-series.fdm-mean { --series-color:#059669; }.sim-performance-series.fdm-peak { --series-color:#b45309; }
 .sim-performance-series.fdm-peak i { border-top-style:dashed; }
+.sim-performance-series.temperature-cpuC { --series-color:#e11d48; }
+.sim-performance-series.temperature-ssdC { --series-color:#7c3aed; }
+.sim-performance-series.temperature-ssdC i { border-top-style:dashed; }
 .sim-performance-network-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; margin:0 0 3px; font-size:10px; }
 .sim-performance-network { display:inline-flex; align-items:center; gap:4px; padding:3px 2px; color:var(--series-color); font:inherit; white-space:nowrap; }
 .sim-performance-network.network-eth0 { --series-color:#0284c7; }.sim-performance-network.network-eth1 { --series-color:#059669; }
@@ -2487,6 +2490,7 @@ html, body, #root {
 .sim-network-series.network-eth0-tx i,.sim-network-series.network-eth1-tx i { border-top-style:dashed; }
 .sim-performance-chart { display:block; width:100%; height:152px; overflow:visible; background:#f8fafc; border-radius:4px; }
 .sim-network-chart { height:128px; margin-top:6px; }
+.sim-temperature-chart { height:128px; }
 .sim-performance-chart text { fill:#64748b; font-size:9px; font-family:monospace; }
 .sim-performance-grid { stroke:#e2e8f0; stroke-width:1; stroke-dasharray:3 3; vector-effect:non-scaling-stroke; }
 .sim-performance-line { fill:none; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
@@ -2494,6 +2498,8 @@ html, body, #root {
 .sim-network-line.network-eth0-tx,.sim-network-line.network-eth1-tx { stroke-dasharray:4 3; }
 .sim-performance-line.core-0 { stroke:#0ea5e9; }.sim-performance-line.core-1 { stroke:#8b5cf6; }
 .sim-performance-line.fdm-mean { stroke:#10b981; }.sim-performance-line.fdm-peak { stroke:#f59e0b; stroke-dasharray:4 3; }
+.sim-performance-line.temperature-cpuC { stroke:#e11d48; }
+.sim-performance-line.temperature-ssdC { stroke:#7c3aed; stroke-dasharray:4 3; }
 .sim-performance-stats { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px; margin-top:7px; padding-top:7px; border-top:1px solid #e2e8f0; color:#64748b; font-size:10px; }
 .sim-performance-stats b { color:#334155; font-weight:500; font-variant-numeric:tabular-nums; }
 /* Simulation configuration */

@@ -356,6 +356,10 @@ export interface McapStatus {
   bufferFull: boolean;
   recordedBytes: number;
   writtenBytes: number;
+  bufferCapacityBytes?: number;
+  bufferUsedBytes?: number;
+  bufferPeakBytes?: number;
+  recycledBytes?: number;
 }
 
 export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; temperatures?: { cpuC: number | null; ssdC: number | null } | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null; mcap?: McapStatus | null }> {
@@ -764,6 +768,24 @@ export async function listenUsbFolderUploadProgress(callback: (progress: {
   if (!isTauri) return () => {};
   await ensureTauri();
   return tauriListen('usb-folder-upload-progress', (event: any) => callback(event.payload));
+}
+
+export interface FirmwareInfo {
+  target: string;
+  storage: string;
+  source: string;
+  path: string;
+  boot: string;
+  activeSlot?: string;
+  standbySlot?: string;
+}
+
+export async function firmwareRollback(): Promise<{rebootRequired: boolean}> {
+  return call('firmware_rollback', {});
+}
+
+export async function firmwareInfo(): Promise<FirmwareInfo> {
+  return call('firmware_info', {});
 }
 
 export interface FirmwareStageResult {
