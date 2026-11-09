@@ -32,6 +32,7 @@ mod romfs_network;
 mod sim_network;
 mod model_import;
 mod remote_model;
+mod model_launch;
 mod firmware_picker;
 mod firmware_update;
 mod usb_file_picker;
@@ -567,6 +568,7 @@ fn sim_start_blocking(
         // a model. Synchronize the board clock first so a stale boot clock
         // cannot create logs under an old date such as 2022-03-01.
         client.sync_clock_now().map_err(|e| e.to_string())?;
+        let script = model_launch::resolve(script.as_deref(), model.as_deref(), ftp_sync::download_path)?;
         let request_id = if let Some(script_name) = script.as_deref() {
             let model_name = model.as_deref()
                 .ok_or("The selected script has no associated aircraft model")?;
