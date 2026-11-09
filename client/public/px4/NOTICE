@@ -1,0 +1,12 @@
+PX4ParameterFactMetaData.json is a reference parameter catalog copied from
+QGroundControl src/FirmwarePlugin/PX4/PX4ParameterFactMetaData.json at local
+revision 24f7aae98 on 2026-11-09. It is used only as a fallback reference;
+it is never presented as a verified match for the connected firmware.
+Upstream: https://github.com/mavlink/qgroundcontrol
+PX4 metadata origin: https://github.com/PX4/PX4-Autopilot
+QGroundControl license: see QGC-LICENSE-GPL and QGC-LICENSE-APACHE, reproduced alongside this file
+PX4 license: https://github.com/PX4/PX4-Autopilot/blob/main/LICENSE
+
+dialect.ts is generated from the MAVLink common.xml, standard.xml and
+minimal.xml definitions vendored by local PX4. MAVLink message definitions
+are distributed under the MIT license; see MAVLink-LICENSE.txt.

@@ -1,0 +1,5 @@
+.nsh-terminal-wrapper{display:flex;flex-direction:column;flex:1;min-width:0;min-height:250px;background:#111827;color:#d1fae5}
+.nsh-terminal-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid #334155;color:#a7b5c8;font:11px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+.nsh-terminal-toolbar>div{display:flex;gap:6px}.nsh-terminal-toolbar button{font:inherit;border:1px solid #475569;border-radius:5px;padding:4px 9px;background:#334155;color:#f8fafc;cursor:pointer}.nsh-terminal-toolbar button:disabled{opacity:.45;cursor:default}
+.nsh-terminal-host{flex:1;min-height:200px;min-width:0;padding:10px;overflow:hidden}.nsh-terminal-host>.xterm{height:100%}.nsh-terminal-error{padding:6px 12px;color:#fecaca;background:#421f2d;font-size:12px;overflow-wrap:anywhere}
+.nsh-console .nsh-terminal-wrapper{min-height:0}

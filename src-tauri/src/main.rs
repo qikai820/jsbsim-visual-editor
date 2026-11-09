@@ -37,6 +37,8 @@ mod firmware_update;
 mod usb_file_picker;
 mod usb_file_editor;
 mod serial_assistant;
+mod tool_transport;
+mod px4_files;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -1737,6 +1739,21 @@ fn main() {
             simulator_transport_get,
             simulator_network_target_get,
             simulator_transport_set,
+            tool_transport::tool_transport_open,
+            tool_transport::tool_transport_write,
+            tool_transport::tool_transport_close,
+            tool_transport::tool_transport_pin_peer,
+            tool_transport::tool_simulator_nsh_target,
+            px4_files::px4_log_begin,
+            px4_files::px4_log_write,
+            px4_files::px4_log_finish,
+            px4_files::px4_log_cancel,
+            px4_files::px4_log_pick,
+            px4_files::px4_log_inspect,
+            px4_files::px4_parameters_save,
+            px4_files::px4_metadata_decode,
+            px4_files::px4_metadata_fetch,
+            px4_files::px4_metadata_pick,
             serial_assistant_list_ports,
             serial_assistant_open,
             serial_assistant_network_open,

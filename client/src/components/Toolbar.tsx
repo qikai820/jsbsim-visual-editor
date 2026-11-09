@@ -17,6 +17,7 @@ import { fleetSlotIds, type FleetInitialOverrides, type FleetNetworkOverrides, t
 import LocalSettingsDialog from './LocalSettingsDialog';
 import J23GuideDialog from './J23GuideDialog';
 import NshConsoleDialog from './NshConsoleDialog';
+import Px4Toolbox from './Px4Toolbox';
 import SerialAssistantDialog from './SerialAssistantDialog';
 import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
@@ -310,6 +311,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [showTelemetryRecorder, setShowTelemetryRecorder] = useState(false);
   const [telemetryRecording, setTelemetryRecording] = useState(false);
   const [showNshConsole, setShowNshConsole] = useState(false);
+  const [showPx4Toolbox, setShowPx4Toolbox] = useState(false);
   const [showSerialAssistant, setShowSerialAssistant] = useState(false);
   const [showUsbFiles, setShowUsbFiles] = useState(false);
   const [showModelPull, setShowModelPull] = useState(false);
@@ -1218,6 +1220,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
+              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / NSH' : 'PX4 Toolbox · Parameters / Logs / NSH'}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
               <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口与网口助手（本机）' : 'Serial & Network Assistant (Local)'}</button>
@@ -1249,6 +1252,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         </div>
       </div>
 
+      {showPx4Toolbox && <Px4Toolbox onClose={() => setShowPx4Toolbox(false)} />}
       {showSerialAssistant && <SerialAssistantDialog onClose={() => setShowSerialAssistant(false)} />}
       {showSimulationConfig && <SimulationConfigDialog key={`${activeInstance}:${instanceSlots[activeInstance]}`}
         instanceId={activeInstance} model={instanceSlots[activeInstance]} slots={instanceSlots}

@@ -166,6 +166,7 @@ impl DebugTransport {
 }
 
 enum WorkerCommand {
+    PinPeer(std::net::SocketAddr, mpsc::Sender<Result<(), String>>),
     Write(Vec<u8>, mpsc::Sender<Result<usize, String>>),
     StartRecord(String, mpsc::Sender<Result<(), String>>),
     StopRecord(mpsc::Sender<Result<(), String>>),
@@ -218,6 +219,10 @@ fn worker(
     while running {
         while let Ok(command) = receiver.try_recv() {
             match command {
+                WorkerCommand::PinPeer(address, reply) => { let _ = reply.send(match &mut port {
+                    DebugTransport::Network(network) => network.pin_peer(address),
+                    _ => Err("仅 UDP 通道支持固定回复目标".into()),
+                }); }
                 WorkerCommand::Write(bytes, reply) => {
                     let result = port.write(&bytes);
                     if let Ok(meta) = &result {
@@ -315,6 +320,10 @@ fn worker(
 }
 
 impl SerialManager {
+    pub fn new() -> Self {
+        Self { next_id: AtomicU64::new(1), session: Mutex::new(None) }
+    }
+
     pub fn open(&self, config: PortConfig, on_event: Channel<SerialEvent>) -> Result<SessionInfo, String> {
         let (data_bits, parity, stop_bits, flow_control) = config.validate()?;
         let path = config.path.clone();
@@ -367,6 +376,10 @@ impl SerialManager {
     pub fn write(&self, id: u64, bytes: Vec<u8>) -> Result<usize, String> {
         if bytes.is_empty() || bytes.len() > MAX_WRITE { return Err("单次发送须为 1～65536 字节".into()); }
         self.request(id, |reply| WorkerCommand::Write(bytes, reply))
+    }
+
+    pub fn pin_peer(&self, id: u64, address: std::net::SocketAddr) -> Result<(), String> {
+        self.request(id, |reply| WorkerCommand::PinPeer(address, reply))
     }
 
     pub fn start_record(&self, id: u64, path: String) -> Result<(), String> {
@@ -775,4 +788,21 @@ mod tests {
         assert_eq!(replay_receiver.recv_timeout(Duration::from_secs(1)).unwrap()["bytes"], serde_json::json!([0xaa, 0x42]));
         std::fs::remove_file(capture).unwrap();
     }
+    #[test]
+    fn persistent_terminal_stream_survives_idle_and_sends_control_keys() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();let mut config=network_config(NetworkMode::TcpClient);config.host="127.0.0.1".into();config.port=listener.local_addr().unwrap().port();
+        let manager=SerialManager::new();let (channel,events)=event_channel();let info=manager.open_network(config,channel).unwrap();let(mut peer,_)=listener.accept().unwrap();peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        next_event(&events,"endpoint");peer.write_all(b"nsh> ").unwrap();assert_eq!(next_event(&events,"data")["direction"],"rx");
+        manager.write(info.session_id,b"top\r".to_vec()).unwrap();let mut command=[0;4];peer.read_exact(&mut command).unwrap();assert_eq!(&command,b"top\r");
+        std::thread::sleep(Duration::from_millis(2100));peer.write_all(b"\x1b[HCPU 12%\r\n").unwrap();
+        let mut event=next_event(&events,"data");if event["direction"]=="tx"{event=next_event(&events,"data");}assert_eq!(event["bytes"],serde_json::json!(b"\x1b[HCPU 12%\r\n".to_vec()));
+        manager.write(info.session_id,vec![3]).unwrap();let mut control=[0];peer.read_exact(&mut control).unwrap();assert_eq!(control,[3]);manager.close(info.session_id).unwrap();
+    }
+    #[test]
+    fn pinned_udp_target_is_not_replaced_by_another_sender() {
+        let manager=SerialManager::new();let(channel,events)=event_channel();let info=manager.open_network(network_config(NetworkMode::Udp),channel).unwrap();let address=next_event(&events,"endpoint")["localAddr"].as_str().unwrap().to_string();
+        let chosen=UdpSocket::bind("127.0.0.1:0").unwrap();chosen.set_read_timeout(Some(Duration::from_secs(1))).unwrap();let other=UdpSocket::bind("127.0.0.1:0").unwrap();
+        manager.pin_peer(info.session_id,chosen.local_addr().unwrap()).unwrap();other.send_to(b"other",&address).unwrap();next_event(&events,"data");manager.write(info.session_id,b"chosen".to_vec()).unwrap();let mut buffer=[0;16];let(n,_)=chosen.recv_from(&mut buffer).unwrap();assert_eq!(&buffer[..n],b"chosen");manager.close(info.session_id).unwrap();
+    }
+
 }

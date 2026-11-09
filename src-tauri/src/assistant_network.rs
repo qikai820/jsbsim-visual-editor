@@ -61,6 +61,19 @@ fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
 }
 
 impl NetworkTransport {
+    pub fn pin_peer(&mut self, address: SocketAddr) -> Result<(), String> {
+        match self {
+            Self::Udp { socket, target, .. } => {
+                if socket.local_addr().map_err(|e| e.to_string())?.is_ipv4() != address.is_ipv4() {
+                    return Err("UDP 目标地址的 IP 版本不匹配".into());
+                }
+                *target = Some(address);
+                Ok(())
+            }
+            _ => Err("仅 UDP 通道支持固定回复目标".into()),
+        }
+    }
+
     pub fn open(config: &NetworkConfig) -> Result<Self, String> {
         if config.mode == NetworkMode::TcpClient {
             let addresses = resolve(&config.host, config.port)?;
