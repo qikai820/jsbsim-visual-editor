@@ -495,7 +495,7 @@ impl SimClient {
             .expect("invalid ctrl address");
 
         // Bind the receiving socket.  0.0.0.0 so the sim can push from any
-        // interface; OS picks an ephemeral send socket below.
+        // interface; control and discovery probes reuse this same endpoint.
         let recv_socket = UdpSocket::bind(format!("0.0.0.0:{}", listen_port))
             .unwrap_or_else(|e| panic!("SimClient: bind 0.0.0.0:{} failed: {}", listen_port, e));
         recv_socket
@@ -781,6 +781,7 @@ impl SimClient {
             let discovered_configured = Arc::clone(&configured_ctrl_addr);
             let discovery_inner = Arc::clone(&inner);
             let discover_send = discovery.try_clone().expect("clone discovery socket");
+            let heartbeat_probe_socket = Arc::clone(&send_socket);
             std::thread::Builder::new()
                 .name("sim-client-discovery".into())
                 .spawn(move || {
@@ -791,20 +792,23 @@ impl SimClient {
                             std::thread::sleep(Duration::from_secs(1));
                             continue;
                         }
-                        let _ = discover_send.send_to(b"JSBSIM-DISCOVER", format!("255.255.255.255:{}", DISCOVERY_PORT));
+                        for address in crate::network_discovery::broadcast_addresses() {
+                            let _ = discover_send.send_to(b"JSBSIM-DISCOVER",
+                                SocketAddr::new(address.into(), DISCOVERY_PORT));
+                        }
                         if std::env::var("SIM_UDP_HOST").is_err() &&
                             last_neighbor_probe.elapsed() >= Duration::from_secs(5) &&
                             discovery_inner.lock().is_ok_and(|state| !state.connected) {
                             last_neighbor_probe = Instant::now();
                             // Some board profiles provide JSBSim UDP without
                             // an FTP server or a discovery responder. Probe
-                            // only existing wired neighbors; the telemetry
-                            // receiver selects a host only after its reply.
-                            for host in crate::network_discovery::heartbeat_candidates(
-                                crate::transport::network_host_override()) {
-                                let _ = discover_send.send_to(b"VCMD\x07",
-                                    SocketAddr::new(host.into(), ctrl_port));
-                            }
+                            // Ethernet subnets even with an empty neighbor
+                            // table; the receiver selects a host after its reply.
+                            // Use the telemetry endpoint, not discovery port 5803.
+                            crate::network_discovery::send_heartbeat_probes(
+                                &heartbeat_probe_socket, ctrl_port,
+                                &crate::network_discovery::heartbeat_candidates(
+                                    crate::transport::network_host_override()));
                             if let Some(host) = crate::network_discovery::discover(
                                 crate::transport::network_host_override()) {
                                 if let Ok(mut addr) = discovered_ctrl.lock() {
