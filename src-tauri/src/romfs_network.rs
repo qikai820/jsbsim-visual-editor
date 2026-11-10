@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use crate::model_read::{ReadControl, CHANNEL_WAIT};
 
 const PROMPT: &[u8] = b"nsh> ";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
@@ -19,14 +20,11 @@ fn safe_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn read_until(stream: &mut TcpStream, marker: &[u8], deadline: Instant) -> Result<Vec<u8>, String> {
-    read_until_progress(stream, marker, deadline, |_| {})
-}
-
-fn read_until_progress(stream: &mut TcpStream, marker: &[u8], deadline: Instant, mut progress: impl FnMut(&[u8])) -> Result<Vec<u8>, String> {
+fn read_until_progress(stream: &mut TcpStream, marker: &[u8], deadline: Instant, control: &ReadControl, mut progress: impl FnMut(&[u8])) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
+        control.check()?;
         // readline can append a clear-to-end sequence to the prompt in the
         // same TCP packet. Waiting for an exact suffix then times out even
         // though the shell is already ready for the next command.
@@ -80,6 +78,7 @@ fn run(command: &str) -> Result<String, String> {
 
 pub(crate) struct NshSession<'a> {
     stream: &'a mut TcpStream,
+    control: &'a ReadControl,
 }
 
 impl NshSession<'_> {
@@ -91,9 +90,10 @@ impl NshSession<'_> {
         if command.contains(['\n', '\r', '\0']) || command.len() >= 2048 {
             return Err("invalid or oversized NSH command".into());
         }
+        self.control.check()?;
         self.stream.write_all(command.as_bytes()).and_then(|_| self.stream.write_all(b"\n"))
             .map_err(|error| format!("cannot send NSH command: {error}"))?;
-        let raw = read_until_progress(self.stream, PROMPT, Instant::now() + timeout, progress)
+        let raw = read_until_progress(self.stream, PROMPT, Instant::now() + timeout, self.control, progress)
             .map_err(|error| format!("NSH {}: {error}", command.split_whitespace().next().unwrap_or("command")))?;
         parse_response(&raw)
     }
@@ -110,7 +110,12 @@ fn run_on_host(host: Ipv4Addr, command: &str) -> Result<String, String> {
 }
 
 pub(crate) fn with_host_session<T>(host: Ipv4Addr, operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
-    let _guard = NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
+    with_host_session_control(host, &ReadControl::default(), operation)
+}
+
+fn with_host_session_control<T>(host: Ipv4Addr, control: &ReadControl, operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
+    let _guard = control.lock(&NSH_LOCK, CHANNEL_WAIT, "NSH")?;
+    control.check()?;
     let port = std::env::var("NSH_TELNET_PORT")
         .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
     let address = SocketAddr::from((host, port));
@@ -120,9 +125,9 @@ pub(crate) fn with_host_session<T>(host: Ipv4Addr, operation: impl FnOnce(&mut N
     stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|error| error.to_string())?;
     stream.set_nodelay(true).map_err(|error| error.to_string())?;
     let result = (|| {
-        read_until(&mut stream, PROMPT, Instant::now() + Duration::from_secs(3))
+        read_until_progress(&mut stream, PROMPT, Instant::now() + Duration::from_secs(3), control, |_| {})
             .map_err(|error| format!("NSH handshake: {error}"))?;
-        operation(&mut NshSession { stream: &mut stream })
+        operation(&mut NshSession { stream: &mut stream, control })
     })();
     // Abruptly closing a Telnet session can stop this board's telnetd task.
     // Always send exit and wait for EOF, even when the command has failed.
@@ -165,8 +170,15 @@ pub fn list(path: &str) -> Result<Vec<String>, String> {
 }
 
 pub fn read_text(path: &str) -> Result<String, String> {
+    read_text_with_control(path, &ReadControl::default())
+}
+
+pub fn read_text_with_control(path: &str, control: &ReadControl) -> Result<String, String> {
     safe_path(path)?;
-    let output = run(&format!("cat /romfs/jsbsim/{path}"))?;
+    control.check()?;
+    let host = crate::transport::network_host()
+        .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?;
+    let output = with_host_session_control(host, control, |session| session.command(&format!("cat /romfs/jsbsim/{path}")))?;
     if output.is_empty() || output.starts_with("cat: ") || output.starts_with("nsh: ") {
         return Err(format!("cannot read board ROMFS {path}: {}", output.trim()));
     }

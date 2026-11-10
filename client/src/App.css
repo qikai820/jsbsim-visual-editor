@@ -2684,6 +2684,10 @@ html, body, #root {
 .sim-config-network-actions button:disabled, .sim-config-network-head button:disabled { opacity: .5; cursor: not-allowed; }
 .sim-config-network-actions span { color: #475569; font-size: 11px; }
 .sim-config-network > p:last-child { line-height: 1.6; color: #64748b; }
+.sim-config-dialog > footer { flex-shrink: 0; gap: 12px; }
+.sim-config-dialog > footer > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sim-config-dialog > footer > div { flex-shrink: 0; }
+.sim-config-dialog > footer button { white-space: nowrap; }
 
 /* XML source review: one shared vertical scroll keeps both Git-style panes aligned. */
 .xml-git-view-switch{display:flex;flex:none;overflow:hidden;border:1px solid #cbd8e4;border-radius:6px}

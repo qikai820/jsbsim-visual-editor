@@ -69,7 +69,7 @@ try {
   await send('Page.addScriptToEvaluateOnNewDocument', {source: `
     localStorage.clear();
     localStorage.setItem('jsbsim-simulator-transport','network');
-    window.__calls=[]; window.__alerts=[]; window.__failure=true;
+    window.__calls=[]; window.__alerts=[]; window.__failure=true; window.__releases={};
     window.alert=message=>window.__alerts.push(message);
     const setTimeoutOriginal=window.setTimeout.bind(window);
     window.setTimeout=(callback,delay,...args)=>setTimeoutOriginal(callback,
@@ -84,8 +84,14 @@ try {
         if(command==='sim_list_instances')return {instances:[]};
         if(command==='get_aircraft_library')return {library:[{id:'voliro_t',name:'voliro_t',type:'fixed_wing',size:0,subFiles:[]}]};
         if(command==='load_aircraft'){
-          if(window.__holdModel)await new Promise(resolve=>window.__release=resolve);
+          if(window.__holdModel)await new Promise(resolve=>{
+            window.__release=resolve; window.__releases[args.requestId]=resolve;
+          });
           return {model:'voliro_t',aircraft:{name:'voliro_t'},nodes:[],edges:[],subFiles:[],xmlFiles:[],sourceXml:'<fdm_config name="voliro_t"/>',referenceFiles:[]};
+        }
+        if(command==='cancel_aircraft_load'){
+          window.__releases[args.requestId]?.(); delete window.__releases[args.requestId];
+          return;
         }
         if(command==='ftp_download_xml')return {content:args.path.endsWith('.pwm.xml')?'<pwm_inputs/>':'<serial_outputs/>'};
         if(command==='ftp_list_xml_parent')return {exists:true,files:['voliro_t.json']};
@@ -139,6 +145,24 @@ try {
   assert.equal(await evaluate('window.__calls.filter(c=>c.command==="ftp_download_sim_config").length'),configReads);
 
   await openLibrary();
+  await evaluate('window.__holdModel=true;window.__release=null');
+  await start();
+  await until('typeof window.__release === "function"');
+  const cancelledRequest = await evaluate('window.__calls.filter(c=>c.command==="load_aircraft").at(-1).args.requestId');
+  await evaluate('Array.from(document.querySelectorAll(".library-select-sim-btn")).find(b=>b.textContent==="取消加载").click()');
+  await until(`window.__calls.some(c=>c.command==="cancel_aircraft_load" && c.args.requestId===${JSON.stringify(cancelledRequest)})`);
+  await until('!document.querySelector(".library-load-btn").disabled');
+  assert.equal(await target(),initialTarget,'cancelled backend read must preserve the previous model');
+
+  // Retry while the previous request settles; each attempt must use its own ID.
+  await evaluate('window.__fastTimeout=true;window.__release=null');
+  await start();
+  await until('document.querySelector(".library-load-error")?.textContent.includes("90 秒")');
+  const timedOutRequest = await evaluate('window.__calls.filter(c=>c.command==="load_aircraft").at(-1).args.requestId');
+  assert.notEqual(timedOutRequest,cancelledRequest);
+  await until(`window.__calls.some(c=>c.command==="cancel_aircraft_load" && c.args.requestId===${JSON.stringify(timedOutRequest)})`);
+  await evaluate('window.__holdModel=false;window.__fastTimeout=false');
+
   await evaluate('window.__holdConfig=true;window.__fastTimeout=true;window.__release=null');
   await start();
   await until('document.querySelector(".library-load-error")?.textContent.includes("90 秒")');
@@ -151,7 +175,7 @@ try {
   await until('!document.querySelector(".library-modal")');
   assert.equal(await target(),'voliro_t');
   assert.deepEqual(await evaluate('window.__alerts'),[]);
-  console.log('PASS: configuration failure stays inline; retry succeeds; cancel, close, and timeout ignore late results. Desktop IPC mocked.');
+  console.log('PASS: failure stays inline; cancel, close and timeout ignore late results; model reads send request-specific backend cancellation; retry succeeds. Desktop IPC mocked.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));

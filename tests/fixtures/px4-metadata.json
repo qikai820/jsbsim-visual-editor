@@ -1,0 +1,15 @@
+{
+  "description": "PX4 metadata conventions: MAVLink CRC32 (init=0, xorout=0); general CRC covers JSON before XZ compression, parameter CRC covers XZ bytes. Generated independently with Python lzma/zlib.",
+  "general": {
+    "uri": "https://metadata.test/component_general.json.xz",
+    "text": "{\"version\":1,\"metadataTypes\":[{\"type\":1,\"uri\":\"https://metadata.test/parameters.json.xz\",\"fileCrc\":3898970588}]}",
+    "crc": 1684484209,
+    "compressedBase64": "/Td6WFoAAATm1rRGAgAhARYAAAB0L+Wj4ABvAGRdAD2IisaUU5CGpmN9JTsoyCQQ7h7MterMf5pTasGkIRlLs3dhDHFb1Br4dtN+Zq0oAAPxQ7GhRnqBNOYzidS/JYSc+Aiffuc3KwwlaTGK+bPZkGjTt1Bjmx8nROCsEVtRwsOaGYUA1I3xZ6uv03sAAYABcAAAAClJuouxxGf7AgAAAAAEWVo="
+  },
+  "parameters": {
+    "uri": "https://metadata.test/parameters.json.xz",
+    "text": "{\"version\":1,\"parameters\":[{\"name\":\"TEST_CUSTOM\",\"group\":\"Custom Firmware\",\"type\":\"Int32\",\"shortDesc\":\"Firmware custom setting\",\"default\":7}]}",
+    "crc": 3898970588,
+    "compressedBase64": "/Td6WFoAAATm1rRGAgAhARYAAAB0L+Wj4ACNAHldAD2IisaUU5CGpmN9JTsoyCRdJEyjsoV38fKly50qcEybtLU/XqGoPGSDWPa8pACt6G/TRRPbmoU7PY6OLqclbs4Svio0brxCANW6fa7YwNkuyPtLB2ooe04hXJYvHViyAlIE9Yye42b8TG8qILtWTC8bljH1Jr28Dm8AAAAAx0x2X+DoPrgAAZUBjgEAAKLR2r+xxGf7AgAAAAAEWVo="
+  }
+}

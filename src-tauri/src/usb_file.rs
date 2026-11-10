@@ -5,6 +5,7 @@
 //! managers cannot browse the board.
 
 use rusb::{Context, DeviceHandle, UsbContext};
+use crate::model_read::{ReadControl, CHANNEL_WAIT};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
@@ -333,7 +334,7 @@ fn transaction_locked(
 }
 
 fn with_device<T>(operation: impl FnOnce(&DeviceHandle<Context>) -> Result<T, String>) -> Result<T, String> {
-    let _file_guard = FILE_ACCESS.lock().map_err(|_| "USB file request lock poisoned")?;
+    let _file_guard = ReadControl::default().lock(&FILE_ACCESS, CHANNEL_WAIT, "USB file")?;
     let _guard = USB_ACCESS.acquire(TIMEOUT)?;
     let handle = open()?;
     operation(&handle)
@@ -376,7 +377,7 @@ pub fn nsh_execute(command: &str) -> Result<String, String> {
     if command.is_empty() || command.len() > 512 || command.contains(['\r', '\n']) {
         return Err("NSH command must be one non-empty line of at most 512 bytes".into());
     }
-    let _file_guard = FILE_ACCESS.lock().map_err(|_| "USB file request lock poisoned")?;
+    let _file_guard = ReadControl::default().lock(&FILE_ACCESS, CHANNEL_WAIT, "USB file")?;
     let request_id = next_request_id();
     {
         let _guard = USB_ACCESS.acquire(TIMEOUT)?;
@@ -567,7 +568,30 @@ pub fn read_limited(path: &str, limit: usize) -> Result<Vec<u8>, String> {
 }
 
 pub fn read_text(path: &str) -> Result<String, String> {
-    String::from_utf8(read_all(path)?).map_err(|error| format!("remote file is not UTF-8: {error}"))
+    read_text_with_control(path, &ReadControl::default())
+}
+
+pub fn read_text_with_control(path: &str, control: &ReadControl) -> Result<String, String> {
+    let _file_guard = control.lock(&FILE_ACCESS, CHANNEL_WAIT, "USB file")?;
+    let _guard = USB_ACCESS.acquire(TIMEOUT)?;
+    control.check()?;
+    let handle = open()?;
+    let mut result = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        control.check()?;
+        let response = transaction_locked(&handle, READ, MAX_PAYLOAD as i32, offset, path.as_bytes())?;
+        control.check()?;
+        let count = response.payload.len();
+        if response.offset != offset + count as u64 {
+            return Err(format!("board returned wrong read offset at byte {offset}"));
+        }
+        if result.len() + count > 2 * 1024 * 1024 { return Err("模型文本文件超过 2 MiB".into()); }
+        result.extend_from_slice(&response.payload);
+        offset = response.offset;
+        if count < MAX_PAYLOAD { break; }
+    }
+    String::from_utf8(result).map_err(|error| format!("remote file is not UTF-8: {error}"))
 }
 
 pub fn download_to(path: &str, target: &Path) -> Result<u64, String> {

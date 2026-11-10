@@ -91,7 +91,12 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   const [networkInterfaces, setNetworkInterfaces] = useState<SimulatorNetworkInterface[]>([]);
   const [networkInput, setNetworkInput] = useState<SimulatorNetworkInterface>({ name: 'eth0', address: '', netmask: '', gateway: '' });
   const [networkBusy, setNetworkBusy] = useState(false);
+  const [networkSaving, setNetworkSaving] = useState(false);
   const [networkStatus, setNetworkStatus] = useState('');
+  const networkBaseline = networkInterfaces.find(item => item.name === networkInput.name);
+  const networkCanSave = !networkBusy && !!networkBaseline &&
+    !!networkInput.address.trim() && !!networkInput.netmask.trim() && !!networkInput.gateway.trim() &&
+    (['address', 'netmask', 'gateway'] as const).some(key => networkInput[key] !== networkBaseline[key]);
   const [config, setConfig] = useState<any>(defaults);
   const [baseline, setBaseline] = useState('');
   const [status, setStatus] = useState(tr('正在读取仿真机配置…', 'Reading simulator configuration…'));
@@ -348,20 +353,22 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   useEffect(() => { void refreshNetwork(); }, []);
 
   const applyNetwork = async () => {
-    if (networkBusy || !window.confirm(tr(
-      `将 ${networkInput.name} 改为 ${networkInput.address}，当前网络连接可能立即中断。请保持 USB 连接以完成回读。继续吗？`,
-      `Change ${networkInput.name} to ${networkInput.address}? The network connection may drop immediately. Keep USB connected for readback.`
+    if (!networkCanSave || !window.confirm(tr(
+      `将 ${networkInput.name} 改为 ${networkInput.address}？修改 IP 后将重新连接并回读核对。`,
+      `Change ${networkInput.name} to ${networkInput.address}? The editor will reconnect and verify the configuration.`
     ))) return;
     setNetworkBusy(true);
-    setNetworkStatus(tr('正在通过 USB 写入并回读…', 'Writing and reading back over USB…'));
+    setNetworkSaving(true);
+    setNetworkStatus(tr('正在选择可用连接、保存并回读…', 'Selecting an available connection, saving and verifying…'));
     try {
       const actual = await setSimulatorNetwork(networkInput);
       setNetworkInterfaces(current => [...current.filter(item => item.name !== actual.name), actual].sort((a, b) => a.name.localeCompare(b.name)));
       setNetworkInput(actual);
-      setNetworkStatus(tr('写入成功，IP、掩码和网关均已从仿真机核对', 'Applied; IP, mask and gateway verified from simulator'));
+      const via = actual.transport === 'usb' ? 'USB' : tr('网口', 'Ethernet');
+      setNetworkStatus(tr(`已通过 ${via} 保存并核对 IP、掩码和网关（当前运行有效）`, `Saved over ${via}; IP, mask and gateway verified for this runtime`));
     } catch (error: any) {
-      setNetworkStatus(`${tr('写入或回读失败', 'Apply or readback failed')}: ${error?.message || error}`);
-    } finally { setNetworkBusy(false); }
+      setNetworkStatus(`${tr('保存失败，修改已保留', 'Save failed; edits retained')}: ${error?.message || error}`);
+    } finally { setNetworkBusy(false); setNetworkSaving(false); }
   };
 
   const save = async () => {
@@ -432,8 +439,8 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
               <label className="sim-config-field"><span>{tr('网口', 'Interface')}</span><select value={networkInput.name} onChange={event => { const selected = networkInterfaces.find(item => item.name === event.target.value); if (selected) setNetworkInput(selected); }} disabled={networkBusy}>{networkInterfaces.length ? networkInterfaces.map(item => <option key={item.name} value={item.name}>{item.name}</option>) : <option value="eth0">eth0</option>}</select></label>
               {([['address', tr('IP 地址', 'IP address')], ['netmask', tr('子网掩码', 'Subnet mask')], ['gateway', tr('网关', 'Gateway')]] as const).map(([key, label]) => <label className="sim-config-field" key={key}><span>{label}</span><input type="text" inputMode="decimal" value={networkInput[key]} onChange={event => setNetworkInput(current => ({ ...current, [key]: event.target.value }))} disabled={networkBusy} placeholder="192.168.101.81" /></label>)}
             </div>
-            <div className="sim-config-network-actions"><button type="button" disabled={networkBusy || networkInterfaces.length === 0 || !networkInput.address || !networkInput.netmask || !networkInput.gateway} onClick={() => void applyNetwork()}>{tr('通过 USB 应用并回读', 'Apply over USB and read back')}</button><span role="status">{networkStatus}</span></div>
-            <p>{tr('修改仅对当前运行生效；重启后恢复固件默认网络配置。修改 IP 时请保持 USB 连接。', 'Changes apply to this runtime only; reboot restores firmware defaults. Keep USB connected when changing the IP.')}</p>
+            <div className="sim-config-network-actions"><span role="status">{networkStatus}</span></div>
+            <p>{tr('修改后点击底部“保存并应用”。自动模式优先使用可用的 USB，未连接 USB 时使用网口；通过网口修改 IP 时，电脑需要能够访问新地址。修改仅对当前运行生效，重启后恢复固件默认配置。', 'After editing, click Save & Apply below. Auto mode uses USB when available, otherwise Ethernet. When changing the IP over Ethernet, the new address must be reachable from this computer. Changes apply to this runtime; reboot restores firmware defaults.')}</p>
           </section>}
           {tab === '运行与时间' && <section><h3>{tr('运行与时间','Runtime & Time')}</h3><div className="sim-config-grid">
             <NumberField label={tr('仿真步长','Time step')} value={config.runtime.dt} step={0.0001} min={0.00001} unit="s" onChange={(v:any)=>set('runtime','dt',v)} />
@@ -543,7 +550,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           </section>}
         </main>
       </div>
-      <footer><span role="status">{tab === '固件升级' ? firmwareStatus : tab === '系统设置' ? networkStatus : status}</span>{tab !== '固件升级' && tab !== '系统设置' && <div><button disabled={saving} onClick={()=>setConfig(defaults)}>{tr('恢复默认值','Restore Defaults')}</button><button className="primary" disabled={saving || serialized === baseline} onClick={()=>void save()}>{saving?tr('保存中…','Saving…'):tr('保存到仿真机','Save to Simulator')}</button></div>}</footer>
+      <footer><span role="status">{tab === '固件升级' ? firmwareStatus : tab === '系统设置' ? networkStatus : status}</span>{tab === '系统设置' ? <div><button type="button" className="primary" disabled={!networkCanSave} onClick={() => void applyNetwork()}>{networkSaving ? tr('保存中…', 'Saving…') : tr('保存并应用', 'Save & Apply')}</button></div> : tab !== '固件升级' && <div><button disabled={saving} onClick={()=>setConfig(defaults)}>{tr('恢复默认值','Restore Defaults')}</button><button className="primary" disabled={saving || serialized === baseline} onClick={()=>void save()}>{saving?tr('保存中…','Saving…'):tr('保存到仿真机','Save to Simulator')}</button></div>}</footer>
       {showVersionManager && <div className="sim-config-version-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !firmwareUpdating) setShowVersionManager(false); }}>
         <section className="sim-config-version-manager">
           <header><b>{tr('仿真机版本管理', 'Simulator Version Manager')}</b><button type="button" disabled={firmwareUpdating} onClick={() => setShowVersionManager(false)}>×</button></header>

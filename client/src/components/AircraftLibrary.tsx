@@ -283,7 +283,7 @@ export default function AircraftLibrary({ onClose, onLoad, onSelectForSimulation
     setLoadingAircraft(true);
     setLoadStage('读取模型文件');
     try {
-      const data = await waitForModelLoad(loadAircraft(aircraft.sourceId || aircraft.id), '读取模型文件', controller.signal);
+      const data = await waitForModelLoad(loadAircraft(aircraft.sourceId || aircraft.id, controller.signal), '读取模型文件', controller.signal);
       if (controller.signal.aborted) return;
       setLoadStage('读取附加配置并导入画布');
       await waitForModelLoad(Promise.resolve().then(() => {

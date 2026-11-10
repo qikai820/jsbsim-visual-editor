@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Px4Connection } from '../px4/connection';
 import { metadataLabel, parseMetadata, type MetadataCatalog } from '../px4/metadata';
-import { downloadLog, loadVehicleMetadata, readLogs, readParameters, type LogEntry, type Parameter, type UlogSummary } from '../px4/services';
+import { downloadLog, loadVehicleMetadata, readLogs, readParameters, writeParameter, type LogEntry, type Parameter, type UlogSummary } from '../px4/services';
 import { Px4Shell, type TerminalChannel } from '../px4/shell';
 import { selectSimulatorPx4Source, simulatorPx4AttachError, simulatorPx4Sources } from '../px4/simulatorSource';
 import { useFlowStore } from '../store/flowStore';
 import { useSignalMonitorStore } from '../store/signalMonitorStore';
 import NshTerminal from './NshTerminal';
+import Px4RouterSettings from './Px4RouterSettings';
+import Px4ParameterEditor from './Px4ParameterEditor';
+import { usePx4Router } from '../px4/router';
 import './Px4Toolbox.css';
 
 type LibraryItem = { path: string; name: string; size: number; source: 'downloaded' | 'local'; stamp?: string };
@@ -21,12 +24,15 @@ const typeText: Record<number,string> = { 1:'UINT8',2:'INT8',3:'UINT16',4:'INT16
 
 export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
   const nodes = useFlowStore(s => s.nodes), instance = useSignalMonitorStore(s => s.instance);
-  const sources = useMemo(() => simulatorPx4Sources(nodes), [nodes]);
+  const router = usePx4Router();
+  const routeConfig = router.snapshot?.state==='running' ? router.snapshot.active_config : router.snapshot?.config;
+  const sources = useMemo(() => simulatorPx4Sources(nodes, routeConfig, router.snapshot?.state !== 'stopped'), [nodes,JSON.stringify(routeConfig),router.snapshot?.state]);
   const [sourceKey, setSourceKey] = useState('');
   const source = selectSimulatorPx4Source(sources, sourceKey);
-  const sourceIdentity = JSON.stringify([instance,source]);
+  const routerReady=!!router.snapshot||!!router.error;
+  const sourceIdentity = JSON.stringify([routerReady,router.snapshot?.simulator,source.service ? 'service' : instance,source]);
   const [sourceState, setSourceState] = useState('等待仿真机数据');
-  const [tab, setTab] = useState<'parameters'|'logs'|'nsh'>('parameters');
+  const [tab, setTab] = useState<'parameters'|'logs'|'nsh'|'forwarding'>('parameters');
   const [error, setError] = useState(''), [message, setMessage] = useState('');
   const [, refresh] = useState(0);
   const mounted = useRef(true), linkRef = useRef<Px4Connection | null>(null), shellRef = useRef<Px4Shell | null>(null);
@@ -69,10 +75,10 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
     let disposed = false, opening = false, owned: Px4Connection | null = null;
     operation.current?.abort(); metadataAbort.current?.abort(); setParameters([]); setExpected(null); setParameterComplete(false); setLogs([]); setLogExpected(null); setSelectedLog(''); setSummary(undefined); setCatalog(bundled.current);
     const attach = async () => {
-      if (disposed || opening) return;
+      if (disposed || opening || !routerReady) return;
       if (owned?.connected && (!owned.lastHeartbeat || Date.now()-owned.lastHeartbeat<5000)) return;
       if (!source.enabled) { setSourceState('仿真机 MAVLink 转发已关闭'); return; }
-      if (!Number.isInteger(source.port) || source.port<1 || source.port>65535) { setSourceState('模型中的 MAVLink 转发端口无效'); return; }
+      if (!Number.isInteger(source.port) || source.port<1 || source.port>65535) { setSourceState('MAVLink 转发端口无效'); return; }
       opening = true;
       try {
         await owned?.close();
@@ -137,6 +143,16 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
     return filter === 'changed' ? p.changed : filter === 'favorite' ? favorites.includes(p.name) : true;
   }), [rows, search, group, mode, favorites, custom, filter]);
   const selected = rows.find(p => p.name === selectedParam) || filtered[0];
+  const writeSelectedParameter = (value: number) => {
+    const current = linkRef.current, parameter = selected;
+    if (!current?.alive || !source.bidirectional || !parameter || (catalog?.source.matched && parameter.meta?.readOnly)) return;
+    void run('parameter-write', async signal => {
+      const actual = await writeParameter(current, parameter, value, signal, confirmed => {
+        if (mounted.current && linkRef.current === current && !signal.aborted) setParameters(values => values.map(p => p.name === confirmed.name ? confirmed : p));
+      });
+      if (mounted.current && linkRef.current === current && !signal.aborted) setMessage(`${actual.name} 已写入并回读确认：${valueText(actual)}${parameter.meta?.rebootRequired ? '；需重启飞控后生效' : ''}`);
+    });
+  };
   const groupTitle = search.trim() ? '全局搜索结果' : group==='all'?'全部参数':group==='favorites'?'收藏参数':groups.find(g => g.key===group)?.name||'参数分组';
   const exportParameters = async () => {
     if (!filtered.length) return;
@@ -146,7 +162,7 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
   };
   const addGroup = () => { const name = newGroup.trim(); if (!name || name === '__proto__') return; if (Object.prototype.hasOwnProperty.call(custom,name)) { setError('分组名称已存在'); return; }
     setCustom(c => ({ ...c,[name]:[] })); setMode('custom'); setGroup(name); setAssignGroup(name); setAddingGroup(false); setNewGroup(''); };
-  const deviceKey = link?.uid && link.uid !== '0' ? link.uid : `${instance}:${source.id}:${source.port}:${link?.target.system??0}:${link?.target.component??0}`;
+  const deviceKey = link?.uid && link.uid !== '0' ? link.uid : `${source.service?'service':instance}:${source.id}:${source.port}:${link?.target.system??0}:${link?.target.component??0}`;
   const stamp = (log: LogEntry) => [deviceKey,log.id,log.time,log.size].join(':');
   const localFor = (log:LogEntry) => library.find(l => l.stamp===stamp(log));
   const addLibrary = (s:UlogSummary, source:'downloaded'|'local', log?:LogEntry) => {
@@ -172,10 +188,10 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
   const selectedRemote = selectedLog.startsWith('remote:') ? logs.find(l => l.id===Number(selectedLog.slice(7))) : undefined;
   return <div className="px4-toolbox-overlay" role="dialog" aria-modal="true" aria-label="PX4 工具箱">
     <section className="px4-toolbox">
-      <header className="px4-toolbox-head"><div><h2>PX4 工具箱</h2><small>参数 · 日志 · NSH 控制台</small></div><button type="button" aria-label="关闭 PX4 工具箱" onClick={onClose}>×</button></header>
-      <div className="px4-connectbar"><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">实例 {instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
+      <header className="px4-toolbox-head"><div><h2>PX4 工具箱</h2><small>参数 · 日志 · NSH 控制台 · 转发设置</small></div><button type="button" aria-label="关闭 PX4 工具箱" onClick={onClose}>×</button></header>
+      <div className="px4-connectbar"><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
       {!source.bidirectional&&<div className="px4-notice">当前仿真机转发为单向，无法请求参数、日志或发送 NSH 输入。</div>}
-      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','nsh'] as const).map(t=><button key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>setTab(t)}>{({parameters:'参数',logs:'日志',nsh:'NSH 控制台'})[t]}</button>)}</nav>
+      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','nsh','forwarding'] as const).map(t=><button key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>setTab(t)}>{({parameters:'参数',logs:'日志',nsh:'NSH 控制台',forwarding:'转发设置'})[t]}</button>)}</nav>
       {error && <div className="px4-notice error" role="alert">{error}<button aria-label="关闭错误提示" onClick={()=>setError('')}>×</button></div>}
       {message && <div className="px4-notice" role="status">{message}<button aria-label="关闭状态提示" onClick={()=>setMessage('')}>×</button></div>}
       <section role="tabpanel" id="px4-panel-parameters" aria-labelledby="px4-tab-parameters" hidden={tab!=='parameters'} className="px4-panel">
@@ -191,7 +207,8 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
               {!filtered.length&&<div className="px4-empty">{parameters.length?'没有匹配的参数':'仿真机数据就绪后，点击“读取全部”获取 PX4 参数'}</div>}
             </div><div className="px4-list-footer"><span>{parameters.length}/{expected??'?'} 项 · {busy==='parameters'?'读取中':parameterComplete?'读取完成':parameters.length?'部分数据':'尚未读取'}</span><div><button disabled={page===0} onClick={()=>setPage(p=>p-1)}>上一页</button><span>{Math.min(page+1,Math.max(1,Math.ceil(filtered.length/60)))} / {Math.max(1,Math.ceil(filtered.length/60))}</span><button disabled={(page+1)*60>=filtered.length} onClick={()=>setPage(p=>p+1)}>下一页</button></div></div>
           </div>
-          <aside className="px4-details"><div className="px4-detail-heading"><h3>参数详情</h3><span>只读</span></div>{selected?<><code className="px4-detail-name">{selected.name}</code><p>{selected.meta?.shortDesc||'暂无元数据说明'}</p><div className="px4-current-value"><div><small>当前读取值</small><strong>{valueText(selected)}</strong></div><span>{typeText[selected.type]||selected.type}</span></div>
+          <aside className="px4-details"><div className="px4-detail-heading"><h3>参数详情</h3><span>{selected?.meta?.readOnly&&catalog?.source.matched?'只读':'可修改'}</span></div>{selected?<><code className="px4-detail-name">{selected.name}</code><p>{selected.meta?.shortDesc||'暂无元数据说明'}</p><div className="px4-current-value"><div><small>当前读取值</small><strong>{valueText(selected)}</strong></div><span>{typeText[selected.type]||selected.type}</span></div>
+            <Px4ParameterEditor key={deviceKey+':'+selected.name} parameter={selected} meta={selected.meta} matched={!!catalog?.source.matched} connected={alive} bidirectional={source.bidirectional} busy={!!busy} bytewise={link?.bytewise??true} onWrite={writeSelectedParameter}/>
             {selected.meta?.longDesc&&<details><summary>详细说明 · 原文</summary><p>{selected.meta.longDesc}</p></details>}
             <dl><dt>参考默认</dt><dd>{selected.meta?.default??'—'}</dd><dt>单位</dt><dd>{selected.meta?.units||'—'}</dd><dt>范围</dt><dd>{selected.meta?.min??'未指定'} ～ {selected.meta?.max??'未指定'}</dd><dt>类别</dt><dd>{selected.meta?.category||'未匹配'}</dd><dt>分组</dt><dd>{selected.meta?.group||selected.name.split('_')[0]}</dd>{selected.meta?.rebootRequired&&<><dt>生效要求</dt><dd>需重启</dd></>}</dl>
             {!!selected.meta?.values.length&&<details><summary>枚举含义</summary>{selected.meta.values.map(v=><div className="px4-value-label" key={v.value}><code>{v.value}</code><span>{v.description}</span></div>)}</details>}
@@ -221,7 +238,8 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
         </div>
       </section>
       <section role="tabpanel" id="px4-panel-nsh" aria-labelledby="px4-tab-nsh" hidden={tab!=='nsh'} className="px4-panel px4-nsh-panel"><div className="px4-nsh-heading"><div><b>NuttX NSH 控制台</b><small>仿真机转发 · PX4 {link?.target.system?'SYS '+link.target.system+' / COMP '+link.target.component:'等待识别'} · MAVLink Shell</small></div><small>{shell?.active&&alive?'交互会话已就绪':'等待仿真机终端数据'}</small></div><NshTerminal channel={shell||EMPTY_CHANNEL} connected={!!shell?.active&&alive} historyKey={`px4-nsh-history-${link?.target.system??0}-${link?.target.component??0}`}/></section>
-      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
+      <section role="tabpanel" id="px4-panel-forwarding" aria-labelledby="px4-tab-forwarding" hidden={tab!=='forwarding'} className="px4-panel"><Px4RouterSettings router={router}/></section>
+      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
     </section>
   </div>;
 }

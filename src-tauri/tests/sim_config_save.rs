@@ -1,8 +1,11 @@
 #![allow(dead_code)]
 
+#[allow(dead_code)] #[path = "../src/model_read.rs"] mod model_read;
 #[path = "../src/usb_file.rs"] mod usb_file;
 #[path = "../src/transport.rs"] mod transport;
 #[path = "../src/ftp_sync.rs"] mod ftp_sync;
+#[path = "../src/romfs_network.rs"] mod romfs_network;
+#[path = "../src/network_discovery.rs"] mod network_discovery;
 
 #[test]
 #[ignore = "requires the real board; creates and removes a unique temporary config"]

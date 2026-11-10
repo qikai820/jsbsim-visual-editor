@@ -5,6 +5,7 @@ import { xmlContentEqual } from './xmlContentEqual';
 import { serializeSerialSensors } from './serialSensorXml';
 import { serializePwmCaptures } from './pwmCaptureXml';
 import { expandDisabledComments } from './disabledXml';
+import { removeLegacyForwarderXml } from './legacyForwarder';
 
 export interface PreparedXml { path: string; content: string; category?: string; dirty: boolean }
 export interface XmlGenerators {
@@ -125,10 +126,13 @@ export async function prepareModelXml(current: ModelProject, baseline: ModelProj
   }
   for (const file of current.xmlFiles || []) {
     const old = baseline.xmlFiles?.find(item => item.path === file.path);
-    if (file.currentXml && file.currentXml !== (old?.currentXml || old?.originalXml || file.originalXml)) {
+    if (file.currentXml && removeLegacyForwarderXml(file.currentXml) !== removeLegacyForwarderXml(old?.currentXml || old?.originalXml || file.originalXml || '')) {
       if (documents.get(file.path)?.dirty) throw new Error(`${file.path} 同时有源码与图形修改，请先完成一种编辑后再保存`);
       put(file.path, file.currentXml, file.category);
     }
+  }
+  for (const document of documents.values()) {
+    if(document.path===main)put(document.path,removeLegacyForwarderXml(document.content),document.category);
   }
   for (const document of documents.values()) expandDisabledComments(parseXmlDocument(document.content));
   return [...documents.values()];

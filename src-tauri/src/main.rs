@@ -30,8 +30,11 @@ mod transport;
 mod network_discovery;
 mod romfs_network;
 mod sim_network;
+mod nsh_tcp;
+mod px4_router;
 mod model_import;
 mod remote_model;
+mod model_read;
 mod model_launch;
 mod firmware_picker;
 mod firmware_update;
@@ -40,12 +43,11 @@ mod usb_file_editor;
 mod serial_assistant;
 mod tool_transport;
 mod px4_files;
+mod px4_metadata;
 
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 #[tauri::command]
@@ -378,17 +380,22 @@ async fn get_aircraft_library() -> Result<serde_json::Value, String> {
 async fn load_aircraft(
     app: tauri::AppHandle,
     aircraft_id: String,
+    request_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if external_sim_mode() {
-        let remote_aircraft_id = aircraft_id.clone();
-        let (xml, refs) = run_blocking(move || {
-            remote_model::load(&remote_aircraft_id, ftp_sync::download_path)
-        }).await?;
-        let mut result = parse_xml(app.clone(), xml.clone(), Some(refs.iter().map(|file| ReferenceFile {
-            name: file.path.clone(), xml: file.xml.clone(), category: None,
-        }).collect()), Some(format!("aircraft/{0}/{0}.xml", aircraft_id)))?;
-        remote_model::attach_sources(&mut result, &aircraft_id, &xml, &refs);
-        return Ok(result);
+        let request = model_read::ModelRead::begin(request_id)?;
+        return run_blocking(move || {
+            let (xml, refs) = remote_model::load(&aircraft_id, |path| {
+                ftp_sync::download_path_with_control(path, &request.control)
+            })?;
+            request.control.check()?;
+            let mut result = parse_xml(app, xml.clone(), Some(refs.iter().map(|file| ReferenceFile {
+                name: file.path.clone(), xml: file.xml.clone(), category: None,
+            }).collect()), Some(format!("aircraft/{0}/{0}.xml", aircraft_id)))?;
+            request.control.check()?;
+            remote_model::attach_sources(&mut result, &aircraft_id, &xml, &refs);
+            Ok(result)
+        }).await;
     }
     let state = app.state::<AppState>();
     let mut index_guard = lock_file_index(&state);
@@ -398,6 +405,11 @@ async fn load_aircraft(
         Ok(result) => Ok(result),
         Err(e) => Err(e),
     }
+}
+
+#[tauri::command]
+fn cancel_aircraft_load(request_id: String) -> Result<(), String> {
+    model_read::requests().cancel(&request_id)
 }
 
 #[tauri::command]
@@ -722,74 +734,13 @@ fn sim_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 }
 
 fn nsh_execute_tcp(command: &str) -> Result<String, String> {
-    let log_info = command.starts_with("jsbsim --mcap-info ");
     let host = transport::network_host()
-        .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?
-        .to_string();
-    let _guard = romfs_network::NSH_LOCK.lock().map_err(|error| format!("NSH lock poisoned: {error}"))?;
-    let port = std::env::var("NSH_TELNET_PORT")
-        .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
-    let address: SocketAddr = format!("{}:{}", host, port).parse()
-        .map_err(|_| format!("invalid NSH target {}:{}", host, port))?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
-        .map_err(|error| format!("cannot connect to NuttX NSH: {}", error))?;
-    stream.set_read_timeout(Some(Duration::from_millis(250))).map_err(|e| e.to_string())?;
-    stream.write_all(command.as_bytes()).and_then(|_| stream.write_all(b"\n"))
-        .map_err(|error| format!("cannot send NSH command: {}", error))?;
-    let mut output = Vec::new();
-    let mut buffer = [0u8; 1024];
-    let deadline = Instant::now() + Duration::from_secs(if log_info { 6 } else { 2 });
-    let mut interrupted = false;
-    loop {
-        if Instant::now() >= deadline || output.len() >= 16384 {
-            /* Commands such as `top` continuously refresh the terminal.
-             * This console executes one command per connection, so stop the
-             * remote foreground command rather than leaving the UI waiting
-             * forever for a prompt that will never arrive. */
-            let _ = stream.write_all(&[0x03]);
-            interrupted = true;
-            break;
-        }
-        match stream.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(length) => {
-                output.extend_from_slice(&buffer[..length]);
-                if log_info && output.iter().rposition(|byte| *byte == b'\n').is_some_and(|end| {
-                    output[..end].windows(b"MCAP_INFO:".len()).any(|part| part == b"MCAP_INFO:") ||
-                    output[..end].windows(b"MCAP_INFO_ERROR:".len()).any(|part| part == b"MCAP_INFO_ERROR:") ||
-                    output[..end].windows(b"Unknown option: --mcap-info".len()).any(|part| part == b"Unknown option: --mcap-info")
-                }) { break; }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock ||
-                          error.kind() == std::io::ErrorKind::TimedOut => {
-                if !log_info { break; }
-            },
-            Err(error) => return Err(format!("cannot read NSH output: {}", error)),
-        }
-    }
+        .ok_or("未发现网口仿真机；请检查网线和仿真机网络服务")?;
+    nsh_execute_tcp_at(host, command)
+}
 
-    /* Do not close an idle Telnet socket underneath nsh_session: it would
-     * make the board print `readline failed` and reset the TCP state.  End
-     * the shell session cleanly after this one-shot command instead. */
-    if command != "exit" {
-        let _ = stream.write_all(b"exit\n");
-        let cleanup_deadline = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < cleanup_deadline {
-            match stream.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(length) => output.extend_from_slice(&buffer[..length]),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock ||
-                              error.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(_) => break,
-            }
-        }
-    }
-    let mut text = String::from_utf8_lossy(&output).replace('\r', "");
-    if interrupted {
-        text.push_str(&format!("\n[continuous output stopped after {} seconds; Ctrl+C sent]\n",
-                               if log_info { 6 } else { 2 }));
-    }
-    Ok(text)
+fn nsh_execute_tcp_at(host: std::net::Ipv4Addr, command: &str) -> Result<String, String> {
+    nsh_tcp::execute_at(host, command)
 }
 
 fn nsh_execute_inner(command: &str) -> Result<String, String> {
@@ -818,23 +769,16 @@ async fn usb_console_read(cursor: u64) -> Result<usb_file::ConsoleChunk, String>
 }
 
 #[tauri::command]
-async fn sim_network_read(app: tauri::AppHandle) -> Result<Vec<sim_network::Interface>, String> {
-    let interfaces = run_blocking(sim_network::read).await?;
-    if let Some(eth0) = interfaces.iter().find(|item| item.name == "eth0") {
-        let host: std::net::Ipv4Addr = eth0.address.parse().map_err(|_| "Invalid simulator IP readback")?;
-        if !host.is_unspecified() {
-            transport::set_network_host_override(host);
-            app.state::<AppState>().sim_client.lock().map_err(|e| e.to_string())?.set_control_host(host);
-        }
-    }
-    Ok(interfaces)
+async fn sim_network_read() -> Result<Vec<sim_network::Interface>, String> {
+    // Reading both ports must not switch a working connection to eth0;
+    // that port may belong to a separate device network.
+    run_blocking(sim_network::read).await
 }
 
 #[tauri::command]
-async fn sim_network_set(app: tauri::AppHandle, name: String, address: String, netmask: String, gateway: String) -> Result<sim_network::Interface, String> {
+async fn sim_network_set(app: tauri::AppHandle, name: String, address: String, netmask: String, gateway: String) -> Result<sim_network::AppliedInterface, String> {
     let actual = run_blocking(move || sim_network::set(&name, &address, &netmask, &gateway)).await?;
-    if actual.name == "eth0" {
-        let host = actual.address.parse().map_err(|_| "Invalid simulator IP readback")?;
+    if let Some(host) = actual.control_host {
         transport::set_network_host_override(host);
         let state = app.state::<AppState>();
         state.sim_client.lock().map_err(|e| e.to_string())?.set_control_host(host);
@@ -1471,6 +1415,17 @@ fn simulator_network_target_get() -> Option<String> {
 }
 
 #[tauri::command]
+async fn px4_router_read() -> Result<px4_router::Snapshot,String> { run_blocking(px4_router::read).await }
+#[tauri::command]
+async fn px4_router_apply(config:px4_router::Config, expected:px4_router::Config, simulator:String) -> Result<px4_router::Snapshot,String> {
+    run_blocking(move || px4_router::apply(config,expected,&simulator)).await
+}
+#[tauri::command]
+async fn px4_router_control(action:String,simulator:String) -> Result<px4_router::Snapshot,String> {
+    run_blocking(move || px4_router::control(&action,&simulator)).await
+}
+
+#[tauri::command]
 fn simulator_transport_set(mode: String) -> Result<String, String> {
     Ok(transport::set_mode(&mode)?.as_str().to_string())
 }
@@ -1659,6 +1614,7 @@ fn main() {
             generate_aircraft,
             get_aircraft_library,
             load_aircraft,
+            cancel_aircraft_load,
             send_control,
             get_sim_status,
             sim_instance_snapshot,
@@ -1740,6 +1696,9 @@ fn main() {
             firmware_rollback,
             simulator_transport_get,
             simulator_network_target_get,
+            px4_router_read,
+            px4_router_apply,
+            px4_router_control,
             simulator_transport_set,
             tool_transport::tool_transport_open,
             tool_transport::tool_transport_write,

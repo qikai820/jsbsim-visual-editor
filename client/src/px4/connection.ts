@@ -94,10 +94,11 @@ export function delay(ms: number, ...signals: Array<AbortSignal | undefined>): P
   });
 }
 export class FtpReader {
-  private sequence = 0;
+  // PX4 caches replies by sequence, so a new reader must not restart at zero.
+  private static sequence = Math.floor(Math.random() * 32768) * 2;
   constructor(private connection: Px4Connection) {}
   private async request(opcode: number, session: number, offset: number, data: Uint8Array, size: number, signal?: AbortSignal) {
-    const seq = this.sequence; this.sequence = (this.sequence + 2) & 65535;
+    const seq = FtpReader.sequence; FtpReader.sequence = (FtpReader.sequence + 2) & 65535;
     const p = new Uint8Array(254), v = view(p); p[1] = this.connection.target.system; p[2] = this.connection.target.component;
     v.setUint16(3, seq, true); p[5] = session; p[6] = opcode; p[7] = size; v.setUint32(11, offset, true); p.set(data, 15);
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -108,16 +109,23 @@ export class FtpReader {
       await this.connection.send(110, p);
       let response: Frame;
       try { response = await waiting; } catch (e) { if (attempt === 3 || signal?.aborted || this.connection.signal.aborted) throw e; continue; }
-      if (response.payload[6] === 129) throw Error('飞控 FTP 拒绝请求，错误码 ' + response.payload[15]);
+      if (response.payload[6] === 129) {
+        const code = response.payload[15];
+        throw Error(`飞控 FTP ${code === 10 ? '文件或目录不存在' : '拒绝请求'}（错误码 ${code}）`);
+      }
       if (response.payload[6] !== 128 || response.payload[7] > 239) throw Error('飞控 FTP 响应无效');
       return response.payload;
     }
     throw Error('飞控 FTP 无响应');
   }
   async read(uri: string, signal?: AbortSignal): Promise<Uint8Array> {
-    const match = uri.match(/^mftp:\/\/[^/]*(\/.*)$/); if (!match) throw Error('无效的 MAVLink FTP URI');
+    // PX4's first path segment (e.g. etc/) is a device directory, not a hostname.
+    const match = uri.match(/^mftp:\/\/(.+)$/); if (!match) throw Error('无效的 MAVLink FTP URI');
     const path = new TextEncoder().encode(decodeURIComponent(match[1]) + '\0'); if (path.length > 239) throw Error('元数据路径过长');
-    const opened = await this.request(4, 0, 0, path, path.length, signal), session = opened[5];
+    let opened: Uint8Array;
+    try { opened = await this.request(4, 0, 0, path, path.length, signal); }
+    catch (error) { throw Error(`无法打开飞控元数据 ${uri}：${error instanceof Error ? error.message : String(error)}`); }
+    const session = opened[5];
     try {
       const length = view(opened).getUint32(15, true); if (opened[7] < 4 || length > 16 * 1024 * 1024) throw Error('元数据文件过大或响应无效');
       const file = new Uint8Array(length); let offset = 0;

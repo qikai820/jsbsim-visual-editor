@@ -1,10 +1,43 @@
 import { invoke } from '@tauri-apps/api/core';
 import { aborted, delay, frameUri, FtpReader, Px4Connection } from './connection';
-import { crc32, parameterValue, stringAt, view } from './protocol';
+import { crc32, normalizeParameterValue, parameterSetPayload, parameterValue, stringAt, view } from './protocol';
 import { parseMetadata, type MetadataCatalog } from './metadata';
 export type Parameter = { name: string; value: number; type: number; index: number };
 export type LogEntry = { id: number; time: number; size: number };
 export type UlogSummary = { path: string; name: string; size: number; version: number; duration: number | null; topics: Array<{ name: string; multiId: number; samples: number; frequency: number | null }>; parameters: Record<string, number | string>; info: Record<string, string>; dropoutCount: number; dropoutMs: number; truncated: boolean };
+
+export async function writeParameter(link: Px4Connection, parameter: Parameter, value: number, signal: AbortSignal, update: (parameter: Parameter) => void): Promise<Parameter> {
+  aborted(signal, link.signal);
+  if (!link.alive) throw Error('请等待飞控心跳后再写入参数');
+  const expected = normalizeParameterValue(value, parameter.type, link.bytewise);
+  const payload = parameterSetPayload(link.target, parameter.name, parameter.type, expected, link.bytewise);
+  const control = new AbortController(), cancel = () => control.abort();
+  signal.addEventListener('abort', cancel, { once: true });
+  const exchange = async (id: number, payload: Uint8Array): Promise<Parameter> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      aborted(signal, link.signal);
+      const waiting = link.wait(frame => frame.id === 22 && frame.payload[24] === parameter.type && stringAt(frame.payload, 8, 16) === parameter.name, 1000, control.signal);
+      void waiting.catch(() => {});
+      await link.send(id, payload);
+      let response;
+      try { response = await waiting; }
+      catch { aborted(signal, link.signal); if (attempt < 2) continue; throw Error(`${parameter.name} 写入结果未确认，请重新读取参数核实`); }
+      const actual = { ...parameter, value: parameterValue(response.payload, link.bytewise) };
+      if (!Number.isFinite(actual.value)) throw Error('飞控返回了无效参数值');
+      update(actual);
+      if (actual.value !== expected) throw Error(`${parameter.name} 未写入目标值：请求 ${expected}，飞控返回 ${actual.value}`);
+      return actual;
+    }
+    throw Error('飞控参数无响应');
+  };
+  try {
+    await exchange(23, payload);
+    // A separate named read confirms the stored value after PARAM_SET acknowledgement.
+    const read = new Uint8Array(20); view(read).setInt16(0, -1, true);
+    read[2] = link.target.system; read[3] = link.target.component; read.set(new TextEncoder().encode(parameter.name), 4);
+    return await exchange(20, read);
+  } finally { control.abort(); signal.removeEventListener('abort', cancel); }
+}
 
 export async function readParameters(link: Px4Connection, update: (values: Parameter[], expected: number | null) => void, signal: AbortSignal): Promise<Parameter[]> {
   const values = new Map<number, Parameter>(); let expected: number | null = null, error = '', changed = false;
@@ -99,21 +132,26 @@ export async function downloadLog(link: Px4Connection, log: LogEntry, signal: Ab
 
 export async function loadVehicleMetadata(link: Px4Connection, signal: AbortSignal): Promise<MetadataCatalog> {
   const ftp = new FtpReader(link);
-  const read = async (uri: string, checksum?: number): Promise<string> => {
+  const read = async (uri: string, checksum?: number, decodedChecksum = false): Promise<string> => {
     aborted(signal, link.signal);
     const bytes = uri.startsWith('mftp://') ? await ftp.read(uri, signal) : Uint8Array.from(await invoke<number[]>('px4_metadata_fetch', { uri }));
     aborted(signal, link.signal);
-    if (checksum !== undefined && checksum !== 0 && crc32(bytes) !== checksum) throw Error('飞控元数据 CRC32 校验失败');
-    return invoke<string>('px4_metadata_decode', { bytes: Array.from(bytes) });
+    const text = await invoke<string>('px4_metadata_decode', { bytes: Array.from(bytes) }).catch(error => {
+      throw Error(`元数据解码失败（${uri}）：${error instanceof Error ? error.message : String(error)}`);
+    });
+    // PX4 publishes the general JSON checksum before compression; parameter CRCs cover the downloaded file.
+    if (checksum !== undefined && checksum !== 0 && crc32(bytes) !== checksum &&
+        (!decodedChecksum || crc32(new TextEncoder().encode(text)) !== checksum)) throw Error(`飞控元数据 CRC32 校验失败：${uri}`);
+    return text;
   };
   const waiting = link.wait(frame => frame.id === 397 || frame.id === 395, 3000, signal); void waiting.catch(() => {});
   await link.requestMessage(397); const fallback = setTimeout(() => { void link.requestMessage(395).catch(() => {}); }, 800);
   let generalFrame; try { generalFrame = await waiting; } finally { clearTimeout(fallback); }
-  const general = JSON.parse(await read(frameUri(generalFrame), view(generalFrame.payload).getUint32(4, true)));
+  const general = JSON.parse(await read(frameUri(generalFrame), view(generalFrame.payload).getUint32(4, true), true));
   const param = Array.isArray(general.metadataTypes) ? general.metadataTypes.find((p: any) => p.type === 1) : null;
   if (!param || typeof param.uri !== 'string') throw Error('飞控未发布参数元数据地址');
   const candidates = [{ uri: param.uri, crc: param.fileCrc }, { uri: param.uriFallback, crc: param.fileCrcFallback }].filter(p => typeof p.uri === 'string' && p.uri);
-  let error: unknown;
+  const errors: string[] = [];
   for (const candidate of candidates) {
     const checksum = typeof candidate.crc === 'number' ? candidate.crc >>> 0 : undefined;
     const key = checksum ? `px4-parameter-metadata:${checksum}:${candidate.uri}` : '';
@@ -123,7 +161,7 @@ export async function loadVehicleMetadata(link: Px4Connection, signal: AbortSign
       const catalog = parseMetadata(text, { kind: 'vehicle', label: candidate.uri, uri: candidate.uri, crc: checksum, matched: true });
       if (key) try { localStorage.setItem(key, text); } catch { /* Metadata remains usable if the cache is full. */ }
       return catalog;
-    } catch (e) { aborted(signal, link.signal); if (key) localStorage.removeItem(key); error = e; }
+    } catch (e) { aborted(signal, link.signal); if (key) localStorage.removeItem(key); errors.push(`${candidate.uri}：${e instanceof Error ? e.message : String(e)}`); }
   }
-  throw error || Error('无法取得飞控参数元数据');
+  throw Error(errors.join('；') || '无法取得飞控参数元数据');
 }

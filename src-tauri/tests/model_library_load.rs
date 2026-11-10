@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+#[allow(dead_code)] #[path = "../src/model_read.rs"] mod model_read;
 #[path = "../src/ftp_sync.rs"] mod ftp_sync;
 #[path = "../src/romfs_network.rs"] mod romfs_network;
 #[path = "../src/transport.rs"] mod transport;
@@ -54,10 +55,16 @@ fn config_load_uses_romfs_when_ftp_is_unavailable() {
 #[ignore = "read-only: requires SIM_UDP_HOST pointing at a board with voliro_t"]
 fn live_voliro_model_and_sidecars() {
     transport::set_mode("network").unwrap();
-    let (xml, refs) = remote_model::load("voliro_t", ftp_sync::download_path).unwrap();
-    assert!(xml.contains("<fdm_config"));
-    assert!(!refs.is_empty());
-    println!("voliro_t: {} main XML bytes, {} resolved reference files", xml.len(), refs.len());
+    for attempt in 1..=2 {
+        let request = model_read::ModelRead::begin(None).unwrap();
+        let started = std::time::Instant::now();
+        let (xml, refs) = remote_model::load("voliro_t", |path|
+            ftp_sync::download_path_with_control(path, &request.control)).unwrap();
+        assert!(xml.contains("<fdm_config"));
+        assert!(!refs.is_empty());
+        println!("voliro_t read {attempt}: {} main XML bytes, {} resolved reference files in {:.2}s",
+            xml.len(), refs.len(), started.elapsed().as_secs_f64());
+    }
     for path in ["config/models/voliro_t.serial.xml", "config/models/voliro_t.pwm.xml"] {
         let content = ftp_sync::download_path(path).unwrap();
         assert!(content.contains("<?xml") || content.trim_start().starts_with('<'));

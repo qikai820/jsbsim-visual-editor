@@ -1393,6 +1393,10 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
 
 fn parse_input(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut LayoutState) {
     for input in find_children(fdm_config, "input") {
+        if get_attr(input, "type") == Some("MAVLINK_FORWARD") {
+            // Forwarding is configured in the PX4 toolbox, outside the model.
+            continue;
+        }
         let mut params = json!({
             "name": get_attr(input, "name").unwrap_or("0.0.0.0"),
             "type": get_attr(input, "type").unwrap_or("SOCKET")

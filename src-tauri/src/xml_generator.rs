@@ -2003,6 +2003,7 @@ fn build_input(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Strin
     }
     for input in input_nodes {
         let params = get_params(input);
+        if params.get("type").and_then(Value::as_str) == Some("MAVLINK_FORWARD") { continue; }
         let mut attrs: Vec<(String, String)> = Vec::new();
         for key in ["name", "type", "port", "rate"] {
             if let Some(value) = params.get(key) {

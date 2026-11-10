@@ -338,6 +338,25 @@ pub fn write_all(path: &str, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
+/// Toolbox service settings use the same verified staging/rename path as file
+/// management, pinned to the simulator that supplied the preflight snapshot.
+pub(crate) fn write_router_config_at(host: std::net::Ipv4Addr, expected: &[u8], bytes: &[u8]) -> Result<(), String> {
+    crate::romfs_network::with_host_session(host, |nsh| {
+        let volumes = crate::storage_usage::parse(&nsh.command(crate::storage_usage::COMMAND)?)?;
+        let mut session = FileSession { nsh, volumes };
+        let path = "data/mavlink-router.conf";
+        ensure_mounted(&mut session, path)?;
+        let mut before = Vec::new();
+        read_into(&mut session, path, &mut before, 4096)?;
+        if before != expected { return Err("板端转发配置已变化，请刷新后重新编辑".into()); }
+        upload_in(&mut session, path, &mut std::io::Cursor::new(bytes))?;
+        let mut after = Vec::new();
+        read_into(&mut session, path, &mut after, 4096)?;
+        if after != bytes { return Err("转发配置最终回读不一致".into()); }
+        Ok(())
+    })
+}
+
 pub fn upload_from(path: &str, source: &Path) -> Result<u64, String> {
     absolute(path, false)?;
     let mut file = std::fs::File::open(source).map_err(|error| error.to_string())?;

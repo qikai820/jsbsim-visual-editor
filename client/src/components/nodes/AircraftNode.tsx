@@ -18,7 +18,7 @@ function displayUnit(p: any, fallback?: string): string | undefined {
   return fallback;
 }
 
-function AircraftNode({ data, selected }: NodeProps) {
+function AircraftNode({ id, data, selected }: NodeProps) {
   const nodeData = data as unknown as AircraftNodeData;
   const def = getComponentDef(nodeData.componentType);
   if (!def) return null;

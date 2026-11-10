@@ -1,3 +1,4 @@
+#[allow(dead_code)] #[path = "../src/model_read.rs"] mod model_read;
 #[path = "../src/network_discovery.rs"] mod network_discovery;
 #[path = "../src/romfs_network.rs"] mod romfs_network;
 

@@ -69,6 +69,18 @@ communication** control applies to both file transfer and live simulation:
 The selected mode is stored on the desktop computer and restored when the
 application starts.
 
+Model-library reads have a 90-second total budget, including referenced XML
+files. **Cancel load**, closing the library, and the UI timeout also cancel the
+matching backend request. FTP/NSH/USB file-channel lock waits are limited to
+5 seconds; a busy channel reports an error and does not leave the request
+queued. Cancellation stops further reads and fallback attempts. An in-flight
+curl read can take up to its existing 5-second timeout to finish; NSH reads
+check cancellation between socket polls and still send `exit` during cleanup.
+The user model on the canvas is replaced only after import succeeds. Rebuild
+and reopen the desktop application to use this fix; no firmware update is
+needed. Host TCP fixtures cover cancellation while waiting for NSH and while
+waiting for a response, followed by a successful model/reference retry.
+
 **Tools > Simulator Files** follows this selection for capacity, directory
 listing, upload/download, editing, rename, copy/move, and deletion. Network
 mode accesses both `/mnt/sdcard` and `/data` through the existing Telnet NSH
@@ -93,6 +105,16 @@ requires reopening the rebuilt editor; it does not require a firmware update
 or copying models onto the SD card.
 
 The USB NSH window waits up to 35 seconds for `ifup`, `ifdown`, and `ifconfig`.
+
+System Settings provides a fixed-footer **Save & Apply** action for Ethernet
+IPv4 settings. In Auto mode, a read-only probe selects USB when available,
+otherwise the current Ethernet NSH connection; explicit USB/Network modes
+retain their selected transport. A write is never replayed on another channel
+after a timeout. Ethernet saves reconnect at the new IP when editing the
+active interface, verify its MAC and all three IPv4 fields, and only then
+update the editor's control destination. Editing another port preserves the
+active connection. Failed verification retains the form edits. These settings
+apply to the current runtime; firmware defaults are restored after reboot.
 The matching firmware gives those commands 30 seconds to complete PHY
 negotiation. Other commands retain the short response budget. A command that
 exceeds its budget is reported as still running and is not forcibly deleted

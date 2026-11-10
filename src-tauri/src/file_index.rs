@@ -1,6 +1,7 @@
 //! JSBSim file index: scans JSBSim XML directories and caches file contents.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 
 pub type FileIndex = HashMap<String, String>;
@@ -110,7 +111,11 @@ pub fn build_file_index() -> FileIndex {
         }
     }
 
-    println!(
+    // A desktop launcher or terminal can close its output pipe while the
+    // editor stays open. Diagnostics must not panic and poison the model
+    // cache, which is locked by the caller while this index is built.
+    let _ = writeln!(
+        std::io::stdout().lock(),
         "[JSBSim] Indexed {} XML files from {} directories (root: {})",
         all_files.len(),
         search_dirs.len(),

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use crate::px4_metadata::{decode, MAX_METADATA};
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
@@ -11,7 +12,6 @@ use std::{
     },
 };
 const MAX_LOG: u64 = 512 * 1024 * 1024;
-const MAX_METADATA: usize = 16 * 1024 * 1024;
 
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -416,6 +416,11 @@ pub async fn px4_parameters_save(
 }
 
 fn bounded_output(mut child: std::process::Child) -> Result<Vec<u8>, String> {
+    let stderr = child.stderr.take().map(|pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.take(8192).read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).trim().to_string()
+    }));
     let mut bytes = Vec::new();
     let result = child
         .stdout
@@ -428,32 +433,12 @@ fn bounded_output(mut child: std::process::Child) -> Result<Vec<u8>, String> {
         let _ = child.wait();
         return Err("元数据解压或读取失败，或超过 16 MiB".into());
     }
-    if !child.wait().map_err(|e| e.to_string())?.success() {
-        return Err("元数据下载或解压失败".into());
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let detail = stderr.and_then(|thread| thread.join().ok()).unwrap_or_default();
+    if !status.success() {
+        return Err(format!("元数据 HTTP 下载失败（{status}）：{detail}"));
     }
     Ok(bytes)
-}
-fn decode(bytes: Vec<u8>) -> Result<String, String> {
-    if bytes.len() > MAX_METADATA {
-        return Err("元数据超过 16 MiB".into());
-    }
-    let data = if bytes.starts_with(b"\xfd7zXZ\0") {
-        let mut child = Command::new("xz")
-            .args(["--decompress", "--stdout", "--memlimit-decompress=64MiB"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("需要 xz 解压元数据：{e}"))?;
-        let mut input = child.stdin.take().ok_or("未打开标准输入")?;
-        let writer = std::thread::spawn(move || input.write_all(&bytes));
-        let output = bounded_output(child);
-        let _ = writer.join();
-        output?
-    } else {
-        bytes
-    };
-    String::from_utf8(data).map_err(|_| "元数据不是有效 UTF-8".into())
 }
 #[tauri::command]
 pub async fn px4_metadata_decode(bytes: Vec<u8>) -> Result<String, String> {
@@ -483,10 +468,10 @@ pub async fn px4_metadata_fetch(uri: String) -> Result<Vec<u8>, String> {
                 &uri,
             ])
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("无法下载元数据，需要 curl：{e}"))?;
-        bounded_output(child)
+        bounded_output(child).map_err(|error| format!("{uri}：{error}"))
     })
     .await
 }
@@ -631,6 +616,15 @@ mod tests {
         std::fs::write(&path, data).unwrap();
         assert!(inspect(&path).unwrap().truncated);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    #[cfg(unix)]
+    fn metadata_http_error_preserves_server_details() {
+        let child = Command::new("sh").args(["-c", "printf 'HTTP 404 metadata missing' >&2; exit 22"])
+            .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let error = bounded_output(child).unwrap_err();
+        assert!(error.contains("HTTP 下载失败"));
+        assert!(error.contains("HTTP 404 metadata missing"));
     }
     #[test]
     fn metadata_xz_roundtrip_and_invalid_stream() {

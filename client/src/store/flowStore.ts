@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { withoutLegacyForwarders, removeLegacyForwarderXml } from '../utils/legacyForwarder';
 import { useSignalMonitorStore } from './signalMonitorStore';
 import {
   applyNodeChanges, applyEdgeChanges, addEdge,
@@ -342,6 +343,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   setAircraft: (aircraft) => set({ aircraft }),
 
   loadProject: (data) => {
+    data = withoutLegacyForwarders(data);
+    data = { ...data, xmlFiles:data.xmlFiles?.map(file=>({...file,currentXml:removeLegacyForwarderXml(file.currentXml||file.originalXml||'')})) };
     useSignalMonitorStore.getState().load((data as any).monitoring);
     const ownedNodes = data.nodes.map(normalizeNodeOwnership);
     set({
@@ -360,6 +363,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   restoreModelContent: (data) => {
+    data = withoutLegacyForwarders(data);
     // Restoring removed nodes/files must also reserve their IDs for future
     // additions. Keep the editor baseline and live monitoring state intact.
     nodeCounter = Math.max(nodeCounter, ...data.nodes.map(node => Number(node.id.match(/^node-(\d+)$/)?.[1]) || 0));

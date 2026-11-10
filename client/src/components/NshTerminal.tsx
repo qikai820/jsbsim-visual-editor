@@ -13,8 +13,9 @@ export default function NshTerminal({ channel, connected, historyKey = 'jsbsim-n
     let disposed = false, dispose = () => {};
     void Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')]).then(([{ Terminal }, { FitAddon }]) => {
       if (disposed || !host.current) return;
-      const term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', scrollback: 5000,
-        theme: { background: '#111827', foreground: '#d1fae5', cursor: '#f8fafc', selectionBackground: '#475569' }, convertEol: false });
+      // NSH streams can contain bare LF without a PTY translating it to CRLF.
+      const term = new Terminal({ cursorBlink: true, cursorStyle: 'bar', cursorWidth: 1, cursorInactiveStyle: 'bar', fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', scrollback: 5000,
+        theme: { background: '#111827', foreground: '#d1fae5', cursor: '#f8fafc', selectionBackground: '#475569' }, convertEol: true });
       const fit = new FitAddon(); term.loadAddon(fit); term.open(host.current); terminal.current = term;
       const resize = () => { if (host.current?.clientWidth && host.current.clientHeight) { fit.fit(); } };
       const observer = new ResizeObserver(resize); observer.observe(host.current); resize();

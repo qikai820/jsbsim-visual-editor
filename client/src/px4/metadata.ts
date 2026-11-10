@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 export type ParameterMeta = {
   name: string; category: string; group: string; shortDesc: string; longDesc: string;
-  type?: string; default?: number; min?: number; max?: number; units?: string; rebootRequired: boolean;
+  type?: string; default?: number; min?: number; max?: number; units?: string; rebootRequired: boolean; readOnly: boolean;
   values: Array<{ value: number; description: string }>; bitmask: Array<{ index: number; description: string }>;
 };
 export type MetadataSource = { kind: 'bundled' | 'vehicle' | 'cache' | 'import'; label: string; uri?: string; crc?: number; matched: boolean };
@@ -19,7 +19,7 @@ export class MetadataCatalog {
       const p = item as Record<string, any>, name = text(p.name);
       if (!name || name.length > 64 || !/^[\w{}]+$/.test(name)) continue;
       const meta: ParameterMeta = { name, category: text(p.category) || 'Standard', group: text(p.group) || 'Misc', shortDesc: text(p.shortDesc), longDesc: text(p.longDesc), type: text(p.type),
-        default: finite(p.default), min: finite(p.min), max: finite(p.max), units: text(p.units), rebootRequired: p.rebootRequired === true || p.rebootRequired === 'true',
+        default: finite(p.default), min: finite(p.min), max: finite(p.max), units: text(p.units), rebootRequired: p.rebootRequired === true || p.rebootRequired === 'true', readOnly: p.readOnly === true || p.readOnly === 'true',
         values: list(p.values).map((v: any) => ({ value: finite(v?.value), description: text(v?.description) })).filter((v): v is { value: number; description: string } => v.value !== undefined),
         bitmask: list(p.bitmask).map((v: any) => ({ index: finite(v?.index), description: text(v?.description) })).filter((v): v is { index: number; description: string } => v.index !== undefined && v.index >= 0 && v.index < 32),
       };

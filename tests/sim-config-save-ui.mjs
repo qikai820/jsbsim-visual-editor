@@ -69,6 +69,11 @@ try {
     window.confirm = () => true;
     window.__stored = JSON.stringify({version:1,mcap:{enabled:true,rateHz:500,bufferMb:500}});
     window.__uploads = [];
+    window.__networkSaves = [];
+    window.__networkInterfaces = [
+      {name:'eth0',address:'192.168.144.82',netmask:'255.255.255.0',gateway:'0.0.0.0'},
+      {name:'eth1',address:'192.168.101.82',netmask:'255.255.255.0',gateway:'192.168.101.1'},
+    ];
     window.__TAURI_INTERNALS__ = {
       metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},
       transformCallback:()=>1,
@@ -82,7 +87,17 @@ try {
             window.__saveFailure = () => reject('USB transport busy: lock wait timed out');
           });
         }
-        if (command === 'sim_network_read') return [{name:'eth0',address:'192.168.101.81',netmask:'255.255.255.0',gateway:'192.168.101.1'}];
+        if (command === 'sim_network_read') return structuredClone(window.__networkInterfaces);
+        if (command === 'sim_network_set') {
+          window.__networkSaves.push(args);
+          return new Promise((resolve,reject) => {
+            window.__networkSaveSuccess = transport => {
+              window.__networkInterfaces = window.__networkInterfaces.map(item => item.name === args.name ? {...args} : item);
+              resolve({...args,transport});
+            };
+            window.__networkSaveFailure = () => reject('Network readback temporarily unavailable');
+          });
+        }
         if (command === 'ftp_get_simulator_version') return {version:{product:'JSBSim Realtime',version:'test'}};
         if (command === 'sim_list_tests') return {tests:[]};
         if (command === 'sim_list_models') return {models:[]};
@@ -99,6 +114,47 @@ try {
   await until(open);
   await evaluate(`${open}.click()`);
   await until(`document.querySelector('.sim-config-dialog footer')?.textContent.includes('Current configuration')`);
+  const networkPort = `document.querySelector('.sim-config-network select')`;
+  const networkAddress = `document.querySelector('.sim-config-network input')`;
+  await until(`${networkPort}?.options.length === 2`);
+  assert.deepEqual(await evaluate(`[...${networkPort}.options].map(option => option.value)`), ['eth0', 'eth1']);
+  await until(`${networkAddress}.value === '192.168.144.82'`);
+  await evaluate(`(() => {const field=${networkPort};field.value='eth1';field.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await until(`${networkAddress}.value === '192.168.101.82'`);
+  await evaluate(`[...document.querySelectorAll('.sim-config-network button')].find(button => button.textContent === 'Read Back').click()`);
+  await until(`${networkPort}.value === 'eth1' && ${networkAddress}.value === '192.168.101.82' && !${networkPort}.disabled`);
+  await evaluate(`(() => {const field=${networkPort};field.value='eth0';field.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await until(`${networkAddress}.value === '192.168.144.82'`);
+  const networkSave = `document.querySelector('.sim-config-dialog footer .primary')`;
+  const networkGateway = `document.querySelectorAll('.sim-config-network input')[2]`;
+  assert.equal(await evaluate(`${networkSave}.textContent`), 'Save & Apply');
+  assert.equal(await evaluate(`${networkSave}.disabled`), true, 'unchanged network settings cannot enqueue a write');
+  assert.equal(await evaluate(`document.querySelector('.sim-config-network').textContent.includes('Apply over USB')`), false);
+  await evaluate(`(() => {const field=${networkGateway};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'192.168.144.1');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await until(`!${networkSave}.disabled`);
+  await evaluate(`${networkSave}.click()`);
+  await until('window.__networkSaves.length === 1');
+  assert.equal(await evaluate(`${networkSave}.disabled`), true);
+  assert.equal(await evaluate(`${networkSave}.textContent`), 'Saving…');
+  await evaluate(`${networkSave}.click()`);
+  assert.equal(await evaluate('window.__networkSaves.length'), 1, 'no duplicate network write while busy');
+  await evaluate('window.__networkSaveFailure()');
+  await until(`!${networkSave}.disabled`);
+  assert.equal(await evaluate(`${networkGateway}.value`), '192.168.144.1', 'failed save retains network edits');
+  assert.match(await evaluate(`document.querySelector('.sim-config-dialog footer').textContent`), /Save failed; edits retained/);
+  await evaluate(`${networkSave}.click()`);
+  await until('window.__networkSaves.length === 2');
+  await evaluate(`window.__networkSaveSuccess('network')`);
+  await until(`${networkSave}.disabled && document.querySelector('.sim-config-dialog footer').textContent.includes('Saved over Ethernet')`);
+  await evaluate(`(() => {const field=${networkGateway};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'0.0.0.0');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await evaluate(`${networkSave}.click()`);
+  await until('window.__networkSaves.length === 3');
+  await evaluate(`window.__networkSaveSuccess('usb')`);
+  await until(`${networkSave}.disabled && document.querySelector('.sim-config-dialog footer').textContent.includes('Saved over USB')`);
+  assert.equal(await evaluate('window.__uploads.length'), 0, 'network settings do not write a model configuration');
+  assert.equal(await evaluate(`(() => {const box=${networkSave}.getBoundingClientRect();return box.width>0 && box.bottom<=innerHeight && box.right<=innerWidth;})()`), true, 'network save remains visible in the fixed footer');
+  const networkShot = await send('Page.captureScreenshot', {format:'png'});
+  await writeFile('/tmp/jsbsim-network-interfaces-ui.png', Buffer.from(networkShot.data, 'base64'));
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'Runtime & Time').click()`);
   const simRate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('Simulation rate'))?.querySelector('input')`;
   const timeStep = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('Time step'))?.querySelector('input')`;
@@ -185,7 +241,7 @@ try {
   assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), false);
   const usbShot = await send('Page.captureScreenshot', {format:'png'});
   await writeFile('/tmp/jsbsim-usb-debug-config.png', Buffer.from(usbShot.data, 'base64'));
-  console.log('PASS: display rate default/range/save/reopen, independent simulation timestep; config save/retry and USB debug persistence. Desktop IPC mocked.');
+  console.log('PASS: network Save & Apply visible, busy/deduplication, failure retains edits, Ethernet/USB acknowledgement; both Ethernet ports selectable and selection retained on refresh; display rate/save/reopen and USB debug persistence. Desktop IPC mocked.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));

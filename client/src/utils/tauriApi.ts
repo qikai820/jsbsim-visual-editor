@@ -234,13 +234,27 @@ export async function getAircraftLibrary(): Promise<any[]> {
   return result.library || [];
 }
 
-export async function loadAircraft(aircraftId: string): Promise<any> {
-  const result = await call('load_aircraft', { aircraftId });
-  // Tauri commands throw on Err, but check for error field just in case
-  if (result && typeof result === 'object' && 'error' in result && result.error) {
-    throw new Error(result.error);
+let modelReadSequence = 0;
+export async function loadAircraft(aircraftId: string, signal?: AbortSignal): Promise<any> {
+  if (signal?.aborted) throw new DOMException('已取消加载', 'AbortError');
+  const requestId = `model-${Date.now()}-${++modelReadSequence}-${Math.random().toString(36).slice(2)}`;
+  const cancel = () => {
+    // Cancel the backend too: ignoring a late result leaves FTP/NSH work
+    // queued, so another load can otherwise stall until the app restarts.
+    void call('cancel_aircraft_load', { requestId }).catch(error => console.warn('取消后台模型读取失败', error));
+  };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await call('load_aircraft', { aircraftId, requestId });
+    if (signal?.aborted) throw new DOMException('已取消加载', 'AbortError');
+    // Tauri commands throw on Err, but check for error field just in case
+    if (result && typeof result === 'object' && 'error' in result && result.error) {
+      throw new Error(result.error);
+    }
+    return result;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
   }
-  return result;
 }
 
 export async function sendControl(override: boolean, channels: number[]): Promise<void> {
@@ -292,8 +306,9 @@ export async function readSimulatorNetwork(): Promise<SimulatorNetworkInterface[
   return call('sim_network_read');
 }
 
-export async function setSimulatorNetwork(config: SimulatorNetworkInterface): Promise<SimulatorNetworkInterface> {
-  return call('sim_network_set', config);
+export async function setSimulatorNetwork(config: SimulatorNetworkInterface): Promise<SimulatorNetworkInterface & { transport: 'usb' | 'network' }> {
+  const { name, address, netmask, gateway } = config;
+  return call('sim_network_set', { name, address, netmask, gateway });
 }
 
 export async function simPause(): Promise<any> {

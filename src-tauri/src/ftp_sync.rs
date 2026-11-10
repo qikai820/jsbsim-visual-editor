@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::usb_file;
+use crate::model_read::{ReadControl, CHANNEL_WAIT};
 use crate::transport::{self, TransportMode};
 
 // NuttX ftpd and its small TCP pool are easily exhausted by several curl
@@ -173,13 +174,19 @@ pub fn log_info_command(file: &str) -> Result<String, String> {
 }
 
 fn curl_output(args: &[&str]) -> Result<Vec<u8>, String> {
-    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
+    curl_output_with_control(args, &ReadControl::default())
+}
+
+fn curl_output_with_control(args: &[&str], control: &ReadControl) -> Result<Vec<u8>, String> {
+    let _guard = control.lock(&FTP_LOCK, CHANNEL_WAIT, "FTP")?;
+    control.check()?;
     let output = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
                "--disable-epsv", "--connect-timeout", "2", "--max-time", "5"])
         .args(args)
         .output()
         .map_err(|e| format!("cannot start curl: {e}"))?;
+    control.check()?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -339,24 +346,30 @@ fn list_ftp_directory(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn read_usb_library(path: &str, built_in_first: bool) -> Result<String, String> {
+    read_usb_library_with_control(path, built_in_first, &ReadControl::default())
+}
+
+fn read_usb_library_with_control(path: &str, built_in_first: bool, control: &ReadControl) -> Result<String, String> {
+    control.check()?;
     let built_in = format!("romfs/jsbsim/{path}");
     let user = format!("jsbsim/{path}");
     let (first, second) = if built_in_first { (&built_in, &user) } else { (&user, &built_in) };
-    match usb_file::read_text(first) {
+    match usb_file::read_text_with_control(first, control) {
         Ok(content) => Ok(content),
         Err(first_error) => {
+            control.check()?;
             if transport::mode() == TransportMode::Auto && usb_file_transport_error(&first_error) {
                 mark_auto_usb_file_unhealthy();
-                return read_ftp_library(path)
+                return read_ftp_library_with_control(path, control)
                     .map_err(|ftp_error| format!("{first_error}; FTP fallback failed: {ftp_error}"));
             }
-            match usb_file::read_text(second) {
+            match usb_file::read_text_with_control(second, control) {
             Ok(content) => Ok(content),
             Err(error) if transport::mode() == TransportMode::Auto => {
                 if usb_file_transport_error(&first_error) || usb_file_transport_error(&error) {
                     mark_auto_usb_file_unhealthy();
                 }
-                read_ftp_library(path)
+                read_ftp_library_with_control(path, control)
                     .map_err(|ftp_error| format!("{error}; FTP fallback failed: {ftp_error}"))
             }
             Err(error) => Err(error),
@@ -366,17 +379,22 @@ fn read_usb_library(path: &str, built_in_first: bool) -> Result<String, String> 
 }
 
 fn read_ftp_library(path: &str) -> Result<String, String> {
+    read_ftp_library_with_control(path, &ReadControl::default())
+}
+
+fn read_ftp_library_with_control(path: &str, control: &ReadControl) -> Result<String, String> {
+    control.check()?;
     safe_relative_path(path)?;
     let sd_read = || -> Result<Vec<u8>, String> {
         let url = format!("{}/jsbsim/{}", endpoint()?, path);
         let auth = credentials();
-        curl_output(&["--user", &auth, &url])
+        curl_output_with_control(&["--user", &auth, &url], control)
     };
     match sd_read() {
         Ok(bytes) => String::from_utf8(bytes)
             .map_err(|error| format!("remote text is not UTF-8: {error}")),
-        Err(ftp_error) => crate::romfs_network::read_text(path)
-            .or_else(|nsh_error| usb_file::read_text(&format!("romfs/jsbsim/{path}"))
+        Err(ftp_error) => crate::romfs_network::read_text_with_control(path, control)
+            .or_else(|nsh_error| usb_file::read_text_with_control(&format!("romfs/jsbsim/{path}"), control)
                 .map_err(|usb_error| format!("NSH: {nsh_error}; USB ROMFS: {usb_error}")))
             .map_err(|romfs_error| format!("FTP: {ftp_error}; ROMFS: {romfs_error}")),
     }
@@ -728,14 +746,19 @@ pub fn download_dsdl(file: &str) -> Result<String, String> {
 }
 
 pub fn download_path(path: &str) -> Result<String, String> {
+    download_path_with_control(path, &ReadControl::default())
+}
+
+pub fn download_path_with_control(path: &str, control: &ReadControl) -> Result<String, String> {
+    control.check()?;
     let path = safe_relative_path(path)?.trim_matches('/');
     if path.is_empty() || !path.to_ascii_lowercase().ends_with(".xml") {
         return Err("invalid remote XML path".into());
     }
     if use_usb() {
-        return read_usb_library(path, false);
+        return read_usb_library_with_control(path, false, control);
     }
-    read_ftp_library(path)
+    read_ftp_library_with_control(path, control)
 }
 
 pub fn download_simulator_version() -> Result<String, String> {
