@@ -6,7 +6,7 @@ const setup=`window.calls=[];window.__TAURI_INTERNALS__={transformCallback:()=>1
 const source=`import React from 'react';import{createRoot}from'react-dom/client';import Toolbox from './src/components/Px4Toolbox';import OriginalNsh from './src/components/NshConsoleDialog';import{useFlowStore}from'./src/store/flowStore';import{Parser,encode,view,crc32}from'./src/px4/protocol';import{Terminal}from'@xterm/xterm';import './src/App.css';
 const original=Terminal.prototype.open;Terminal.prototype.open=function(...args){window.term=this;return original.apply(this,args);};
 const fixtures=${JSON.stringify(f)};const parser=new Parser();let seq=0,channel,session=0,line='';window.toolClosed=0;window.saved=[];window.shellInput='';
-useFlowStore.setState({nodes:[{id:'relay',type:'aircraftComponent',position:{x:0,y:0},data:{componentType:'mavlink_forwarder',params:{id:'qgc',name:'仿真机 MAVLink',qgc_port:14550,enabled:true,bidirectional:true}}}]});
+useFlowStore.setState({nodes:[{id:'relay',type:'aircraftComponent',position:{x:0,y:0},data:{componentType:'mavlink_forwarder',params:{id:'qgc',name:'QGC MAVLink',qgc_port:14550,enabled:true,bidirectional:true}}},{id:'toolbox-relay',type:'aircraftComponent',position:{x:0,y:0},data:{componentType:'mavlink_forwarder',params:{id:'px4-toolbox',name:'PX4 工具箱转发',qgc_port:14553,enabled:true,bidirectional:true}}}]});
 const metadata={version:1,parameters:[{name:'TEST_INT',category:'Standard',group:'Custom Firmware',shortDesc:'Custom mode',longDesc:'Firmware original description',type:'Int32',default:0,min:-20000,max:20000},{name:'MC_ROLLRATE_P',category:'Standard',group:'Multicopter Rate Control',shortDesc:'Roll rate P gain',longDesc:'Original firmware description',type:'Float',default:.15,min:.01,max:.5}]};
 const text=new TextEncoder();const metaBytes=text.encode(JSON.stringify(metadata));const generalBytes=text.encode(JSON.stringify({version:1,metadataTypes:[{type:1,uri:'https://metadata.test/params.json',fileCrc:crc32(metaBytes)}]}));
 const event=bytes=>channel.onmessage({kind:'data',sessionId:session,direction:'rx',timeMs:Date.now(),elapsedUs:1,peer:'127.0.0.1:40000',datagram:true,bytes:Array.from(bytes)});
@@ -45,7 +45,7 @@ try{
  await until('document.querySelector(".px4-status.connected")');
  await until('document.querySelector(".px4-metadata-status").textContent.includes("飞控匹配")');
  assert.equal(await ev(`Array.from(document.querySelectorAll('.px4-toolbox button')).some(b=>/^(连接|断开|连接设置|连接终端)$/.test(b.textContent))`),false,'no separate connection controls');
- assert.equal(await ev(`window.calls.find(c=>c.command==='tool_transport_open').args.network.localPort`),14550);
+ assert.equal(await ev(`window.calls.find(c=>c.command==='tool_transport_open').args.network.localPort`),14553);
  assert.equal(await ev(`window.calls.find(c=>c.command==='tool_transport_open').args.serial`),null);
  await click(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='读取全部')`);
  await until('document.querySelectorAll(".px4-param-table tbody tr").length===2');

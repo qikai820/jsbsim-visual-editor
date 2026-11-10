@@ -9,6 +9,26 @@
 - PX4 目标 SYS/COMP 从心跳识别；取得仿真机地址时只接受该主机的数据。识别后固定 UDP 回传来源，其他发送端不能改变参数、日志或终端指令的回传目标。
 - 转发须已在仿真机上运行，且支持双向回传。当前入口使用现有网络转发，不增加 USB Bulk 协议。UDP 端口被 QGC 等程序占用时会明确显示等待/绑定失败，不以端口复用分流报文；可在模型转发配置中分配不同端口。
 
+### 与 QGC 同时使用
+
+在仿真机模型中配置两个 `MAVLINK_FORWARD` 输入，共用同一个 USB 设备和波特率，
+目标均为电脑在仿真机网段的 IP。QGC 使用 14550；工具箱使用另一个空闲端口，
+例如 14553，并将该转发的标识设为 `px4-toolbox`。两路均启用双向转发。
+现有串口层只保留一个 USB 读取线程，通过多个订阅转发完整 MAVLink 帧。
+
+工具箱自动优先选择已启用的 `px4-toolbox` / `toolbox` 通道，手动选择的数据源
+仍优先。QGC 对应的普通 UDP 连接不要勾选“高延迟链路”；该选项会请求飞控启用
+高延迟遥测，不适用于这里的普通 UDP 转发。连接参数更改后需重新加载模型生效。
+
+```xml
+<input type="MAVLINK_FORWARD" id="qgc" source="USB" device="/dev/ttyACM0"
+       baud="921600" qgc_host="192.168.3.109" qgc_port="14550"
+       enabled="true" bidirectional="true"/>
+<input type="MAVLINK_FORWARD" id="px4-toolbox" source="USB" device="/dev/ttyACM0"
+       baud="921600" qgc_host="192.168.3.109" qgc_port="14553"
+       enabled="true" bidirectional="true"/>
+```
+
 ## 参数
 
 只读获取 PX4 参数，支持完整列表、缺失索引重试、全局搜索、收藏、固件类别/分组、前缀分组及本机自定义分组。`.params` 导出使用 QGC 的 SYS、COMP、名称、值、类型列格式，部分读取会在文件头标明。
@@ -35,6 +55,7 @@ Linux 桌面元数据网络获取/解压使用 `curl`、`xz`，缺少依赖时�
 
 ```bash
 node tests/px4-protocol.mjs
+node tests/px4-simulator-source.mjs
 node --experimental-websocket tests/px4-toolbox-ui.mjs
 cargo test --offline --manifest-path src-tauri/Cargo.toml --test px4_files --test serial_assistant
 npx tsc --noEmit

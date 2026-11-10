@@ -4,7 +4,7 @@ import { Px4Connection } from '../px4/connection';
 import { metadataLabel, parseMetadata, type MetadataCatalog } from '../px4/metadata';
 import { downloadLog, loadVehicleMetadata, readLogs, readParameters, type LogEntry, type Parameter, type UlogSummary } from '../px4/services';
 import { Px4Shell, type TerminalChannel } from '../px4/shell';
-import { simulatorPx4Sources } from '../px4/simulatorSource';
+import { selectSimulatorPx4Source, simulatorPx4AttachError, simulatorPx4Sources } from '../px4/simulatorSource';
 import { useFlowStore } from '../store/flowStore';
 import { useSignalMonitorStore } from '../store/signalMonitorStore';
 import NshTerminal from './NshTerminal';
@@ -23,7 +23,7 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
   const nodes = useFlowStore(s => s.nodes), instance = useSignalMonitorStore(s => s.instance);
   const sources = useMemo(() => simulatorPx4Sources(nodes), [nodes]);
   const [sourceKey, setSourceKey] = useState('');
-  const source = sources.find(s => s.key===sourceKey) || sources.find(s=>s.enabled) || sources[0];
+  const source = selectSimulatorPx4Source(sources, sourceKey);
   const sourceIdentity = JSON.stringify([instance,source]);
   const [sourceState, setSourceState] = useState('等待仿真机数据');
   const [tab, setTab] = useState<'parameters'|'logs'|'nsh'>('parameters');
@@ -94,7 +94,7 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
         await connection.open({network:{mode:'udp',host:'',port:source.port,localHost:'0.0.0.0',localPort:source.port}});
         if (disposed) {await connection.close();return;}
         setSourceState('仿真机转发通道已就绪'); refresh(v=>v+1);
-      } catch(e) { if(!disposed&&mounted.current)setSourceState('等待仿真机转发：'+String(e)); }
+      } catch(e) { if(!disposed&&mounted.current)setSourceState(simulatorPx4AttachError(source.port, e)); }
       finally { opening=false; }
     };
     void attach(); const timer=setInterval(()=>void attach(),2500);

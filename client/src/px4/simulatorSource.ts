@@ -9,3 +9,18 @@ export function simulatorPx4Sources(nodes: Array<{ id: string; data: { component
   // Existing simulator configurations may forward MAVLink without an editor node.
   return sources.length ? sources : [{ key:'simulator-default',id:'default',name:'仿真机 MAVLink 数据',port:14550,enabled:true,bidirectional:true,fingerprint:'default' }];
 }
+
+/** Keep QGC's listener independent when the model provides a toolbox stream. */
+export function selectSimulatorPx4Source(sources: SimulatorPx4Source[], selectedKey = ''): SimulatorPx4Source {
+  return sources.find(source => source.key === selectedKey)
+    || sources.find(source => source.enabled && ['toolbox', 'px4-toolbox'].includes(source.id))
+    || sources.find(source => source.enabled)
+    || sources[0];
+}
+
+export function simulatorPx4AttachError(port: number, error: unknown): string {
+  const message = String(error);
+  return /Address already in use|os error (?:98|48|10048)|地址.*(?:使用|占用)/i.test(message)
+    ? `UDP ${port} 已被其他程序占用。QGC 与工具箱需使用不同的仿真机转发目标端口，请选择工具箱专用转发通道。`
+    : '等待仿真机转发：' + message;
+}
