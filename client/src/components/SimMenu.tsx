@@ -106,9 +106,9 @@ function flightControllerModel(status: FlightControllerStatus): string {
     const vendor = status.vendor_name?.trim();
     return vendor && !model.toLowerCase().includes(vendor.toLowerCase()) ? `${vendor} ${model}` : model;
   }
-  const usbProduct = status.usb_connected ? status.usb_product?.trim() : '';
+  const usbProduct = !status.network_configured && status.usb_connected ? status.usb_product?.trim() : '';
   if (usbProduct && !/^(PX4|ArduPilot|CDC ACM Serial|USB Serial|USB CDC|NuttX CDC\/ACM)$/i.test(usbProduct)) return usbProduct;
-  if (status.autopilot === 12 && status.board_id_available && status.board_id != null) {
+  if (status.heartbeat_alive && status.autopilot === 12 && status.board_id_available && status.board_id != null) {
     const boardModel = PX4_BOARD_MODELS[status.board_id];
     return boardModel ? `${boardModel}（Board ID 推断）` : '未识别';
   }
@@ -1187,10 +1187,13 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
     setMcapPopupOpen(false);
   }, [showBoardStatus]);
 
+  const flightTransport = flightController?.network_configured ? '网口' : flightController ? 'USB' : '飞控';
+  const flightConnected = flightController?.network_configured
+    ? flightController.network_connected : flightController?.usb_connected;
   const flightConnection = !flightController || flightController.status_stale
-    ? '待更新' : flightController.usb_connected ? '已连接' : '未连接';
+    ? '待更新' : flightConnected ? '已连接' : '未连接';
   const flightConnectionClass = !flightController || flightController.status_stale
-    ? 'stale' : flightController.usb_connected ? 'online' : 'offline';
+    ? 'stale' : flightConnected ? 'online' : 'offline';
   const cpuPeak = healthFresh && cpuCores.length > 0 ? Math.max(...cpuCores) : null;
   const cpuSummary = cpuPeak == null ? '--' : `${cpuPeak.toFixed(1)}%`;
   const memorySummary = healthFresh && memory ? `${memory.percent.toFixed(1)}%` : '--';
@@ -1294,7 +1297,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
       {showBoardStatus && (
         <div className="sim-flight-controller-anchor" ref={flightControllerRef}>
           <button type="button" className={`sim-flight-controller ${flightConnectionClass}`}
-            aria-label={`飞控 USB ${flightConnection}，点击查看详情`}
+            aria-label={`飞控 ${flightTransport} ${flightConnection}，点击查看详情`}
             aria-expanded={flightControllerPopupOpen} aria-controls="sim-flight-controller-popover"
             onClick={() => {
               setPerformancePopupOpen(false);
@@ -1305,7 +1308,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
               <path d="M7 1.5v3m6-3v3M7 15.5v3m6-3v3m-11.5-11h3m-3 8h3m11-8h3m-3 8h3" />
               <circle cx="10" cy="10" r="2" />
             </svg>
-            <span>USB {flightConnection}</span>
+            <span>{flightTransport} {flightConnection}</span>
           </button>
           {flightControllerPopupOpen && (
             <div id="sim-flight-controller-popover" className="sim-flight-controller-popover" role="region" aria-label="飞控详细状态">
@@ -1317,11 +1320,17 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
               {flightController && <>
                 {flightController.status_stale && <p>状态上报已中断 {((flightController.status_age_ms ?? 0) / 1000).toFixed(1)} 秒，等待更新</p>}
                 <dl>
+                  <dt>当前链路</dt><dd>{flightTransport}{flightTransport === '网口' ? '（UDP HIL）' : ''}</dd>
+                  <dt>网口连接</dt><dd>{flightController.status_stale ? '待更新' : flightController.network_configured == null ? '未上报' : flightController.network_connected ? '已连接' : flightController.network_configured ? '等待飞控数据' : '未启用'}</dd>
+                  {flightController.network_configured && <>
+                    <dt>飞控地址</dt><dd>{!flightController.status_stale && flightController.network_connected && flightController.network_peer?.trim() || '--'}</dd>
+                    <dt>本地 HIL 端口</dt><dd>{!flightController.status_stale && flightController.network_local_port || '--'}</dd>
+                  </>}
                   <dt>飞控型号</dt><dd>{flightControllerModel(flightController)}</dd>
                   <dt>Board ID</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale && flightController.board_id_available && flightController.board_id != null ? `0x${flightController.board_id.toString(16).toUpperCase().padStart(4, '0')} (${flightController.board_id})` : '--'}</dd>
                   <dt>USB 产品名</dt><dd>{(!flightController.status_stale && flightController.usb_connected && flightController.usb_product?.trim()) || '--'}</dd>
                   <dt>USB VID:PID</dt><dd>{flightControllerUsbId(flightController)}</dd>
-                  <dt>设备路径</dt><dd>{(!flightController.status_stale && flightController.usb_connected && flightController.device_path?.trim()) || '--'}</dd>
+                  <dt>USB 设备路径</dt><dd>{(!flightController.status_stale && flightController.usb_connected && flightController.device_path?.trim()) || '--'}</dd>
                   <dt>飞控固件</dt><dd>{flightController.heartbeat_alive && !flightController.status_stale ? flightControllerFirmware(flightController.autopilot) : '--'}</dd>
                   <dt>USB 连接</dt><dd>{flightController.status_stale ? '待更新' : flightController.usb_connected ? '已连接' : '未连接'}</dd>
                   <dt>心跳</dt><dd>{flightController.status_stale ? '待更新' : flightController.heartbeat_alive ? '在线' : '离线'}</dd>
@@ -1364,6 +1373,9 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
                   <dt>已录制数据</dt><dd>{formatMcapBytes(mcapStatus.recordedBytes)}</dd>
                   {typeof mcapStatus.bufferCapacityBytes === 'number' && mcapStatus.bufferCapacityBytes > 0 && <>
                     <dt>缓存占用 / 容量</dt><dd>{formatMcapBytes(mcapStatus.bufferUsedBytes ?? 0)} / {formatMcapBytes(mcapStatus.bufferCapacityBytes)}</dd>
+                    {typeof mcapStatus.writeThresholdBytes === 'number' && mcapStatus.writeThresholdBytes > 0 && <>
+                      <dt>有效写入阈值</dt><dd>{formatMcapBytes(mcapStatus.writeThresholdBytes)}</dd>
+                    </>}
                   </>}
                   <dt>录制速度</dt><dd>{mcapRate == null ? (mcapStatus.recording ? '计算中' : '--') : formatNetworkRate(mcapRate)}</dd>
                   <dt>SD 写入</dt><dd>{mcapWriteState}</dd>

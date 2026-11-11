@@ -8,6 +8,7 @@ import { isMorphQuad, MORPHQUAD_ARMS } from '../../sim/sceneMorphQuad';
 import FlightSceneCanvas, { type SceneLayers } from './FlightSceneCanvas';
 import SceneEditorPanel from './SceneEditorPanel';
 import { useSceneEditor } from './useSceneEditor';
+import { useSceneModelOrigin } from './useSceneModelOrigin';
 import './flightScene.css';
 
 const MODES: [CameraMode, string][] = [['free', '自由'], ['follow', '跟随'], ['ground', '地面'], ['cockpit', '机载'], ['fleet', '编队']];
@@ -110,6 +111,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const now = performance.now();
   const entry = feed.aircraft.get(selected), pose = entry?.latest;
   const selectedModel = pose?.model || slots[selected] || '';
+  const modelOrigin = useSceneModelOrigin(selectedModel, !demo, editor.applyModelOrigin);
   useEffect(() => {
     onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel });
     return () => onMonitorTargetChange?.(null);
@@ -122,8 +124,8 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   useEffect(() => {
     const geo = editor.document.georeference;
     if (geo) { if (feed.origin !== geo) feed.origin = geo; }
-    else if (feed.origin && ground !== null) editor.updateDocument({ georeference: { ...feed.origin, altitude: ground } });
-  }, [feed, revision, editor.document.georeference, ground]);
+    else if (demo && feed.origin && ground !== null) editor.applyModelOrigin({ ...feed.origin, altitude: ground });
+  }, [feed, revision, editor.document.georeference, ground, demo, editor.applyModelOrigin]);
   useEffect(() => {
     if (!import.meta.env.DEV || import.meta.env.VITE_SCENE_DIAGNOSTICS !== '1') return;
     const publish = () => {
@@ -198,7 +200,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         <MiniMap feed={feed} selected={selected} onSelect={setSelected} />
         <span className="scene-view-hint">拖动旋转 · 右键平移 · 滚轮缩放</span>
       </div><Trend history={entry?.history ?? []} selected={selected} /></main>
-      {editor.enabled ? <SceneEditorPanel model={selectedModel} sceneLoaded={selectedFresh && (propertyAgeMs(pose?.sceneStatusSampleAt) ?? Infinity) < 2000 ? pose?.sceneLoaded ?? null : null} sceneRevision={pose?.sceneRevision ?? null} sceneContacts={pose?.sceneContacts ?? null} editor={editor} groundAltitude={ground} onGroundLoaded={setGroundAltitude} /> : <aside className="scene-inspector"><header><strong>{selected} · {pose?.model || slots[selected] || '未选择'}</strong><span className={selectedFresh ? 'live' : ''}>{demo ? '演示' : selectedFresh ? '实时' : '等待'}</span></header>
+      {editor.enabled ? <SceneEditorPanel model={selectedModel} modelOrigin={demo ? undefined : modelOrigin} sceneLoaded={selectedFresh && (propertyAgeMs(pose?.sceneStatusSampleAt) ?? Infinity) < 2000 ? pose?.sceneLoaded ?? null : null} sceneRevision={pose?.sceneRevision ?? null} sceneContacts={pose?.sceneContacts ?? null} editor={editor} groundAltitude={ground} onGroundLoaded={setGroundAltitude} /> : <aside className="scene-inspector"><header><strong>{selected} · {pose?.model || slots[selected] || '未选择'}</strong><span className={selectedFresh ? 'live' : ''}>{demo ? '演示' : selectedFresh ? '实时' : '等待'}</span></header>
         <section><h3>飞行状态</h3><div className="scene-metrics">
           <Metric label="离地高度" value={agl} unit="m" /><Metric label="地速" value={pose?.speed} unit="m/s" />
           <Metric label="海拔高度" value={pose?.altitude} unit="m" /><Metric label="航向" value={pose?.yaw} unit="°" />

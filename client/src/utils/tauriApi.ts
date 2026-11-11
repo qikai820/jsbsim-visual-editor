@@ -324,6 +324,10 @@ export async function simRestart(): Promise<any> {
 }
 
 export interface FlightControllerStatus {
+  network_configured?: boolean;
+  network_connected?: boolean;
+  network_peer?: string;
+  network_local_port?: number;
   usb_connected: boolean;
   device_path?: string;
   heartbeat_alive: boolean;
@@ -372,6 +376,7 @@ export interface McapStatus {
   recordedBytes: number;
   writtenBytes: number;
   bufferCapacityBytes?: number;
+  writeThresholdBytes?: number;
   bufferUsedBytes?: number;
   bufferPeakBytes?: number;
   recycledBytes?: number;

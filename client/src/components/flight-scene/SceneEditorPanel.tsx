@@ -1,20 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SceneEditor } from './useSceneEditor';
+import type { SceneModelOrigin } from './useSceneModelOrigin';
 import { defaultSceneTransform, type Triple } from '../../sim/sceneDocument';
 import { isTauri } from '../../utils/tauriApi';
 
-function NumberField({ label, value, min = -1e7, onChange }: { label: string; value: number; min?: number; onChange: (n: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
+function NumberField({ label, value, min = -1e7, max = 1e7, digits = 4, step = .1, onChange }: {
+  label: string; value?: number; min?: number; max?: number; digits?: number; step?: number; onChange: (n: number) => void;
+}) {
+  const formatted = value === undefined ? '' : String(Number(value.toFixed(digits)));
+  const [draft, setDraft] = useState(formatted);
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (document.activeElement !== input.current) setDraft(String(Number(value.toFixed(4)))); }, [value]);
-  return <input ref={input} aria-label={label} type="number" step="0.1" min={min} max={1e7} value={draft}
+  useEffect(() => { if (document.activeElement !== input.current) setDraft(formatted); }, [formatted]);
+  return <input ref={input} aria-label={label} type="number" step={step} min={min} max={max} value={draft} placeholder="等待模型配置"
     onChange={event => { setDraft(event.target.value); const n = event.target.valueAsNumber;
-      if (Number.isFinite(n) && n >= min && n <= 1e7) onChange(n); }}
-    onBlur={() => setDraft(String(Number(value.toFixed(4))))} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} />;
+      if (Number.isFinite(n) && n >= min && n <= max) onChange(n); }}
+    onBlur={() => setDraft(formatted)} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} />;
 }
 
-export default function SceneEditorPanel({ model, sceneLoaded, sceneRevision, sceneContacts, editor, groundAltitude, onGroundLoaded }: {
+export default function SceneEditorPanel({ model, modelOrigin, sceneLoaded, sceneRevision, sceneContacts, editor, groundAltitude, onGroundLoaded }: {
   model: string; sceneLoaded: number | null; sceneRevision: number | null; sceneContacts: number | null;
+  modelOrigin?: SceneModelOrigin;
   editor: SceneEditor; groundAltitude: number | null; onGroundLoaded: (altitude: number | null) => void;
 }) {
   const modelInput = useRef<HTMLInputElement>(null), folderInput = useRef<HTMLInputElement>(null), sceneInput = useRef<HTMLInputElement>(null);
@@ -30,7 +35,8 @@ export default function SceneEditorPanel({ model, sceneLoaded, sceneRevision, sc
   useEffect(() => { folderInput.current?.setAttribute('webkitdirectory', ''); }, []);
   return <aside className="scene-inspector scene-editor" aria-label="场景编辑器">
     <header><strong>场景编辑</strong><button className="scene-action" onClick={() => editor.setEnabled(false)}>完成</button></header>
-    {editor.busy && <p className="scene-editor-message" role="status">正在读取模型与贴图…</p>}
+    {editor.busy && <div className="scene-editor-message"><p role="status">{editor.busyMessage}</p>
+      {editor.canCancel && <button className="scene-action" onClick={editor.cancel}>取消加载</button>}</div>}
     {editor.error && <p className="scene-editor-message scene-editor-error" role="alert">{editor.error}</p>}
     {editor.notice && <p className="scene-editor-message" role="status">{editor.notice}</p>}
     <fieldset disabled={editor.busy}>
@@ -54,8 +60,16 @@ export default function SceneEditorPanel({ model, sceneLoaded, sceneRevision, sc
       </section>
       <section><h3>仿真碰撞地图</h3>
         <p className="scene-muted">固定经纬度原点，1 单位 = 1 米。海拔使用仿真 WGS84 椭球高基准；地图必须使用同一基准。</p>
+        {modelOrigin && <div className="scene-muted">
+          {modelOrigin.loading ? <p>正在从 {model} 读取初始位置…</p>
+            : modelOrigin.error ? <><p role="alert">{modelOrigin.error}</p><button className="scene-action" onClick={modelOrigin.refresh}>重新读取模型基准</button></>
+            : modelOrigin.origin ? editor.document.georeference === modelOrigin.origin ? <p>已从 {model} 的初始状态自动获取地图基准；地面海拔来自 {modelOrigin.groundSource}。</p>
+              : <><p>当前使用场景保存或手动设置的基准。</p><button className="scene-action" onClick={() => editor.applyModelOrigin(modelOrigin.origin, true)}>使用 {model} 的模型基准</button></>
+            : <p>选择仿真模型后自动获取初始位置。</p>}
+        </div>}
         {(['latitude', 'longitude', 'altitude'] as const).map((key, i) => <label key={key}>{['原点纬度 / °', '原点经度 / °', '基准海拔 / m'][i]}
-          <NumberField label={['原点纬度', '原点经度', '基准海拔'][i]} value={editor.document.georeference?.[key] ?? 0}
+          <NumberField label={['原点纬度', '原点经度', '基准海拔'][i]} value={editor.document.georeference?.[key]}
+            digits={i < 2 ? 7 : 4} step={i < 2 ? .0000001 : .01} min={-[90, 180, 100000][i]} max={[90, 180, 100000][i]}
             onChange={value => editor.updateDocument({ georeference: { latitude: 0, longitude: 0, altitude: 0, ...editor.document.georeference, [key]: value } })} /></label>)}
         <label>飞机包络半径 / m<NumberField label="飞机包络半径" min={.01} value={editor.document.collisionRadius ?? .5} onChange={value => editor.updateDocument({ collisionRadius: value })} /></label>
         <p className="scene-muted">运行端：{sceneLoaded === 1 ? `已加载版本 ${sceneRevision ?? "未知"} · ${editor.collisionVersion !== null && editor.collisionVersion === sceneRevision ? "与本次导出一致" : "当前布局尚未核对"} · 接触 ${sceneContacts ?? "未知"}` : sceneLoaded === -1 ? "地图加载失败" : sceneLoaded === 0 ? "未加载碰撞地图" : "状态未知 / 数据过期"}</p>

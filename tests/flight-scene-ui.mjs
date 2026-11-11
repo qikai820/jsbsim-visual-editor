@@ -257,6 +257,10 @@ try {
   await send('Page.navigate', { url: `${base}/?workspace=scene` });
   await connectRoots();
   await until(`document.querySelector('[data-testid=flight-scene]')`);
+  assert.ok(await evaluate(`!!(document.querySelector('.sim-runtime-metrics') && document.querySelector('.sim-flight-controller') && document.querySelector('.sim-mcap-status'))`), 'scene retains board performance, flight controller and MCAP status');
+  await evaluate(`document.querySelector('.sim-flight-controller').click()`);
+  assert.ok(await evaluate(`!!document.querySelector('[aria-label="飞控详细状态"]')`), 'flight controller details open in scene mode');
+  await evaluate(`document.querySelector('[aria-label="关闭飞控信息"]').click()`);
   await clickText('演示场景');
   await until(`document.querySelectorAll('[data-aircraft]').length===8`);
   await new Promise(r => setTimeout(r, 1500));
@@ -266,6 +270,7 @@ try {
   await evaluate(`document.querySelector('.workspace-menu-trigger').click()`);
   await clickText('◈ 飞行视景');
   await until(`document.querySelector('[data-testid=flight-scene]')`);
+  assert.ok(await evaluate(`!!(document.querySelector('.sim-flight-controller') && document.querySelector('.sim-runtime-metrics') && document.querySelector('.sim-mcap-status'))`), 'board status remains available after returning to scene');
   await until(`(${assetStates}).length===5 && (${assetStates}).every(asset=>asset.state==='ready')`);
   // A missing bundle file must leave a usable fallback, and a fresh viewport
   // must recover after the file becomes available again.

@@ -1237,6 +1237,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             // launch target when a model has been loaded.
             selectedModelFromLibrary={librarySimulationModel || remoteModelDirectory || loadedModelDirectory || (hasLoadedModel ? aircraft.name : '')} />
             : workspace === 'multi' ? <SimMenu statusOnly onLog={onLog} fleetControls={fleetControls} />
+            : workspace === 'scene' ? <><button type="button" onClick={() => onSelectWorkspace?.('multi')}>{isZh ? '多机控制' : 'Fleet Controls'}</button><SimMenu statusOnly onLog={onLog} /></>
             : <button type="button" onClick={() => onSelectWorkspace?.('multi')}>{isZh ? '多机控制' : 'Fleet Controls'}</button>}
         </div>
         {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}

@@ -13,7 +13,7 @@ const rootsModule = new URL(`../client/${name}-roots.ts`, import.meta.url);
 const profile = await mkdtemp(path.join(tmpdir(), 'flight-scene-chrome-'));
 await writeFile(html, `<html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="/${name}.tsx"></script></body></html>`);
 await writeFile(rootsModule, `export {_roots as roots} from '@react-three/fiber';`);
-await writeFile(module, `import React from 'react';import{createRoot}from'react-dom/client';import{_roots}from'@react-three/fiber';import FlightScene from './src/components/flight-scene/FlightScene';import './src/App.css';window.__sceneRoots=_roots;function Harness(){return <div style={{display:'flex',height:'100vh'}}><FlightScene onClose={()=>{}} /></div>}createRoot(document.getElementById('root')).render(<Harness/>);`);
+await writeFile(module, `import React from 'react';import{createRoot}from'react-dom/client';import{_roots}from'@react-three/fiber';import FlightScene from './src/components/flight-scene/FlightScene';import{sceneGroundFromInitialXml}from'./src/components/flight-scene/useSceneModelOrigin';import './src/App.css';window.__sceneRoots=_roots;window.__readSceneGround=sceneGroundFromInitialXml;function Harness(){return <div style={{display:'flex',height:'100vh'}}><FlightScene onClose={()=>{}} slots={{'01':'voliro_t','02':'F450','03':'slow','04':'broken'}} /></div>}createRoot(document.getElementById('root')).render(<Harness/>);`);
 const chrome = spawn('/usr/bin/google-chrome-stable', ['--headless=new', '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-first-run', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
 let ws;
 try {
@@ -39,7 +39,22 @@ try {
     window.__TAURI_INTERNALS__={transformCallback(callback){callbacks.set(++id,callback);return id},unregisterCallback(n){callbacks.delete(n)},invoke:async(command,args)=>{
       if(command==='plugin:event|listen'){const n=++id;if(!window.__events.has(args.event))window.__events.set(args.event,new Map());window.__events.get(args.event).set(n,callbacks.get(args.handler));return n}
       if(command==='plugin:event|unlisten'){window.__events.get(args.event)?.delete(args.eventId);return}
-      if(command==='scene_upload_collision'){if(window.__failSync)throw Error('readback mismatch');return{path:'jsbsim/aircraft/ball/scene.collision',revision:Number(args.content.split(' ')[1])}}
+      if(command==='ftp_list_xml_parent')return{exists:true,files:window.__noGround?['reset.xml']:['initfile.xml','reset.xml']};
+      if(command==='ftp_download_xml')return{path:args.path,content:window.__noGround?'<initialize/>':'<initialize><elevation unit="M">'+(args.path.includes('/voliro_t/')?582.57:0)+'</elevation><altitude unit="M">0.5</altitude></initialize>'};
+      if(command==='ftp_download_sim_config'){
+        window.__configReads=(window.__configReads||0)+1;
+        if(args.path.includes('/broken.json'))throw Error('fixture: model config unavailable');
+        const initial=args.path.includes('/voliro_t.json')?{latitudeDeg:33.8935374113,longitudeDeg:108.9973385,altitudeM:583.07282607}:{latitudeDeg:0,longitudeDeg:0,altitudeM:0};
+        if(args.path.includes('/slow.json'))await new Promise(resolve=>window.__releaseConfig=resolve);
+        return{path:args.path,content:JSON.stringify({initial})};
+      }
+      if(command==='scene_upload_collision'){
+        let index=0;const emit=(stage,transferred)=>callbacks.get(args.onProgress.id)?.({index:index++,message:{stage,transferred,total:1048576}});
+        window.__syncProgress=emit;emit('upload',524288);
+        if(window.__holdSync)await new Promise(resolve=>window.__releaseSync=resolve);
+        emit('verify',1048576);callbacks.get(args.onProgress.id)?.({index,end:true});
+        if(window.__failSync)throw Error('readback mismatch');return{path:'jsbsim/aircraft/ball/scene.collision',revision:Number(args.content.split(' ')[1])}
+      }
       if(command==='scene_import_directory')return window.__nativeDirectory||null;return [];
     }};
     const create=URL.createObjectURL.bind(URL);URL.createObjectURL=blob=>{if(blob.type==='application/json')window.__saved=blob;if(blob.type==='application/octet-stream')window.__collision=blob;return create(blob)};
@@ -66,13 +81,58 @@ try {
   const rootState = `window.__sceneRoots.get(document.querySelector('canvas')).store.getState()`;
   const objectState = `(()=>{const s=${rootState},id=document.querySelector('[data-scene-object][aria-pressed=true]')?.dataset.sceneObject,o=s.scene.getObjectByName('scene-object-'+id);return o?{id,p:o.position.toArray(),r:[o.rotation.x,o.rotation.y,o.rotation.z],s:o.scale.toArray(),visible:o.visible}:null})()`;
   const setNumber = (label, value) => evaluate(`(()=>{const i=document.querySelector('input[aria-label="${label}"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,'${value}');i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  const geoFields = `['原点纬度','原点经度','基准海拔'].map(label=>document.querySelector('input[aria-label="'+label+'"]').value)`;
+  // Model configuration fills the datum before any telemetry is received.
+  await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
+  const modelGeo = await evaluate(geoFields);
+  assert(Math.abs(Number(modelGeo[0])-34.07189)<1e-6,'legacy geocentric model latitude is converted to WGS84 geodetic');
+  assert.equal(modelGeo[1],'108.9973385');assert.equal(modelGeo[2],'582.57','map datum is terrain elevation, never the aircraft CG altitude');
+  assert.equal(await evaluate(`window.__readSceneGround('<initialize><elevation unit="FT">100</elevation></initialize>')`),30.48);
+  assert.equal(await evaluate(`window.__readSceneGround('<initialize><elevation>0</elevation></initialize>')`),0);
+  assert.equal(await evaluate(`window.__readSceneGround('<initialize><altitude unit="M">583</altitude></initialize>')`),null,'CG altitude is never a substitute for missing terrain');
+  assert(await evaluate(`(()=>{try{window.__readSceneGround('<initialize><elevation unit="bad">1</elevation></initialize>');return false}catch{return true}})()`));
+  await evaluate(`document.querySelector('[data-aircraft="02"]').click()`);
+  await until(`document.body.innerText.includes('已从 F450 的初始状态自动获取')`);
+  assert.deepEqual(await evaluate(geoFields),['0','0','0'],'valid zero coordinates are model values');
+  await evaluate(`document.querySelector('[data-aircraft="03"]').click()`);
+  await until(`window.__releaseConfig && document.body.innerText.includes('正在从 slow 读取初始位置')`);
+  assert.deepEqual(await evaluate(geoFields),['','',''],'pending config is never represented by zero coordinates');
+  await evaluate(`document.querySelector('[data-aircraft="01"]').click()`);
+  await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
+  await evaluate(`window.__releaseConfig()`);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  assert.deepEqual(await evaluate(geoFields),modelGeo,'late config from another model cannot replace the selected datum');
+  await evaluate(`document.querySelector('[data-aircraft="04"]').click()`);
+  await until(`document.querySelector('.scene-editor [role=alert]')?.textContent.includes('model config unavailable')`);
+  assert.deepEqual(await evaluate(geoFields),['','',''],'failed config does not silently default to zero');
+  await evaluate(`document.querySelector('[data-aircraft="01"]').click()`);
+  await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
+  await setNumber('原点纬度',35);
+  await evaluate(`document.querySelector('[data-aircraft="02"]').click()`);
+  await until(`document.body.innerText.includes('使用 F450 的模型基准')`);
+  assert.equal((await evaluate(geoFields))[0],'35','a manually edited datum remains fixed across model selection');
+  await clickText('使用 F450 的模型基准');
+  await until(`document.body.innerText.includes('已从 F450 的初始状态自动获取')`);
+  await evaluate(`document.querySelector('[data-aircraft="01"]').click()`);
+  await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
+  await evaluate(`window.__noGround=true;document.querySelector('[data-aircraft="02"]').click()`);
+  await until(`document.querySelector('.scene-editor [role=alert]')?.textContent.includes('elevation')`);
+  assert.deepEqual(await evaluate(geoFields),['','',''],'missing ground is reported instead of copying aircraft ASL altitude');
+  await evaluate(`window.__noGround=false`);await clickText('重新读取模型基准');
+  await until(`document.body.innerText.includes('已从 F450 的初始状态自动获取')`);
+  await evaluate(`document.querySelector('[data-aircraft="01"]').click()`);
+  await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
+  await screenshot('/tmp/jsbsim-scene-model-origin.png');
   assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),34);
   const builtinCases = [
     ['builtin-runway', [45,.2,-90], [0,15,0], [1.1,1,1.2]],
     ['builtin-hangar', [-30,1,-55], [0,25,0], [1.2,.9,.8]],
     ['builtin-tree-1', [-90,2,-12], [8,35,5], [1.5,1.8,.9]],
   ];
-  const selectObject = id => evaluate(`document.querySelector('[data-scene-object="${id}"]').click()`);
+  const selectObject = async id => {
+    await evaluate(`document.querySelector('[data-scene-object="${id}"]').click()`);
+    await until(`document.querySelector('[data-scene-object="${id}"]').getAttribute('aria-pressed')==='true'`);
+  };
   const clickWorldPoint = async (id, point) => {
     const position=await evaluate(`(()=>{const s=${rootState},o=s.scene.getObjectByName('scene-object-${id}'),r=s.gl.domElement.getBoundingClientRect(),p=o.localToWorld(s.camera.position.clone().set(${point.join(',')})).project(s.camera);return{x:r.x+(p.x+1)*r.width/2,y:r.y+(1-p.y)*r.height/2}})()`);
     await send('Input.dispatchMouseEvent',{type:'mouseMoved',...position});
@@ -84,6 +144,8 @@ try {
     await selectObject(id);
     for(const [label,values] of [['位置',position],['旋转',rotation],['缩放',scale]])
       for(let i=0;i<3;i++)await setNumber(label+' '+['X','Y','Z'][i],values[i]);
+    // React commits the inspector before the next Three.js render updates its objects.
+    await until(`(()=>{const o=${objectState};return o?.id===${JSON.stringify(id)}&&JSON.stringify(o.p)===${JSON.stringify(JSON.stringify(position))}&&JSON.stringify(o.s)===${JSON.stringify(JSON.stringify(scale))}&&o.r.every((n,i)=>Math.abs(n-${JSON.stringify(rotation)}[i]*Math.PI/180)<1e-6)})()`);
     const actual=await evaluate(objectState);assert.deepEqual(actual.p,position);assert.deepEqual(actual.s,scale);
     assert.ok(actual.r.every((n,i)=>Math.abs(n-rotation[i]*Math.PI/180)<1e-6));
     await clickText('定位物体');await new Promise(r=>setTimeout(r,150));
@@ -154,6 +216,20 @@ try {
   await until(`document.querySelector('.scene-editor-error')?.textContent.includes('无法解码')`);
   assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=model]').length`), beforeFailure);
 
+  // A missing texture callback must be cancellable and time out. Late decode
+  // results are abandoned, never committed over the scene or a later retry.
+  await evaluate(`window.__realFetch=window.fetch;window.__pendingTextures=[];window.fetch=(url,options)=>String(url).startsWith('data:image/')?new Promise(resolve=>window.__pendingTextures.push(()=>resolve(window.__realFetch(url,options)))):window.__realFetch(url,options)`);
+  await importFiles(folder, '导入模型目录');
+  await until(`window.__pendingTextures.length===1 && document.querySelector('[role=status]')?.textContent.includes('airport/models/hangar.gltf')`);
+  await clickText('取消加载');
+  await until(`!document.querySelector('fieldset').disabled && document.querySelector('.scene-editor-error')?.textContent.includes('已取消')`);
+  await evaluate(`window.__realSetTimeout=window.setTimeout;window.setTimeout=(fn,ms,...args)=>window.__realSetTimeout(fn,ms===60000?100:ms,...args)`);
+  await importFiles(folder, '导入模型目录');
+  await until(`!document.querySelector('fieldset').disabled && document.querySelector('.scene-editor-error')?.textContent.includes('超过 60 秒')`);
+  await evaluate(`window.setTimeout=window.__realSetTimeout;window.fetch=window.__realFetch;window.__pendingTextures.splice(0).forEach(release=>release())`);
+  await new Promise(resolve=>setTimeout(resolve,200));
+  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=model]').length`),beforeFailure,'late cancelled/timed-out models cannot replace the scene');
+
   // Set a nonzero reference elevation, verifying gizmo and object world frames.
   await evaluate(`document.querySelector('.scene-settings').open=true`);
   await setNumber('参考地面海拔', 30);
@@ -179,6 +255,7 @@ try {
   await send('Page.reload');await until(`document.querySelector('.scene-empty')`);await clickText('编辑场景');
   await importFiles([portable], '加载场景文件');
   await until(`document.querySelectorAll('[data-scene-source=model]').length===2 && !document.querySelector('fieldset').disabled`);
+  assert.deepEqual(await evaluate(geoFields),['30','120','30'],'loading a saved scene preserves its independent datum');
   await evaluate(`document.querySelector('[data-scene-source=model]').click()`);
   assert.deepEqual((await evaluate(objectState)).p, imported[0].position, 'fresh page restores positions from the saved file');
   assert.deepEqual((await evaluate(objectState)).s, imported[0].scale);
@@ -204,9 +281,19 @@ try {
   assert.equal(await evaluate(`(${rootState}).scene.getObjectByName('scene-object-'+${JSON.stringify(imported[0].id)}).parent.position.y`),baseline,'telemetry cannot move scenery');
   await setNumber('飞机包络半径',.7);
   await until(`document.body.innerText.includes('当前布局尚未核对')`);
-  await evaluate(`window.__failSync=true`);await clickText('同步到 ball（读回校验）');
+  await evaluate(`window.__holdSync=true;window.__failSync=true`);await clickText('同步到 ball（读回校验）');
+  await until(`document.querySelector('[role=status]')?.textContent.includes('正在上传碰撞地图：0.50 / 1.00 MB')`);
+  assert(!await evaluate(`document.body.innerText.includes('正在读取模型与贴图')`),'collision sync is never labelled as model loading');
+  assert(!await evaluate(`document.body.innerText.includes('取消加载')`),'pending remote writes cannot be locally abandoned');
+  await evaluate(`window.__syncProgress('verify',0)`);
+  await until(`document.querySelector('[role=status]')?.textContent.includes('正在读回校验碰撞地图')`);
+  await screenshot('/tmp/jsbsim-scene-sync-progress.png');
+  await evaluate(`window.__releaseSync()`);
   await until(`document.querySelector('.scene-editor-error')?.textContent.includes('readback mismatch')`);
+  assert(!await evaluate(`document.querySelector('fieldset').disabled`),'failed sync restores editing');
   assert(!await evaluate(`document.body.innerText.includes('已上传并读回校验')`),'failed readback is never reported as success');
+  await evaluate(`window.__holdSync=false;window.__failSync=false`);await clickText('同步到 ball（读回校验）');
+  await until(`document.body.innerText.includes('已上传并读回校验') && !document.querySelector('fieldset').disabled`);
   await until(`document.body.innerText.includes('状态未知 / 数据过期')`);
   // Disposal releases geometry and textures after the last owner is deleted.
   await evaluate(`(()=>{const s=${rootState},id=document.querySelector('[data-scene-object][aria-pressed=true]').dataset.sceneObject;window.__disposed={geometry:0,texture:0};s.scene.getObjectByName('scene-object-'+id).traverse(o=>{o.geometry?.addEventListener('dispose',()=>window.__disposed.geometry++);o.material?.map?.addEventListener('dispose',()=>window.__disposed.texture++)})})()`);

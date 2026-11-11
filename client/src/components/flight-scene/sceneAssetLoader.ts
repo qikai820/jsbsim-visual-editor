@@ -1,6 +1,7 @@
 import { LoadingManager, type Object3D, type Material, type Texture } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { resolveSceneResource, sceneAssetBytes, sceneAssetJson, type SceneAsset } from '../../sim/sceneDocument';
+import { waitForSceneTask } from './sceneTask';
 
 const ownedScenes = new WeakMap<Object3D, Object3D[]>();
 export function disposeSceneAsset(root: Object3D) {
@@ -20,7 +21,7 @@ export function disposeSceneAsset(root: Object3D) {
   ownedScenes.delete(root);
 }
 
-export async function loadSceneAsset(asset: SceneAsset): Promise<Object3D> {
+export async function loadSceneAsset(asset: SceneAsset, signal = new AbortController().signal): Promise<Object3D> {
   const json = sceneAssetJson(asset);
   for (const extension of json.extensionsRequired ?? []) {
     if (['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_texture_basisu'].includes(extension)) {
@@ -43,7 +44,11 @@ export async function loadSceneAsset(asset: SceneAsset): Promise<Object3D> {
     if (!data) throw new Error(`缺少资源：${path}`);
     return data;
   });
-  const gltf = await new GLTFLoader(manager).parseAsync(sceneAssetBytes(asset).buffer as ArrayBuffer, '');
+  const gltf = await waitForSceneTask(
+    new GLTFLoader(manager).parseAsync(sceneAssetBytes(asset).buffer as ArrayBuffer, ''),
+    signal, `读取 ${asset.entry} 的模型与贴图`,
+    late => late.scenes.forEach(disposeSceneAsset),
+  );
   // Only the default scene is displayed. Other scenes may share resources, so
   // include their resources in the owner's disposal without reparenting them.
   const root = gltf.scene;

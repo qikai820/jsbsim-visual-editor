@@ -1089,10 +1089,13 @@ async fn ftp_upload_file(path: String, content: String) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-async fn scene_upload_collision(model: String, content: String) -> Result<serde_json::Value, String> {
-    let revision = scene_collision::validate(&content)?;
+async fn scene_upload_collision(model: String, content: String,
+    on_progress: tauri::ipc::Channel<ftp_sync::AssetUploadProgress>) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        ftp_sync::upload_model_asset(&model, "scene.collision", content.as_bytes())?;
+        let revision = scene_collision::validate(&content)?;
+        ftp_sync::upload_model_asset_with_progress(&model, "scene.collision", content.as_bytes(), |progress| {
+            let _ = on_progress.send(progress);
+        })?;
         Ok(serde_json::json!({ "revision": revision, "path": format!("jsbsim/aircraft/{model}/scene.collision"), "readback_verified": true, "active": false }))
     }).await.map_err(|e| e.to_string())?
 }

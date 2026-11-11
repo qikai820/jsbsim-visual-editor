@@ -190,6 +190,20 @@ try {
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'MCAP Logging').click()`);
   const rate = `[...document.querySelectorAll('.sim-config-field')].find(el => el.textContent.includes('State and critical field rate'))?.querySelector('input')`;
   await until(`${rate}.value === '500'`);
+  const threshold = `[...document.querySelectorAll('.sim-config-field')].find(el => el.querySelector('span')?.textContent === 'Write threshold')?.querySelector('input')`;
+  const capacity = `[...document.querySelectorAll('.sim-config-field')].find(el => el.querySelector('span')?.textContent === 'Log buffer capacity')?.querySelector('input')`;
+  await until(`${threshold}.value === '6'`);
+  assert.equal(await evaluate(`${capacity}.value`), '500', 'old configs retain the buffer capacity and receive the default threshold');
+  for (const invalid of ['0', '500']) {
+    await evaluate(`(() => {const field=${threshold};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,${JSON.stringify(invalid)});field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await evaluate(`document.querySelector('.sim-config-dialog footer .primary').click()`);
+    await until(`document.querySelector('.sim-config-dialog footer').textContent.includes('Write threshold must be at least')`);
+    assert.equal(await evaluate('window.__uploads.length'),0,'invalid thresholds cannot be uploaded');
+  }
+  await evaluate(`(() => {const field=${threshold};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'400');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await evaluate(`(() => {const field=${capacity};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'8');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await until(`${threshold}.value === '7.9375'`);
+  await evaluate(`(() => {const field=${threshold};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'6.5');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await evaluate(`(() => {
     const field = ${rate};
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, '400');
@@ -208,12 +222,15 @@ try {
   await until(`!${save}.disabled`);
   assert.match(await evaluate(`document.querySelector('.sim-config-dialog footer').textContent`), /Save failed; edits retained.*lock wait timed out/);
   assert.equal(await evaluate(`${rate}.value`), '400');
+  assert.equal(await evaluate(`${threshold}.value`), '6.5', 'failed saves retain the threshold edit');
   await evaluate(`${save}.click()`);
   await until('window.__uploads.length === 2');
   await evaluate('window.__saveSuccess()');
   await until(`${save}.textContent === 'Save to Simulator'`);
   assert.equal(await evaluate(`${save}.disabled`), true);
   assert.equal(await evaluate('JSON.parse(window.__stored).mcap.rateHz'), 400);
+  assert.equal(await evaluate('JSON.parse(window.__stored).mcap.writeThresholdMb'), 6.5);
+  assert.equal(await evaluate('JSON.parse(window.__stored).mcap.bufferMb'), 8);
   assert.equal(await evaluate('JSON.parse(window.__stored).runtime.dt'), 0.004);
   assert.equal(await evaluate('JSON.parse(window.__stored).runtime.displayRateHz'),50);
   assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), true);
@@ -231,6 +248,8 @@ try {
   await writeFile('/tmp/jsbsim-display-rate-config.png',Buffer.from(displayShot.data,'base64'));
   await evaluate(`[...document.querySelectorAll('.sim-config-layout nav button')].find(el => el.textContent === 'MCAP Logging').click()`);
   await until(`${rate}.value === '400'`);
+  await until(`${threshold}.value === '6.5'`);
+  await writeFile('/tmp/jsbsim-mcap-threshold-config.png', Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
   await evaluate(`${performanceTab}.click()`);
   await until(`${usbDebug}.checked === true`);
   await evaluate(`${usbDebug}.click()`);
@@ -241,7 +260,7 @@ try {
   assert.equal(await evaluate('JSON.parse(window.__stored).diagnostics.usbDebugPrint'), false);
   const usbShot = await send('Page.captureScreenshot', {format:'png'});
   await writeFile('/tmp/jsbsim-usb-debug-config.png', Buffer.from(usbShot.data, 'base64'));
-  console.log('PASS: network Save & Apply visible, busy/deduplication, failure retains edits, Ethernet/USB acknowledgement; both Ethernet ports selectable and selection retained on refresh; display rate/save/reopen and USB debug persistence. Desktop IPC mocked.');
+  console.log('PASS: MCAP threshold old-config default, bounds, capacity reduction, fractional value, save/retry/reopen; network Save & Apply, display rate and USB debug persistence. Desktop IPC mocked.');
 } finally {
   ws?.close();
   const stopped = new Promise(resolve => chrome.once('exit', resolve));

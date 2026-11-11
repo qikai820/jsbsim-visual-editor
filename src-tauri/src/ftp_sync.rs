@@ -3,7 +3,7 @@
 //! NuttX already provides `ftpd_start -4`; using the host `curl` binary keeps
 //! the Tauri bundle small and avoids adding a second asynchronous runtime.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
@@ -243,21 +243,58 @@ fn commit_uploaded_file(auth: &str, temporary: &str, target: &str, backup: &str)
 }
 
 fn verify_uploaded_file(auth: &str, path: &str, expected: &[u8]) -> Result<(), String> {
+    verify_uploaded_file_with_progress(auth, path, expected, |_| {})
+}
+
+fn verify_uploaded_file_with_progress(auth: &str, path: &str, expected: &[u8],
+    mut progress: impl FnMut(u64)) -> Result<(), String> {
     let url = format!("{}{}", endpoint()?, path);
-    let output = Command::new("curl")
+    // Collision maps can be tens of MiB. Keep a finite, size-aware budget
+    // instead of applying the 15-second small-XML limit to every asset.
+    let max_seconds = (15 + expected.len().div_ceil(100 * 1024)).to_string();
+    let mut child = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
-               "--disable-epsv", "--connect-timeout", "3", "--max-time", "15",
+               "--disable-epsv", "--connect-timeout", "3", "--max-time", &max_seconds,
+               "--speed-limit", "1024", "--speed-time", "15",
                "--user", auth, &url])
-        .output()
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
         .map_err(|error| format!("cannot read back uploaded file: {error}"))?;
+    let mut stdout = child.stdout.take().ok_or("curl stdout unavailable")?;
+    let mut buffer = [0u8; 16 * 1024];
+    let mut offset = 0usize;
+    let mut notified = Instant::now();
+    let mut read_error = None;
+    progress(0);
+    loop {
+        match stdout.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                if expected.get(offset..offset + count) != Some(&buffer[..count]) {
+                    read_error = Some(format!("uploaded file differs on SD card: {path} at byte {offset} (expected {} bytes)", expected.len()));
+                    break;
+                }
+                offset += count;
+                if notified.elapsed() >= Duration::from_millis(100) {
+                    progress(offset as u64); notified = Instant::now();
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => { read_error = Some(format!("cannot read back {path}: {error}")); break; }
+        }
+    }
+    drop(stdout);
+    if read_error.is_some() { let _ = child.kill(); }
+    let output = child.wait_with_output().map_err(|error| format!("cannot finish readback: {error}"))?;
+    if let Some(error) = read_error { return Err(error); }
     if !output.status.success() {
         return Err(format!("cannot read back {path}: {}",
                            String::from_utf8_lossy(&output.stderr).trim()));
     }
-    if output.stdout != expected {
+    if offset != expected.len() {
         return Err(format!("uploaded file differs on SD card: {path} (expected {} bytes, read {} bytes)",
-                           expected.len(), output.stdout.len()));
+                           expected.len(), offset));
     }
+    progress(offset as u64);
     Ok(())
 }
 
@@ -772,10 +809,13 @@ pub fn download_simulator_version() -> Result<String, String> {
 // Feed curl small chunks at the pace verified on the board; the caller still
 // uploads to a temporary pathname and verifies it before committing.
 fn upload_ftp_temporary(auth: &str, temp_url: &str, content: &[u8]) -> Result<(), String> {
-    const CHUNK_BYTES: usize = 256;
-    const CHUNK_DELAY: Duration = Duration::from_millis(60);
-    let chunks = content.len().div_ceil(CHUNK_BYTES) as u64;
-    let max_seconds = (chunks * 60 / 1000 + 30).to_string();
+    upload_ftp_temporary_paced(auth, temp_url, content, 256, Duration::from_millis(60), |_, _| {})
+}
+
+fn upload_ftp_temporary_paced(auth: &str, temp_url: &str, content: &[u8],
+    chunk_bytes: usize, chunk_delay: Duration, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {
+    let chunks = content.len().div_ceil(chunk_bytes) as u64;
+    let max_seconds = (chunks * chunk_delay.as_millis() as u64 / 1000 + 30).to_string();
     let mut child = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--noproxy", "*",
                "--disable-epsv", "--connect-timeout", "3", "--max-time", &max_seconds,
@@ -784,13 +824,20 @@ fn upload_ftp_temporary(auth: &str, temp_url: &str, content: &[u8]) -> Result<()
         .map_err(|e| format!("cannot start curl: {e}"))?;
     let mut stdin = child.stdin.take().ok_or("curl stdin unavailable")?;
     let mut write_error = None;
-    for (index, chunk) in content.chunks(CHUNK_BYTES).enumerate() {
+    let mut notified = Instant::now();
+    let mut transferred = 0;
+    progress(0, content.len() as u64);
+    for (index, chunk) in content.chunks(chunk_bytes).enumerate() {
         if let Err(error) = stdin.write_all(chunk) {
             write_error = Some(error);
             break;
         }
+        transferred += chunk.len() as u64;
+        if notified.elapsed() >= Duration::from_millis(100) || transferred == content.len() as u64 {
+            progress(transferred, content.len() as u64); notified = Instant::now();
+        }
         if index + 1 < chunks as usize {
-            std::thread::sleep(CHUNK_DELAY);
+            std::thread::sleep(chunk_delay);
         }
     }
     drop(stdin);
@@ -830,7 +877,15 @@ pub fn upload_file(path: &str, content: &str) -> Result<(), String> {
     verify_uploaded_file(&auth, &remote, content.as_bytes())
 }
 
+#[derive(Clone, Serialize)]
+pub struct AssetUploadProgress { pub stage: &'static str, pub transferred: u64, pub total: u64 }
+
 pub fn upload_model_asset(model: &str, name: &str, content: &[u8]) -> Result<(), String> {
+    upload_model_asset_with_progress(model, name, content, |_| {})
+}
+
+pub fn upload_model_asset_with_progress(model: &str, name: &str, content: &[u8],
+    mut progress: impl FnMut(AssetUploadProgress)) -> Result<(), String> {
     let model = safe_component(model)?;
     if name.is_empty() || name.split('/').any(|part| {
         part.is_empty() || safe_component(part).is_err() ||
@@ -839,24 +894,36 @@ pub fn upload_model_asset(model: &str, name: &str, content: &[u8]) -> Result<(),
         return Err(format!("invalid model asset path: {name}"));
     }
     let path = format!("jsbsim/aircraft/{model}/{name}");
+    let total = content.len() as u64;
+    let mut report = |stage, transferred| progress(AssetUploadProgress { stage, transferred, total });
+    report("waiting", 0);
     if use_usb() {
-        usb_file::write_all(&path, content)?;
-        if usb_file::read_all(&path)? != content {
-            return Err(format!("model asset readback mismatch: {path}"));
-        }
+        // write_all already commits and reads back every byte. A second
+        // read_all duplicated the whole map transfer and its memory use.
+        usb_file::write_all_with_progress(&path, content, |done, total| {
+            if done == total { report("verify", 0); } else { report("upload", done); }
+        })?;
+        report("verify", total);
         return Ok(());
     }
-    let _guard = FTP_LOCK.lock().map_err(|e| format!("FTP lock poisoned: {e}"))?;
+    let _guard = ReadControl::default().lock(&FTP_LOCK, CHANNEL_WAIT, "FTP")?;
     let remote = format!("/{path}");
     let temporary = format!("{remote}.upload");
     let backup = format!("{remote}.bak");
     let auth = credentials();
     let temp_url = format!("{}{}", endpoint()?, temporary);
-    upload_ftp_temporary(&auth, &temp_url, content)?;
+    // Use the same bounded bursts as the large firmware transfer. The XML
+    // pacing (256 B / 60 ms) takes over 80 minutes for a 20 MiB map.
+    upload_ftp_temporary_paced(&auth, &temp_url, content, 1024, Duration::from_millis(5),
+        |done, _| report("upload", done))?;
 
-    verify_uploaded_file(&auth, &temporary, content)?;
+    report("verify_temporary", 0);
+    verify_uploaded_file_with_progress(&auth, &temporary, content, |done| report("verify_temporary", done))?;
+    report("commit", 0);
     commit_uploaded_file(&auth, &temporary, &remote, &backup)?;
-    verify_uploaded_file(&auth, &remote, content)
+    report("verify", 0);
+    verify_uploaded_file_with_progress(&auth, &remote, content, |done| report("verify", done))?;
+    Ok(())
 }
 
 fn safe_config_path(path: &str) -> Result<&str, String> {

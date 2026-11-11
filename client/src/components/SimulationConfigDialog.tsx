@@ -29,7 +29,7 @@ const defaults = {
   integrators: { rotationalRate: 1, translationalRate: 3, rotationalPosition: 1, translationalPosition: 4 },
   initial: { latitudeDeg: 0, longitudeDeg: 0, altitudeM: 0, rollDeg: 0, pitchDeg: 0, yawDeg: 0, airspeedMps: 0, trim: false },
   environment: { pressureSlPsf: 2116.22, temperatureBiasR: 0, relativeHumidityPct: 0, windNorthFps: 0, windEastFps: 0, windDownFps: 0, turbulenceType: 0, turbulenceWindspeed20ftFps: 0, turbulenceSeverity: 0 },
-  mcap: { enabled: true, rateHz: 50, backgroundRateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 1024, bufferMb: 8, minFreeMb: 128, selectedVariables: [] as string[], criticalVariables: [] as string[] },
+  mcap: { enabled: true, rateHz: 50, backgroundRateHz: 50, directory: '/mnt/sdcard/LOG', maxFileMb: 512, maxDurationMin: 60, queueDepth: 1024, bufferMb: 8, writeThresholdMb: 6, minFreeMb: 128, selectedVariables: [] as string[], criticalVariables: [] as string[] },
   safety: { cpuCore: 0, taskPriority: 120, stackKb: 256, fdmTimeoutMs: 4, cpuWarningPercent: 90, ramWarningPercent: 85, nanCheck: true, faultAction: 'stop' },
   diagnostics: { usbDebugPrint: false },
 };
@@ -40,7 +40,9 @@ const merge = (source: any) => ({
   integrators: { ...defaults.integrators, ...source?.integrators },
   initial: { ...defaults.initial, ...source?.initial },
   environment: { ...defaults.environment, ...source?.environment },
-  mcap: { ...defaults.mcap, ...source?.mcap },
+  mcap: { ...defaults.mcap, ...source?.mcap,
+    writeThresholdMb: source?.mcap?.writeThresholdMb ?? Math.min(defaults.mcap.writeThresholdMb,
+      (source?.mcap?.bufferMb ?? defaults.mcap.bufferMb) - 1 / 16) },
   safety: { ...defaults.safety, ...source?.safety },
   diagnostics: { ...defaults.diagnostics, ...source?.diagnostics },
 });
@@ -377,6 +379,12 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
       setStatus(tr('显示频率请输入 1～100 Hz 的整数。', 'Display rate must be an integer from 1 to 100 Hz.'));
       return;
     }
+    if (!Number.isFinite(config.mcap.writeThresholdMb) || config.mcap.writeThresholdMb < 1 / 16 ||
+        config.mcap.writeThresholdMb > config.mcap.bufferMb - 1 / 16) {
+      setStatus(tr('写入阈值至少为 0.0625 MiB，并须比日志缓存容量小至少 0.0625 MiB。',
+        'Write threshold must be at least 0.0625 MiB and leave at least 0.0625 MiB of buffer space.'));
+      return;
+    }
     const changedGroups = Object.keys(defaults).filter(key => key !== 'version' && JSON.stringify((config as any)[key]) !== JSON.stringify((baseline ? JSON.parse(baseline) : defaults as any)[key]));
     if (!window.confirm(isZh
       ? `保存到仿真机：\n/mnt/sdcard/jsbsim/${path}\n\n变更分组：${changedGroups.join('、') || '无'}\n环境参数可实时应用；其他配置将在下次重新加载模型时生效。`
@@ -482,10 +490,15 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
             <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 MCAP 日志','Enable MCAP logging')}</label>
             <NumberField label={tr('状态与关键字段频率','State and critical field rate')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',Math.min(500,v))} /><NumberField label={tr('普通字段频率','Background field rate')} value={config.mcap.backgroundRateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','backgroundRateHz',Math.min(500,v))} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',Math.min(2048,v))} />
-            <NumberField label={tr('日志缓存容量','Log buffer capacity')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>set('mcap','bufferMb',Math.max(1, Math.min(1536, Math.trunc(v))))} />
+            <NumberField label={tr('日志缓存容量','Log buffer capacity')} value={config.mcap.bufferMb} min={1} unit="MiB" onChange={(v:any)=>{
+              const bufferMb = Math.max(1, Math.min(1536, Math.trunc(v)));
+              setConfig((current:any)=>({...current,mcap:{...current.mcap,bufferMb,
+                writeThresholdMb:Math.min(current.mcap.writeThresholdMb,bufferMb-1/16)}}));
+            }} />
+            <NumberField label={tr('写入阈值','Write threshold')} value={config.mcap.writeThresholdMb} min={1/16} max={config.mcap.bufferMb-1/16} step={1/16} unit="MiB" onChange={(v:any)=>set('mcap','writeThresholdMb',v)} />
             <NumberField label={tr('单文件上限','Maximum file size')} value={config.mcap.maxFileMb} min={16} unit="MiB" onChange={(v:any)=>set('mcap','maxFileMb',v)} /><NumberField label={tr('最长记录时间','Maximum duration')} value={config.mcap.maxDurationMin} min={1} unit="min" onChange={(v:any)=>set('mcap','maxDurationMin',v)} /><NumberField label={tr('最小剩余空间','Minimum free space')} value={config.mcap.minFreeMb} min={32} unit="MiB" onChange={(v:any)=>set('mcap','minFreeMb',v)} />
           </div>
-          <p>{tr('日志缓存容量在下次加载模型时生效；已同步写入存储的数据会回收，缓存循环使用。', 'Buffer capacity applies on the next model load. Blocks are reused after data is written and synced to storage.')}</p>
+          <p>{tr('缓存容量和写入阈值在下次加载模型时生效。缓存达到阈值后集中写入；模型停止或提前结束时保存全部剩余日志。同步成功后回收缓存。板端内存不足时会降低实际容量及有效阈值。', 'Buffer capacity and write threshold apply on the next model load. Reaching the threshold triggers a batch write; stopping or ending the model early saves all remaining logs. Blocks are reused after a successful sync. Limited board memory may reduce the effective capacity and threshold.')}</p>
           <div className="mcap-variable-selector">
             <div>
               <b>{tr('记录变量选择器', 'Recorded Variable Selector')}</b>

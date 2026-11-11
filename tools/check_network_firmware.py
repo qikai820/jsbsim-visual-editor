@@ -30,7 +30,7 @@ mod ftp_sync {
  use std::io::Write;use std::sync::Mutex;use std::time::Duration;
  static FTP_LOCK:Mutex<()>=Mutex::new(());
  pub(crate) fn use_usb()->bool{false}
-'''+auth+upload+'\n}\n'+f'#[path="{src}/romfs_network.rs"] mod romfs_network;\n#[path="{src}/firmware_update.rs"] mod firmware_update;\n'+'''
+'''+auth+upload+'\n}\n'+f'#[path="{src}/model_read.rs"] mod model_read;\n#[path="{src}/romfs_network.rs"] mod romfs_network;\n#[path="{src}/firmware_update.rs"] mod firmware_update;\n'+'''
 fn main(){
  let p=std::env::args().nth(1).expect("firmware path or --rollback");
  if p=="--rollback" {println!("ROLLBACK {}",firmware_update::rollback().expect("rollback"));return;}

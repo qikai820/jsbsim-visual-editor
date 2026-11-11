@@ -14,6 +14,9 @@ pub fn snapshot(packet: Option<&Value>, age: Option<Duration>) -> Option<Value> 
         fields.insert("status_age_ms".into(), Value::from(age.as_millis().min(u64::MAX as u128) as u64));
         if stale {
             fields.insert("heartbeat_alive".into(), Value::Bool(false));
+            if fields.contains_key("network_connected") {
+                fields.insert("network_connected".into(), Value::Bool(false));
+            }
         }
     }
     Some(status)
@@ -39,5 +42,22 @@ mod tests {
         assert_eq!(stale["status_stale"], true);
         assert_eq!(stale["heartbeat_count"], 405);
         assert!(snapshot(None, Some(Duration::ZERO)).is_none());
+    }
+
+    #[test]
+    fn network_status_survives_gaps_and_expires_with_the_board_report() {
+        let packet = serde_json::json!({
+            "kind":"flight_controller", "usb_connected":false,
+            "network_configured":true, "network_connected":true,
+            "network_peer":"192.168.1.10:14560", "network_local_port":14560,
+            "heartbeat_alive":true, "heartbeat_count":9
+        });
+        let fresh = snapshot(Some(&packet), Some(Duration::from_secs(2))).unwrap();
+        assert_eq!(fresh["network_connected"], true);
+        assert_eq!(fresh["network_peer"], "192.168.1.10:14560");
+        let stale = snapshot(Some(&packet), Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(stale["network_connected"], false);
+        assert_eq!(stale["heartbeat_alive"], false);
+        assert_eq!(stale["network_configured"], true);
     }
 }
