@@ -32,3 +32,16 @@ fn only_fdm_ack_and_actual_readback_confirm_an_edit() {
     assert!(apply(30,session,"wrong",&[Edit{key:"x".into(),value:1.}],|_|panic!("must not send")).is_err());
     assert!(snapshot(31).is_none());
 }
+#[test]
+fn inertia_requires_capability_and_confirms_all_six_actual_values() {
+    let session="0123456789abcd21";
+    let edits:Vec<_>=["ixx","iyy","izz","ixy","ixz","iyz"].into_iter().zip([6.,8.,10.,0.,0.,0.]).map(|(key,value)|Edit{key:format!("_tuning/inertia/{key}-slugs_ft2"),value}).collect();
+    let frame=|enabled:bool,request:u32,status:&str|json!({"instance_id":"29","model":"live","state":"paused","timestamp":19.5,"monitor":{"tuning":{"version":1,"inertia":enabled,"session":session,"request":request,"status":status,"values":[6.,8.,10.,0.,0.,0.]}}});
+    ingest(&frame(false,0,""));
+    assert!(apply(29,session,"live",&edits,|_|panic!("old firmware must not receive inertia edits")).unwrap_err().contains("更新仿真机固件"));
+    ingest(&frame(true,0,""));
+    let result=apply(29,session,"live",&edits,|bytes|{let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(true,request,"applied"));Ok(())}).unwrap();
+    assert_eq!(result["timestamp"],19.5);
+    let error=apply(29,session,"live",&edits,|bytes|{let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(true,request,"invalid_inertia"));Ok(())}).unwrap_err();
+    assert!(error.contains("正定") && error.contains("整组"));
+}

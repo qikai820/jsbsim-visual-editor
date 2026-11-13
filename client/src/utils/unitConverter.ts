@@ -41,7 +41,7 @@ const UNIT_GROUPS: Record<string, Record<string, UnitInfo>> = {
   },
   inertia: {
     'SLUG*FT2': { label: 'slug·ft²', toBase: v => v,            fromBase: v => v },
-    'KG*M2':    { label: 'kg·m²',    toBase: v => v * 0.73756,  fromBase: v => v / 0.73756 },
+    'KG*M2':    { label: 'kg·m²',    toBase: v => v / 1.35594,  fromBase: v => v * 1.35594 },
   },
   spring: {
     'LBS/FT':      { label: 'lbs/ft',       toBase: v => v,     fromBase: v => v },

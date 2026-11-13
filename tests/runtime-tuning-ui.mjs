@@ -13,6 +13,7 @@ await writeFile(module,`
 import React from 'react';import{createRoot}from'react-dom/client';
 import ModuleExpressionCanvas from './src/components/expression/ModuleExpressionCanvas';
 import RuntimeTuningPanel from './src/components/RuntimeTuningPanel';
+import PropertyPanel from './src/components/PropertyPanel';
 import ScopeWindow from './src/components/monitor/ScopeWindow';
 import {useFlowStore as flow} from './src/store/flowStore';
 import {useRuntimeTuningStore as tuning} from './src/store/runtimeTuningStore';
@@ -21,13 +22,13 @@ import {componentParameterKey,expressionParameters}from'./src/sim/runtimeParamet
 import './src/App.css';import './src/components/monitor/monitor.css';
 import {installDialogDragging}from'./src/utils/dialogDragging';installDialogDragging();
 const channels=[{name:'Live',items:[{type:'pure_gain',name:'test/gain',expression:{kind:'value',value:0},componentProps:{input:{value:'test/input'},gain:{value:'2'},clipto_min:{value:'-10'},clipto_max:{value:'10'}}},{type:'constant',name:'test/constant',expression:{kind:'value',value:0},componentProps:{constant:{value:'3'}}}]}];
-flow.getState().loadProject({aircraft:{name:'test'},nodes:[{id:'fcs',type:'aircraftComponent',position:{x:0,y:0},data:{label:'FCS',componentType:'flight_control',params:{name:'FCS',channels:JSON.stringify(channels)}}}],edges:[]});
+flow.getState().loadProject({aircraft:{name:'test'},nodes:[{id:'fcs',type:'aircraftComponent',position:{x:0,y:0},data:{label:'FCS',componentType:'flight_control',params:{name:'FCS',channels:JSON.stringify(channels)}}},{id:'inertia',type:'aircraftComponent',position:{x:0,y:0},data:{label:'Inertia',componentType:'inertia',params:{ixx:{value:2.71188,unit:'KG*M2'},iyy:3,izz:4}}}],edges:[]});
 window.__flow=flow;window.__tuning=tuning;window.__monitor=monitor;window.__record=monitorRecord;
 window.__gainKey=componentParameterKey('test/gain','gain');window.__constantKey=expressionParameters('test/constant',{kind:'value',value:3})[0].key;
 window.__values={[window.__gainKey]:2,[window.__constantKey]:3};
 monitor.setState({revisions:{'01':1}});const scope=monitor.getState().addScope('module-live',{x:400,y:100},[{key:'test/gain',label:'gain'}]);monitor.setState({openScope:scope});
 let tick=0;setInterval(()=>{tick++;monitor.getState().ingest({instance_id:'01',model:'test',tree_generation:1,timestamp:50+tick*.02,state:'running',monitor:{version:1,revision:1,sequence:tick,samples:{'test/gain':[window.__values[window.__gainKey]*2,50+tick*.02,false]}}});},20);
-function Harness(){const nodes=flow(s=>s.nodes);return <><ModuleExpressionCanvas mode="signal" embedded modelId="module-live" title="实时调参测试" channels={JSON.parse(nodes[0].data.params.channels)} baselineChannels={channels} onBack={()=>{}} onChannelsChange={next=>flow.getState().updateNodeParams('fcs',{channels:JSON.stringify(next)})}/><RuntimeTuningPanel/><ScopeWindow/></>;}
+function Harness(){const nodes=flow(s=>s.nodes);return <><ModuleExpressionCanvas mode="signal" embedded modelId="module-live" title="实时调参测试" channels={JSON.parse(nodes[0].data.params.channels)} baselineChannels={channels} onBack={()=>{}} onChannelsChange={next=>flow.getState().updateNodeParams('fcs',{channels:JSON.stringify(next)})}/><RuntimeTuningPanel/><ScopeWindow/><PropertyPanel/></>;}
 createRoot(document.getElementById('root')).render(<Harness/>);
 `);
 const profile=await mkdtemp(path.join(tmpdir(),'runtime-tuning-ui-'));
@@ -43,8 +44,8 @@ try {
  const until=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error(`Timeout ${expression}: ${await evaluate('JSON.stringify({state:window.__tuning?.getState(),calls:window.__calls,tauri:!!window.__TAURI_INTERNALS__,channels:window.__flow?.getState().nodes[0]?.data.params.channels,inputs:[...document.querySelectorAll(".comp-prop-panel input")].map(n=>n.value)})')} ${await evaluate('document.body.innerText')}`);};
  await send('Page.enable');
  await send('Page.addScriptToEvaluateOnNewDocument',{source:`
- localStorage.setItem('jsbsim-language','zh-CN');window.__calls=[];window.__model='test';window.__reject='';window.__started=Date.now();
- const snapshot=()=>({model:window.__model,state:'running',timestamp:50+(Date.now()-window.__started)/1000,age_ms:0,tuning:{version:1,session:'0123456789abcdef',request:0,status:'',values:[]}});
+ localStorage.setItem('jsbsim-language','zh-CN');window.__calls=[];window.__model='test';window.__reject='';window.__started=Date.now();window.__inertia=true;
+ const snapshot=()=>({model:window.__model,state:'running',timestamp:50+(Date.now()-window.__started)/1000,age_ms:0,tuning:{version:1,inertia:window.__inertia,session:'0123456789abcdef',request:0,status:'',values:[]}});
  window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},invoke:async(command,args)=>{
   if(command==='sim_runtime_snapshot')return snapshot();
   window.__calls.push({command,args});
@@ -109,5 +110,23 @@ try {
  await evaluate(`document.querySelector('[data-testid="runtime-tuning-reapply"]').click()`);await until('window.__tuning.getState().applied>10');
  assert.equal(await evaluate('window.__values[window.__gainKey]'),7,'reapply sends the retained gain edit without changing the input again');
  assert.equal(await evaluate(`window.__record('01','test/gain').firstTime`),first,'reapply preserves scope history');
- console.log('PASS: imported gain/constant placeholders, first upper limit 0.5, paired bounds, retry retained edits, Enter/blur, scope continuity, disable, rejection, save values and model isolation');
+ const oldApplied=await evaluate('window.__tuning.getState().applied');
+ await evaluate(`window.__flow.getState().setSelectedNode('inertia')`);
+ await until(`Boolean(document.querySelector('input[aria-label="Ixx (滚转)"]'))`);
+ await evaluate(`(()=>{const input=document.querySelector('input[aria-label="Ixx (滚转)"]');input.focus();input.select()})()`);
+ await send('Input.insertText',{text:'8.13564'});
+ assert.equal(await evaluate('window.__tuning.getState().applied'),oldApplied,'inertia drafts do not send');
+ await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+ await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+ await until(`window.__tuning.getState().applied===${oldApplied+6}`);
+ const tensor=await evaluate('window.__calls.at(-1).args.edits');
+ assert.equal(tensor.length,6);assert.ok(Math.abs(tensor[0].value-6)<1e-12);assert.deepEqual(tensor.slice(1).map(e=>e.value),[3,4,0,0,0]);
+ assert.equal(await evaluate(`window.__record('01','test/gain').firstTime`),first,'inertia updates preserve scope history');
+ const count=await evaluate('window.__calls.length');
+ await evaluate('window.__inertia=false');await until('window.__tuning.getState().snapshot.tuning.inertia===false');
+ await evaluate(`(()=>{const input=document.querySelector('input[aria-label="Iyy (俯仰)"]');input.focus();input.select()})()`);
+ await send('Input.insertText',{text:'4'});await evaluate('document.activeElement.blur()');
+ await until(`window.__tuning.getState().message.includes('更新仿真机固件')`);
+ assert.equal(await evaluate('window.__calls.length'),count,'old firmware gets an explicit capability error without sending');
+ console.log('PASS: live gains/clips, inertia property-panel Enter/blur with unit conversion and six-value atomic ACK, scope continuity, retained edits and old firmware capability errors');
 }finally{ws?.close();chrome.kill('SIGTERM');vite?.kill('SIGTERM');await Promise.all([rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:100}),rm(html,{force:true}),rm(module,{force:true})]);}

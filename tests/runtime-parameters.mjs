@@ -8,7 +8,7 @@ const work=await mkdtemp(path.join(tmpdir(),'runtime-parameters-'));
 try {
  const output=path.join(work,'params.cjs');
  await build({stdin:{contents:`export * from './client/src/sim/runtimeParameters';export {buildSignalGraph,graphToChannels} from './client/src/utils/signalGraph';`,resolveDir:process.cwd()},outfile:output,bundle:true,platform:'node',format:'cjs',logLevel:'silent'});
- const {projectParameterChanges,componentParameterKey,expressionParameters,environmentFromProject,buildSignalGraph,graphToChannels}=createRequire(import.meta.url)(output);
+ const {projectParameterChanges,componentParameterKey,expressionParameters,environmentFromProject,inertiaParameterKey,buildSignalGraph,graphToChannels}=createRequire(import.meta.url)(output);
  const node={id:'module',data:{componentType:'flight_control',params:{channels:JSON.stringify([{name:'FCS',items:[
   {type:'pure_gain',name:'fcs/gain',componentProps:{input:{value:'fcs/input'},gain:{value:'2'}},cliptoMin:'-2',cliptoMax:'2'},
   {type:'constant',name:'fcs/constant',componentProps:{constant:{value:'3'}}},
@@ -60,5 +60,17 @@ try {
  assert.deepEqual(projectParameterChanges(repeated,rewired,imported),[],'a real input rewire remains a structural change');
  const phantom=structuredClone(imported);const phantomItems=JSON.parse(phantom.nodes[0].data.params.channels);phantomItems[0].items[0].expression.value=9;phantom.nodes[0].data.params.channels=JSON.stringify(phantomItems);
  assert.deepEqual(projectParameterChanges(imported,phantom),[],'parser placeholder is never sent as a runtime constant');
+ const mass={nodes:[{id:'inertia',data:{componentType:'inertia',params:{ixx:{value:2.71188,unit:'KG*M2'},iyy:3,izz:4}}}]};
+ const heavier=structuredClone(mass);heavier.nodes[0].data.params.ixx.value=8.13564;
+ const massEdits=projectParameterChanges(mass,heavier);
+ assert.equal(massEdits.length,6,'one inertia edit sends the entire symmetric tensor');
+ assert.deepEqual(massEdits.map(edit=>edit.key),['ixx','iyy','izz','ixy','ixz','iyz'].map(inertiaParameterKey));
+ assert.ok(Math.abs(massEdits[0].value-6)<1e-12);assert.deepEqual(massEdits.slice(1).map(edit=>edit.value),[3,4,0,0,0]);
+ const unitsOnly=structuredClone(mass);unitsOnly.nodes[0].data.params.ixx={value:2,unit:'SLUG*FT2'};
+ assert.deepEqual(projectParameterChanges(mass,unitsOnly),[],'changing display units preserves physical inertia');
+ const multiple=structuredClone(heavier);multiple.nodes.push({...multiple.nodes[0],id:'other'});
+ assert.deepEqual(projectParameterChanges(mass,multiple),[],'ambiguous inertia nodes cannot target the same base tensor');
+ const invalid=structuredClone(mass);invalid.nodes[0].data.params.ixx.value=NaN;
+ assert.deepEqual(projectParameterChanges(mass,invalid),[],'nonfinite drafts are never sent');
  console.log('PASS: stable native parameter identities, numeric deltas, paired limits, constants, environment units and structural edit isolation');
 } finally {await rm(work,{recursive:true,force:true});}

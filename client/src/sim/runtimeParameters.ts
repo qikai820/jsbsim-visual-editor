@@ -44,12 +44,29 @@ function canonical(value: any): any {
   return Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined && !(key === 'attrs' && value[key] && !Object.keys(value[key]).length))
     .map(key => [key, canonical(value[key])]));
 }
-interface Group { shape: string; edits: RuntimeEdit[]; environment?: boolean }
+export const inertiaFields = ['ixx', 'iyy', 'izz', 'ixy', 'ixz', 'iyz'] as const;
+export const inertiaParameterKey = (field: typeof inertiaFields[number]) => `_tuning/inertia/${field}-slugs_ft2`;
+interface Group { shape: string; edits: RuntimeEdit[]; environment?: boolean; inertia?: boolean }
 function groups(project: { nodes: any[] }): Map<string, Group> {
   const result = new Map<string, Group>();
   for (const node of project.nodes) {
     const p = node.data.params;
     if (p.disabled) continue;
+    if (node.data.componentType === 'inertia') {
+      // Exactly one base inertia tensor exists in each loaded aircraft.
+      if (project.nodes.filter(item => item.data.componentType === 'inertia' && !item.data.params.disabled).length !== 1) continue;
+      const edits: RuntimeEdit[] = [];
+      for (const field of inertiaFields) {
+        const fallback = ['ixy', 'ixz', 'iyz'].includes(field) ? 0 : undefined;
+        const raw = p[field], value = numeric(raw?.value ?? raw ?? fallback);
+        const unit = raw?.unit || p[`${field}_unit`] || 'SLUG*FT2';
+        if (value === undefined || !['SLUG*FT2', 'KG*M2'].includes(unit)) break;
+        // Match JSBSim's XML converter, including its existing precision.
+        edits.push({ key: inertiaParameterKey(field), value: unit === 'KG*M2' ? value / 1.35594 : value });
+      }
+      if (edits.length === 6) result.set(node.id, { shape: 'base-inertia', edits, inertia: true });
+      continue;
+    }
     if (node.data.componentType === 'environment') {
       const env = environmentFromProject({ nodes: [node] });
       result.set(node.id, { shape: String(p.atmosphere_model), edits: environmentEdits(env || {}), environment: true }); continue;
@@ -115,8 +132,11 @@ export function projectParameterChanges(before: { nodes: any[] }, after: { nodes
     const previous = old.get(id);
     if (!previous || previous.shape !== group.shape || (!group.environment && original.get(id)?.shape !== group.shape)) continue;
     const values = new Map(previous.edits.map(edit => [edit.key, edit.value]));
-    const changed = group.edits.filter(edit => values.has(edit.key) && values.get(edit.key) !== edit.value);
+    const changed = group.edits.filter(edit => values.has(edit.key) && (group.inertia
+      ? Math.abs(values.get(edit.key)! - edit.value) > 1e-10 * Math.max(Math.abs(edit.value), Math.abs(values.get(edit.key)!), 1e-12)
+      : values.get(edit.key) !== edit.value));
     if (changed.length) {
+      if (group.inertia) { result.push(...group.edits); continue; }
       result.push(...changed);
       // Both limits are sent together, without resending unrelated constants.
       if (changed.some(edit => group.edits.some(other => other.key !== edit.key && other.key.startsWith('_tuning/component/')))) {

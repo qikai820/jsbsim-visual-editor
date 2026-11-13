@@ -20,6 +20,12 @@ const backend = (command, args) => {
   if (value.error) throw new Error(value.error);
   return value;
 };
+const inertiaProject=backend('parse_xml',{xml:'<fdm_config name="live"><mass_balance><emptywt>10</emptywt><ixx unit="KG*M2">2.71188</ixx><iyy>3</iyy><izz>4</izz><location name="CG"><x>0</x><y>0</y><z>0</z></location></mass_balance></fdm_config>',files:[]});
+const inertiaParams=inertiaProject.nodes.find(node=>node.data.componentType==='inertia').data.params;
+for(const [field,value] of Object.entries({ixx:8.13564,iyy:8,izz:10,ixy:.1,ixz:.2,iyz:.3})) inertiaParams[field]={value,unit:field==='ixx'?'KG*M2':'SLUG*FT2'};
+const savedInertia=backend('generate_xml',{data:inertiaProject}).xml;
+const reloadedInertia=backend('parse_xml',{xml:savedInertia,files:[]}).nodes.find(node=>node.data.componentType==='inertia').data.params;
+for(const [field,expected] of Object.entries(inertiaParams)) assert.deepEqual(reloadedInertia[field],expected,'saved inertia tensor and units survive XML reload: '+field);
 const liveXml=backend('generate_subfile',{req:{type:'system',name:'Live',params:{channels:JSON.stringify([{name:'Live',items:[{type:'fcs_function',name:'test/limited',cliptoMin:'-1.5',cliptoMax:'test/upper-limit',expression:{kind:'value',value:9.25}},{type:'constant',name:'test/constant',componentProps:{constant:{value:'4.5'}}}]}])}}});
 assert.ok(liveXml.xml.includes('<min>-1.5</min>'));assert.ok(liveXml.xml.includes('<max>test/upper-limit</max>'));
 assert.ok(liveXml.xml.includes('<value>9.25</value>'));assert.ok(liveXml.xml.includes('<value>4.5</value>'));

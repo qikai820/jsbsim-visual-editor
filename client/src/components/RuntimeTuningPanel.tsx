@@ -42,6 +42,6 @@ export default function RuntimeTuningPanel() {
       disabled={!state.enabled || !ready || state.busy}
       title="重新提交当前数值修改并回读确认，保留模型状态和示波器历史"
       onClick={() => submitRuntimeEdits(currentEdits)}>重新应用</button>}
-    <span title={state.message}>{state.busy ? '正在应用并回读…' : state.applied || state.error ? state.message : ready ? `${state.snapshot!.model} · 增益 / 限幅 / 常量 / 环境` : '等待支持实时调参的运行端'}</span>
+    <span title={state.message}>{state.busy ? '正在应用并回读…' : state.applied || state.error ? state.message : ready ? `${state.snapshot!.model} · 增益 / 限幅 / 常量 / 环境${state.snapshot!.tuning.inertia ? ' / 惯量' : '（惯量需更新运行端）'}` : '等待支持实时调参的运行端'}</span>
   </div>;
 }

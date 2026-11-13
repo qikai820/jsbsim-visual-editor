@@ -22,6 +22,9 @@ export function submitRuntimeEdits(edits: RuntimeEdit[], modelNames = projectMod
     useRuntimeTuningStore.setState({ message: '修改已保留；运行端未就绪，未实时应用', error: true }); return;
   }
   if (!modelNames.includes(snapshot.model)) { useRuntimeTuningStore.setState({ message: `当前运行 ${snapshot.model}，与编辑模型不匹配，未实时应用`, error: true }); return; }
+  if (edits.some(edit => edit.key.startsWith('_tuning/inertia/')) && !snapshot.tuning.inertia) {
+    useRuntimeTuningStore.setState({ message: '当前运行端尚不支持惯量实时更新，请更新仿真机固件；修改已保留', error: true }); return;
+  }
   chain = chain.catch(() => {}).then(async () => {
     if (!useRuntimeTuningStore.getState().enabled || Number(useSignalMonitorStore.getState().instance) !== instance) return;
     useRuntimeTuningStore.setState({ busy: true, message: '正在应用并回读…', error: false });
