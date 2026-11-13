@@ -140,6 +140,18 @@ fn val_to_str(v: &Value) -> String {
     }
 }
 
+fn component_property_xml(name: &str, field: &Value, level: usize) -> String {
+    let attrs:Vec<(&str,&str)>=field.get("attrs").and_then(Value::as_object)
+        .map(|object|object.iter().filter_map(|(key,value)|value.as_str().map(|text|(key.as_str(),text))).collect()).unwrap_or_default();
+    let text=field.get("value").map(val_to_str).unwrap_or_default();
+    if let Some(children)=field.get("children").and_then(Value::as_array) {
+        let mut body=Vec::new();
+        if !text.is_empty() {body.push(format!("{}{}",indent(level+1),escape_xml(&text)));}
+        body.extend(children.iter().filter_map(|child|child.get("name").and_then(Value::as_str).map(|name|component_property_xml(name,child,level+1))));
+        xml_element_raw(name,&attrs,Some(&body.join("\n")),level)
+    } else {xml_element(name,&attrs,Some(&text),level)}
+}
+
 // ── Helpers for accessing node params ───────────────────────────────────────
 
 fn get_params(node: &Value) -> &Value {
@@ -720,20 +732,16 @@ fn serialize_channel_item(it: &Value, level: usize) -> Option<String> {
                 })
                 .unwrap_or_default();
             if let Some(children) = field_data.get("children").and_then(|value| value.as_array()) {
-                let nested = children.iter().filter_map(|child| {
-                    let name = child.get("name")?.as_str()?;
-                    let value = child.get("value").map(val_to_str).unwrap_or_default();
-                    let attrs: Vec<(&str, &str)> = child.get("attrs").and_then(|v| v.as_object())
-                        .map(|object| object.iter().filter_map(|(key, value)| value.as_str().map(|text| (key.as_str(), text))).collect())
-                        .unwrap_or_default();
-                    Some(xml_element(name, &attrs, Some(&value), level + 2))
-                }).collect::<Vec<_>>();
-                lines.push(xml_element_raw(field, &attr_entries, Some(&nested.join("\n")), level + 1));
+                let _=children;
+                lines.push(component_property_xml(field,field_data,level+1));
             } else {
                 if val.is_empty() && attr_entries.is_empty() {
                     continue;
                 }
                 lines.push(xml_element(field, &attr_entries, Some(&val), level + 1));
+            }
+            if let Some(repeated)=field_data.get("repeated").and_then(Value::as_array) {
+                lines.extend(repeated.iter().map(|entry|component_property_xml(field,entry,level+1)));
             }
         }
 

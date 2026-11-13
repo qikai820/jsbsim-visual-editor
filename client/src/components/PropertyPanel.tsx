@@ -874,13 +874,13 @@ export default function PropertyPanel() {
         const skip = new Set(['file', 'feed', 'location', 'orient', '_source_file', '_root_tag',
           'name', 'ixx_unit', 'diameter_unit', '_tables']);
         const p = node.data.params;
-        const merged = Object.entries(p).filter(([k]) => !skip.has(k) && typeof p[k] === 'number');
+        const merged = Object.entries(p).filter(([k]) => !k.startsWith('_') && !skip.has(k) && typeof p[k] === 'number');
         const rawTables = p._tables;
         let tables: any[] = [];
         try {
           tables = typeof rawTables === 'string' ? JSON.parse(rawTables) : (rawTables || []);
         } catch { tables = []; }
-        if (merged.length === 0 && tables.length === 0) return null;
+        if (merged.length === 0 && tables.length === 0 && !p.functions?.length) return null;
         const icon = node.data.componentType === 'engine' ? '⚙️' : '🔄';
         return (
           <>
@@ -889,21 +889,23 @@ export default function PropertyPanel() {
               <div className="prop-merged-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span>{icon} 引用文件属性 ({p._source_file})</span>
               {(() => {
-                const tblExprs: ModuleExpression[] = Array.isArray(p.tables)
-                  ? p.tables.map((t: any, ti: number) => ({ id: `t${ti}`, name: t.name, expression: t.expression }))
-                  : [];
+                const tblExprs: ModuleExpression[] = [
+                  ...(Array.isArray(p.functions) ? p.functions.map((f:any,fi:number)=>({id:`f${fi}`,name:f.name,expression:f.expression})) : []),
+                  ...(Array.isArray(p.tables) ? p.tables.filter((t:any)=>!t.function_owner).map((t: any) => ({ id: `t${p.tables.indexOf(t)}`, name: t.name, expression: t.expression })) : []),
+                ];
                 if (tblExprs.length === 0) return null;
                 return (
                   <button
                     className="ae-open-expr-btn"
                     style={{ margin: 0, padding: '2px 10px', fontSize: 11 }}
                     onClick={() => setCanvasView({
-                      title: '推进系数据表',
+                      title: '推进系函数与数据表',
                       expressions: tblExprs,
                       onChange: (id, expr) => {
                         const idx = Number(id.slice(1));
-                        const cur = Array.isArray(p.tables) ? p.tables.map((t: any) => ({ ...t })) : [];
-                        if (cur[idx]) { cur[idx] = { ...cur[idx], expression: expr }; updateNodeParams(node!.id, { tables: cur }); }
+                        const field=id.startsWith('f')?'functions':'tables';
+                        const cur = Array.isArray(p[field]) ? p[field].map((t: any) => ({ ...t })) : [];
+                        if (cur[idx]) { cur[idx] = { ...cur[idx], expression: expr }; updateNodeParams(node!.id, { [field]: cur }); }
                       },
                     })}
                   >📐 模块画布</button>

@@ -54,6 +54,11 @@ pub fn apply(instance: u8, session: &str, model: &str, edits: &[Edit], send: imp
     if edits.iter().any(|edit| edit.key.starts_with("_tuning/inertia/")) && before["tuning"]["inertia"] != true {
         return Err("当前运行端尚不支持惯量实时更新，请更新仿真机固件；修改已保留".into());
     }
+    if edits.iter().any(|edit| ["mass", "pointmass", "metrics", "engine", "thruster", "tank", "gear", "table"].iter()
+        .any(|family| edit.key.starts_with(&format!("_tuning/{family}/"))) || edit.key.contains("/table/"))
+        && before["tuning"]["parameters"].as_u64().unwrap_or(0) < 2 {
+        return Err("当前运行端尚不支持扩展模型参数，请更新仿真机固件；修改已保留".into());
+    }
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let request = (SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u32)
         .wrapping_add(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)).max(1);
@@ -68,6 +73,9 @@ pub fn apply(instance: u8, session: &str, model: &str, edits: &[Edit], send: imp
                 if frame["tuning"]["status"] != "applied" {
                     if frame["tuning"]["status"] == "invalid_inertia" {
                         return Err("运行端拒绝惯量：惯量矩阵须为正定且不能接近奇异；整组修改均未应用".into());
+                    }
+                    if frame["tuning"]["status"] == "invalid_parameter" {
+                        return Err("运行端拒绝参数：数值范围、上下限、滤波器分母或查表断点无效；整组修改均未应用".into());
                     }
                     return Err(format!("运行端拒绝参数：{}", frame["tuning"]["status"].as_str().unwrap_or("unknown")));
                 }

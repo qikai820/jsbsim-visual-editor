@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { synchronizeTablePatch } from '../sim/runtimeTables';
 import { withoutLegacyForwarders, removeLegacyForwarderXml } from '../utils/legacyForwarder';
 import { useSignalMonitorStore } from './signalMonitorStore';
 import {
@@ -323,12 +324,26 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const state = get();
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
+    params = synchronizeTablePatch(node.data.params, params);
     const changedKeys = Object.keys(params).filter(key =>
       JSON.stringify(node.data.params?.[key]) !== JSON.stringify(params[key]));
     if (!changedKeys.length) return;
-    const nextNodes = state.nodes.map(n =>
-      n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...params } } } : n
-    );
+    const physical = ['engine', 'propeller'].includes(node.data.componentType);
+    const ownedPath = physical ? resolveNodeOwnedPath(node) : '';
+    const localFields = new Set(['name','location','orient','sense','p_factor','feed','file','thruster_file','_source_file','source','referencePath','disabled']);
+    const shared = Object.fromEntries(changedKeys.filter(key => !localFields.has(key) && (!key.startsWith('_') || key==='_tables')).map(key=>[key,params[key]]));
+    const linked = new Set(state.edges.filter(edge => edge.source===id || edge.target===id)
+      .map(edge=>edge.source===id ? edge.target : edge.source));
+    const nextNodes = state.nodes.map(n => {
+      let patch: Record<string,any> = n.id===id ? params : {};
+      // One referenced XML file defines every instance that uses it. Keep all
+      // instance cards consistent with the file that Save will actually write.
+      if (n.id!==id && ownedPath && n.data.componentType===node.data.componentType && resolveNodeOwnedPath(n)===ownedPath) patch={...shared};
+      // JSBSim uses the thruster location. The engine card displays its linked
+      // thruster's location as a convenience; update the real owner as well.
+      if (physical && linked.has(n.id) && ['engine','propeller'].includes(n.data.componentType) && changedKeys.includes('location')) patch={...patch,location:params.location};
+      return Object.keys(patch).length ? {...n,data:{...n.data,params:{...n.data.params,...patch}}} : n;
+    });
     set({ nodes: nextNodes });
   },
 

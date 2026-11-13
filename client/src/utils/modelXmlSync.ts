@@ -105,6 +105,11 @@ export async function prepareModelXml(current: ModelProject, baseline: ModelProj
       } else {
         const previous = old?.data.params || oldSubFile?.data || {};
         const patch = Object.fromEntries(Object.entries(params).filter(([key, value]) => JSON.stringify(previous[key]) !== JSON.stringify(value)));
+        for(const key of ['tables','functions']) if(Array.isArray(patch[key])) {
+          const identity=(item:any)=>JSON.stringify([item.name,item.function_owner,item.function_path,item._source_parent]);
+          const oldItems=Array.isArray(previous[key]) ? previous[key] as any[] : [];
+          patch[key]=(patch[key] as any[]).filter(item=>JSON.stringify(oldItems.find(old=>identity(old)===identity(item)))!==JSON.stringify(item));
+        }
         for (const key of Object.keys(patch)) if (key.endsWith('_unit')) patch[key.slice(0, -5)] = params[key.slice(0, -5)];
         updates.push(patchExistingSubfileXml(original, type, patch));
       }

@@ -20,12 +20,22 @@ const backend = (command, args) => {
   if (value.error) throw new Error(value.error);
   return value;
 };
+const internalTable=backend('parse_xml',{xml:'<fdm_config name="internal"><propulsion><engine file="motor"><thruster file="prop"><location><x>0</x><y>0</y><z>0</z></location></thruster></engine></propulsion></fdm_config>',files:[{name:'motor',xml:'<electric_engine name="m"><power>10</power></electric_engine>'},{name:'prop',xml:'<propeller name="p"><table name="C_THRUST" type="internal"><tableData>12 30\n0 .0691 .1091\n1 -.0443 .0536</tableData></table></propeller>'}]}).nodes.find(node=>node.data.componentType==='propeller').data.params.tables[0].expression;
+assert.equal(internalTable.tableType,'2D');assert.deepEqual(internalTable.breakpoints2,[12,30]);assert.deepEqual(internalTable.data,[[.0691,.1091],[-.0443,.0536]]);
 const inertiaProject=backend('parse_xml',{xml:'<fdm_config name="live"><mass_balance><emptywt>10</emptywt><ixx unit="KG*M2">2.71188</ixx><iyy>3</iyy><izz>4</izz><location name="CG"><x>0</x><y>0</y><z>0</z></location></mass_balance></fdm_config>',files:[]});
 const inertiaParams=inertiaProject.nodes.find(node=>node.data.componentType==='inertia').data.params;
 for(const [field,value] of Object.entries({ixx:8.13564,iyy:8,izz:10,ixy:.1,ixz:.2,iyz:.3})) inertiaParams[field]={value,unit:field==='ixx'?'KG*M2':'SLUG*FT2'};
 const savedInertia=backend('generate_xml',{data:inertiaProject}).xml;
 const reloadedInertia=backend('parse_xml',{xml:savedInertia,files:[]}).nodes.find(node=>node.data.componentType==='inertia').data.params;
 for(const [field,expected] of Object.entries(inertiaParams)) assert.deepEqual(reloadedInertia[field],expected,'saved inertia tensor and units survive XML reload: '+field);
+const nestedProject=backend('parse_xml',{xml:`<fdm_config name="live"><flight_control name="Live"><channel name="Live"><actuator name="test/act"><input>test/input</input><deadband_width>0.1</deadband_width><rate_limit sense="incr">1</rate_limit><rate_limit sense="decr">2</rate_limit></actuator><kinematic name="test/kin"><input>test/input</input><traverse><setting><position>0</position><time>0</time></setting><setting><position>1</position><time>1</time></setting></traverse></kinematic></channel></flight_control></fdm_config>`,files:[]});
+const nestedNode=nestedProject.nodes.find(node=>node.data.componentType==='flight_control');const nestedChannels=JSON.parse(nestedNode.data.params.channels);
+const actuatorProps=nestedChannels[0].items[0].componentProps;actuatorProps.rate_limit.value='3';actuatorProps.rate_limit.repeated[0].value='4';
+const setting=nestedChannels[0].items[1].componentProps.traverse.children[1];setting.children.find(child=>child.name==='time').value='2';nestedNode.data.params.channels=JSON.stringify(nestedChannels);
+const nestedSaved=backend('generate_xml',{data:nestedProject}).xml;
+assert.match(nestedSaved,/<rate_limit sense="incr">3<\/rate_limit>/);assert.match(nestedSaved,/<rate_limit sense="decr">4<\/rate_limit>/);assert.match(nestedSaved,/<time>2<\/time>/);
+const nestedReload=backend('parse_xml',{xml:nestedSaved,files:[]});const reloadedNested=JSON.parse(nestedReload.nodes.find(node=>node.data.componentType==='flight_control').data.params.channels);
+assert.equal(reloadedNested[0].items[0].componentProps.rate_limit.repeated[0].value,'4');assert.equal(reloadedNested[0].items[1].componentProps.traverse.children[1].children.find(child=>child.name==='time').value,'2');
 const liveXml=backend('generate_subfile',{req:{type:'system',name:'Live',params:{channels:JSON.stringify([{name:'Live',items:[{type:'fcs_function',name:'test/limited',cliptoMin:'-1.5',cliptoMax:'test/upper-limit',expression:{kind:'value',value:9.25}},{type:'constant',name:'test/constant',componentProps:{constant:{value:'4.5'}}}]}])}}});
 assert.ok(liveXml.xml.includes('<min>-1.5</min>'));assert.ok(liveXml.xml.includes('<max>test/upper-limit</max>'));
 assert.ok(liveXml.xml.includes('<value>9.25</value>'));assert.ok(liveXml.xml.includes('<value>4.5</value>'));
@@ -154,6 +164,21 @@ try {
   const noOpPrepared=await evaluate(`(async()=>{const prepared=await window.sync.prepareModelXml(window.store.getState(),window.__graph,'test',window.api);return prepared.filter(d=>d.dirty);})()`);
   assert.deepEqual(noOpPrepared,[],'module round-trip has no real XML delta');
   await evaluate(`(()=>{window.__noopObserver.disconnect();const s=window.store.getState();for(const type of ['system','output']){const n=s.nodes.find(n=>n.data.componentType===type),old=window.__graph.nodes.find(n=>n.data.componentType===type);s.updateNodeParams(n.id,old.data.params);}})()`);
+  const savedTables=await evaluate(String.raw`(async()=>{
+    const {patchExistingSubfileXml}=await import('/src/utils/sourcePreservingXml.ts');
+    const {applyXmlDelta}=await import('/src/utils/xmlDelta.ts');
+    const source='<propeller name="p">\n<!-- vendor note --><diameter unit="IN">24.000</diameter>\n<table name="C_THRUST" type="internal"><tableData>0 1.000<!-- row 20 -->\n1 2.000</tableData><vendor keep="yes"/></table>\n</propeller>';
+    const expression={kind:'table',tableType:'1D',var1:'',var2:'',var3:'',breakpoints1:[0,1],breakpoints2:[],breakpoints3:[],data:[[9],[2]]};
+    const saved=patchExistingSubfileXml(source,'thruster',{tables:[{name:'C_THRUST',expression}]});
+    const engine='<turbine_engine name="engine"><function name="MilThrust"><description>keep</description><product><value>2.000</value><!-- literal note --><table><independentVar>x</independentVar><tableData>0 1\n1 2</tableData></table></product></function></turbine_engine>';
+    const fn={kind:'product',children:[{kind:'value',value:3},{...expression,var1:'x'}]};
+    return {source,saved,systemSaved:applyXmlDelta(source,source,source.replace('0 1.000','0 9')),engineSaved:patchExistingSubfileXml(engine,'engine',{functions:[{name:'MilThrust',expression:fn}]})};
+  })()`);
+  assert.equal(savedTables.saved,savedTables.source.replace('0 1.000','0 9'),'table save changes one token and retains comments, vendor fields and precision');
+  assert.equal(savedTables.systemSaved,savedTables.saved,'system and propulsion saves retain table comments with the same numeric patch');
+  assert.match(savedTables.engineSaved,/<value>3<\/value><!-- literal note -->/);
+  assert.match(savedTables.engineSaved,/<description>keep<\/description>/);
+  assert.match(savedTables.engineSaved,/0 9/);
   const deltaCases = await evaluate(`(async()=>{
     const {applyXmlDelta}=await import('/src/utils/xmlDelta.ts');
     const order=applyXmlDelta('<function><!--keep--><difference><property>a</property><value>2</value></difference></function>',

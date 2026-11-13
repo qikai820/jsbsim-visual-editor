@@ -1,5 +1,5 @@
 import DisplayNumberInput from '../DisplayNumberInput';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import SignalPathInput from '../SignalPathInput';
 
 interface ComponentPropertyPanelProps {
@@ -51,7 +51,7 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
       ...(field === 'gain' ? { gains: [value, ...(data.gains || []).slice(1)] } : {}),
       compProps: {
         ...(data.compProps || {}),
-        [field]: { value, attrs: cur.attrs || {} },
+        [field]: { ...cur, value, attrs: cur.attrs || {} },
       },
     });
   };
@@ -104,6 +104,30 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
       return true;
     }
   );
+  type Path = Array<['children'|'repeated',number]>;
+  const setStructured = (field:string,path:Path,value:string,attribute=false) => {
+    const props=JSON.parse(JSON.stringify(data.compProps || {}));
+    let target=props[field];for(const [kind,index] of path) target=target[kind][index];
+    if(attribute) target.attrs={...target.attrs,value};else target.value=value;
+    onChange({compProps:props});
+  };
+  const structuredField = (field:string,entry:any,path:Path,label:string):ReactNode => {
+    const value=String(entry.value ?? ''),hasOutput=entry.attrs && 'value' in entry.attrs;
+    const children=entry.children || [],repeated=entry.repeated || [];
+    const row=(text:string,current:string,attribute=false)=> <div className="field-row" key={`${text}:${path.map(part=>part.join(':')).join('/')}`}>
+      <label>{text}{entry.attrs?.sense ? ` (${entry.attrs.sense})` : ''}</label>
+      {/[\r\n\s]/.test(current.trim()) || entry.name==='tableData'
+        ? <textarea key={text+current} aria-label={text} defaultValue={current} rows={4} onBlur={event=>setStructured(field,path,event.target.value,attribute)} />
+        : entry.name==='independentVar' ? <SignalPathInput value={current} onChange={value=>setStructured(field,path,value,attribute)} />
+        : <DisplayNumberInput commitOnBlur aria-label={text} value={current} onChange={event=>setStructured(field,path,event.target.value,attribute)} />}
+    </div>;
+    return <div key={label}>
+      {hasOutput && row(label+'.value',String(entry.attrs.value),true)}
+      {(!hasOutput && !children.length || value.trim()) && row(label,value)}
+      {children.map((child:any,i:number)=>structuredField(field,child,[...path,['children',i]],label+'.'+(child.name || i)))}
+      {repeated.map((child:any,i:number)=>structuredField(field,child,[...path,['repeated',i]],label+`[${i+1}]`))}
+    </div>;
+  };
 
   return (
     <div className="comp-prop-panel">
@@ -219,9 +243,11 @@ export default function ComponentPropertyPanel({ data, onChange, onDelete, onEdi
             参数 {collapsed ? '▶' : '▼'}
           </div>
           {!collapsed && paramFields.map(([field, v]: [string, any]) => (
-            <div className="field-row" key={field}>
+            v.children || v.repeated || v.attrs && 'value' in v.attrs ? structuredField(field,v,[],field) : <div className="field-row" key={field}>
               <label>{PARAM_LABELS[field] || field}</label>
-              {field === 'property' || field === 'properties' || field === 'input' || field === 'output' || field.startsWith('hil_')
+              {field==='axis' ? <select value={String(v.value || 'X').toUpperCase()} onChange={event=>setParam(field,event.target.value)}>{['X','Y','Z'].map(axis=><option key={axis}>{axis}</option>)}</select>
+                : field==='zero_centered' ? <select value={String(['false','0'].includes(String(v.value).toLowerCase())?0:1)} onChange={event=>setParam(field,event.target.value)}><option value="1">启用</option><option value="0">关闭</option></select>
+                : field === 'property' || field === 'properties' || field === 'input' || field === 'output' || field.startsWith('hil_')
                 ? <SignalPathInput value={String(v.value ?? '')} onChange={value => setParam(field, value)} multiple={field === 'properties'} />
                 : <DisplayNumberInput commitOnBlur value={String(v.value ?? '')} onChange={e => setParam(field, e.target.value)} />}
             </div>

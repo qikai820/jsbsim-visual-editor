@@ -21,14 +21,14 @@ import {useSignalMonitorStore as monitor,monitorRecord} from './src/store/signal
 import {componentParameterKey,expressionParameters}from'./src/sim/runtimeParameters';
 import './src/App.css';import './src/components/monitor/monitor.css';
 import {installDialogDragging}from'./src/utils/dialogDragging';installDialogDragging();
-const channels=[{name:'Live',items:[{type:'pure_gain',name:'test/gain',expression:{kind:'value',value:0},componentProps:{input:{value:'test/input'},gain:{value:'2'},clipto_min:{value:'-10'},clipto_max:{value:'10'}}},{type:'constant',name:'test/constant',expression:{kind:'value',value:0},componentProps:{constant:{value:'3'}}}]}];
-flow.getState().loadProject({aircraft:{name:'test'},nodes:[{id:'fcs',type:'aircraftComponent',position:{x:0,y:0},data:{label:'FCS',componentType:'flight_control',params:{name:'FCS',channels:JSON.stringify(channels)}}},{id:'inertia',type:'aircraftComponent',position:{x:0,y:0},data:{label:'Inertia',componentType:'inertia',params:{ixx:{value:2.71188,unit:'KG*M2'},iyy:3,izz:4}}}],edges:[]});
+const channels=[{name:'Live',items:[{type:'pure_gain',name:'test/gain',expression:{kind:'value',value:0},componentProps:{input:{value:'test/input'},gain:{value:'2'},clipto_min:{value:'-10'},clipto_max:{value:'10'}}},{type:'constant',name:'test/constant',expression:{kind:'value',value:0},componentProps:{constant:{value:'3'}}},{type:'sensor',name:'test/sensor',componentProps:{input:{value:'test/input'},bias:{value:'1'},gain:{value:'2'},quantization:{value:'',attrs:{bits:'12'},children:[{name:'min',value:'0'},{name:'max',value:'10'}]}}}]}];
+flow.getState().loadProject({aircraft:{name:'test'},nodes:[{id:'mass',type:'aircraftComponent',position:{x:0,y:0},data:{label:'Mass',componentType:'fuselage',params:{emptywt:{value:10,unit:'KG'},cg:{x:0,y:0,z:0,unit:'IN'}}}},{id:'fcs',type:'aircraftComponent',position:{x:0,y:0},data:{label:'FCS',componentType:'flight_control',params:{name:'FCS',channels:JSON.stringify(channels)}}},{id:'inertia',type:'aircraftComponent',position:{x:0,y:0},data:{label:'Inertia',componentType:'inertia',params:{ixx:{value:2.71188,unit:'KG*M2'},iyy:3,izz:4}}}],edges:[]});
 window.__flow=flow;window.__tuning=tuning;window.__monitor=monitor;window.__record=monitorRecord;
 window.__gainKey=componentParameterKey('test/gain','gain');window.__constantKey=expressionParameters('test/constant',{kind:'value',value:3})[0].key;
 window.__values={[window.__gainKey]:2,[window.__constantKey]:3};
 monitor.setState({revisions:{'01':1}});const scope=monitor.getState().addScope('module-live',{x:400,y:100},[{key:'test/gain',label:'gain'}]);monitor.setState({openScope:scope});
 let tick=0;setInterval(()=>{tick++;monitor.getState().ingest({instance_id:'01',model:'test',tree_generation:1,timestamp:50+tick*.02,state:'running',monitor:{version:1,revision:1,sequence:tick,samples:{'test/gain':[window.__values[window.__gainKey]*2,50+tick*.02,false]}}});},20);
-function Harness(){const nodes=flow(s=>s.nodes);return <><ModuleExpressionCanvas mode="signal" embedded modelId="module-live" title="实时调参测试" channels={JSON.parse(nodes[0].data.params.channels)} baselineChannels={channels} onBack={()=>{}} onChannelsChange={next=>flow.getState().updateNodeParams('fcs',{channels:JSON.stringify(next)})}/><RuntimeTuningPanel/><ScopeWindow/><PropertyPanel/></>;}
+function Harness(){const nodes=flow(s=>s.nodes);return <><ModuleExpressionCanvas mode="signal" embedded modelId="module-live" title="实时调参测试" channels={JSON.parse(nodes.find(n=>n.id==='fcs').data.params.channels)} baselineChannels={channels} onBack={()=>{}} onChannelsChange={next=>flow.getState().updateNodeParams('fcs',{channels:JSON.stringify(next)})}/><RuntimeTuningPanel/><ScopeWindow/><PropertyPanel/></>;}
 createRoot(document.getElementById('root')).render(<Harness/>);
 `);
 const profile=await mkdtemp(path.join(tmpdir(),'runtime-tuning-ui-'));
@@ -44,8 +44,8 @@ try {
  const until=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error(`Timeout ${expression}: ${await evaluate('JSON.stringify({state:window.__tuning?.getState(),calls:window.__calls,tauri:!!window.__TAURI_INTERNALS__,channels:window.__flow?.getState().nodes[0]?.data.params.channels,inputs:[...document.querySelectorAll(".comp-prop-panel input")].map(n=>n.value)})')} ${await evaluate('document.body.innerText')}`);};
  await send('Page.enable');
  await send('Page.addScriptToEvaluateOnNewDocument',{source:`
- localStorage.setItem('jsbsim-language','zh-CN');window.__calls=[];window.__model='test';window.__reject='';window.__started=Date.now();window.__inertia=true;
- const snapshot=()=>({model:window.__model,state:'running',timestamp:50+(Date.now()-window.__started)/1000,age_ms:0,tuning:{version:1,inertia:window.__inertia,session:'0123456789abcdef',request:0,status:'',values:[]}});
+ localStorage.setItem('jsbsim-language','zh-CN');window.__calls=[];window.__model='test';window.__reject='';window.__started=Date.now();window.__inertia=true;window.__parameters=2;
+ const snapshot=()=>({model:window.__model,state:'running',timestamp:50+(Date.now()-window.__started)/1000,age_ms:0,tuning:{version:1,inertia:window.__inertia,parameters:window.__parameters,session:'0123456789abcdef',request:0,status:'',values:[]}});
  window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},invoke:async(command,args)=>{
   if(command==='sim_runtime_snapshot')return snapshot();
   window.__calls.push({command,args});
@@ -95,7 +95,7 @@ try {
  assert.equal(await evaluate(`window.__values['atmosphere/wind-north-fps']`),12,'environment card commits live');
  await evaluate(`window.__reject='invalid_limits'`);await edit(6);await until('window.__tuning.getState().error');
  assert.equal(await evaluate('window.__values[window.__gainKey]'),5,'rejected updates are not reported as applied');
- assert.equal(await evaluate(`JSON.parse(window.__flow.getState().nodes[0].data.params.channels)[0].items.find(item=>item.name==='test/gain').componentProps.gain.value`),'6','failed edits remain available to save or correct');
+ assert.equal(await evaluate(`JSON.parse(window.__flow.getState().nodes.find(n=>n.id==='fcs').data.params.channels)[0].items.find(item=>item.name==='test/gain').componentProps.gain.value`),'6','failed edits remain available to save or correct');
  await evaluate(`window.__model='other';window.__reject=''`);await until(`window.__tuning.getState().snapshot.model==='other'`);
  await edit(7);await until(`window.__tuning.getState().message.includes('不匹配')`);
  assert.equal(await evaluate('window.__calls.length'),7,'a different running model cannot be tuned accidentally');
@@ -128,5 +128,17 @@ try {
  await send('Input.insertText',{text:'4'});await evaluate('document.activeElement.blur()');
  await until(`window.__tuning.getState().message.includes('更新仿真机固件')`);
  assert.equal(await evaluate('window.__calls.length'),count,'old firmware gets an explicit capability error without sending');
+ await evaluate(`window.__inertia=true;window.__flow.getState().setSelectedNode('mass')`);
+ await until(`Boolean(document.querySelector('input[aria-label="空重"]'))`);
+ const editMass=async value=>{await evaluate(`(()=>{const input=document.querySelector('input[aria-label="空重"]');input.focus();input.select()})()`);await send('Input.insertText',{text:String(value)});await evaluate('document.activeElement.blur()');};
+ await editMass(20);await until(`Math.abs(window.__values['_tuning/mass/emptywt']-20/.45359237)<1e-10`);
+ assert.equal(await evaluate(`window.__record('01','test/gain').firstTime`),first,'mass edit keeps scope history');
+ await evaluate(`window.__flow.getState().setSelectedNode(null)`);await select('test/sensor');
+ await setField('偏置 bias',4);await until(`window.__calls.at(-1).args.edits.some(edit=>edit.value===4)`);
+ assert.equal(await evaluate(`window.__calls.at(-1).args.edits[0].key`),await evaluate(`(async()=>(await import('/src/sim/runtimeParameters.ts')).componentParameterKey('test/sensor','bias'))()`));
+ await setField('quantization.max',12);await until(`window.__calls.at(-1).args.edits.some(edit=>edit.value===12)`);
+ await evaluate('window.__parameters=0');await until('window.__tuning.getState().snapshot.tuning.parameters===0');
+ await evaluate(`window.__flow.getState().setSelectedNode('mass')`);await editMass(30);
+ await until(`window.__tuning.getState().message.includes('更新仿真机固件')`);
  console.log('PASS: live gains/clips, inertia property-panel Enter/blur with unit conversion and six-value atomic ACK, scope continuity, retained edits and old firmware capability errors');
 }finally{ws?.close();chrome.kill('SIGTERM');vite?.kill('SIGTERM');await Promise.all([rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:100}),rm(html,{force:true}),rm(module,{force:true})]);}

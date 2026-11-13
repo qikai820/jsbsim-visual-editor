@@ -854,6 +854,12 @@ pub fn parse_table(table_obj: &XmlElement) -> ExprNode {
     if let Some(td) = table_data_elems.first() {
         let text = get_text(td);
         let rows = parse_table_text(&text);
+        // Internal engine/propeller tables have no independentVar tags. Match
+        // the core's numeric shape inference rather than treating a 2-column
+        // header (e.g. min/max blade pitch) as a 1D data row.
+        if ind_vars.is_empty() && rows.len()>1 && rows[1].len()==rows[0].len()+1 {
+            table_type="2D".to_string();
+        }
 
         if table_type == "2D" && rows.len() > 1 {
             return parse_table_2d(&rows, &var1, &var2);
@@ -1193,48 +1199,38 @@ fn extract_location(obj: &XmlElement) -> Option<serde_json::Value> {
 
 /// Extract tables from an XML element, returning them as JSON values.
 pub fn extract_tables(el: &XmlElement) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let mut tables_expr = Vec::new();
-    let mut tables_raw = Vec::new();
-
-    for child in &el.children {
-        if child.tag == "table" {
-            let tbl_name = get_attr(child, "name").unwrap_or("").to_string();
-
-            // ExprNode form
-            let expr = parse_table(child);
-            let mut expr_val = serde_json::to_value(&expr).unwrap_or(serde_json::json!(null));
-            if !tbl_name.is_empty() {
-                if let Some(obj) = expr_val.as_object_mut() {
-                    obj.insert("name".to_string(), serde_json::json!(tbl_name));
+    fn visit(el: &XmlElement, owner: &str, path: &[usize], exprs: &mut Vec<serde_json::Value>, raw: &mut Vec<serde_json::Value>) {
+        let own = if el.tag == "function" { get_attr(el, "name").unwrap_or("") } else { owner };
+        let current_path = if el.tag == "function" { vec![] } else { path.to_vec() };
+        let mut operand = 0;
+        for child in &el.children {
+            let mut child_path = current_path.clone();
+            child_path.push(operand);
+            if !["description", "documentation", "clipto", "output", "input", "gain"].contains(&child.tag.as_str()) { operand += 1; }
+            if child.tag == "table" {
+                let name = get_attr(child, "name").unwrap_or("");
+                let mut item = serde_json::json!({"name":name,"expression":parse_table(child)});
+                if !own.is_empty() {
+                    item["function_owner"] = serde_json::json!(own);
+                    item["function_path"] = serde_json::json!(child_path);
                 }
-            }
-            tables_expr.push(serde_json::json!({
-                "name": tbl_name,
-                "expression": expr_val
-            }));
-
-            // Legacy raw form
-            let tbl_type = get_attr(child, "type").unwrap_or("internal").to_string();
-            let td_elem = find_child(child, "tableData");
-            let table_data = td_elem
-                .map(|td| parse_table_text(&get_text(td)))
-                .unwrap_or_default();
-            if !tbl_name.is_empty() && !table_data.is_empty() {
-                tables_raw.push(serde_json::json!({
-                    "name": tbl_name,
-                    "type": tbl_type,
-                    "data": table_data
-                }));
-            }
-        } else {
-            // Recurse into child elements
-            let (sub_expr, sub_raw) = extract_tables(child);
-            tables_expr.extend(sub_expr);
-            tables_raw.extend(sub_raw);
+                exprs.push(item);
+                let data = find_child(child, "tableData").map(|td|parse_table_text(&get_text(td))).unwrap_or_default();
+                if !name.is_empty() && !data.is_empty() {
+                    raw.push(serde_json::json!({"name":name,"type":get_attr(child,"type").unwrap_or("internal"),"data":data}));
+                }
+            } else { visit(child, own, &child_path, exprs, raw); }
         }
     }
+    let mut exprs=Vec::new();let mut raw=Vec::new();
+    visit(el,"",&[],&mut exprs,&mut raw);
+    (exprs,raw)
+}
 
-    (tables_expr, tables_raw)
+/// Named propulsion functions share the same expression editor as aerodynamics.
+pub fn extract_functions(el: &XmlElement) -> Vec<serde_json::Value> {
+    el.children.iter().filter(|child|child.tag=="function" && get_attr(child,"name").is_some())
+        .map(|child|serde_json::json!({"name":get_attr(child,"name").unwrap(),"expression":xml_to_expr(child)})).collect()
 }
 
 /// Parse a sub-file XML (engine, thruster, system) into JSON.
@@ -1468,6 +1464,8 @@ fn extract_element_params_generic(el: &XmlElement, merged: &mut serde_json::Valu
         }
     }
 
+    let functions=extract_functions(el);
+    if !functions.is_empty() { merged["functions"]=serde_json::json!(functions); }
     let (tables_expr, tables_raw) = extract_tables(el);
     if !tables_expr.is_empty() {
         merged["tables"] = serde_json::json!(tables_expr);

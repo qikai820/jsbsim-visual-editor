@@ -1,4 +1,4 @@
-import { scanXmlSpans, type XmlSpan } from './sourcePreservingXml';
+import { scanXmlSpans, patchNumericTableText, type XmlSpan } from './sourcePreservingXml';
 import { xmlContentEqual, xmlElementsEqual } from './xmlContentEqual';
 import { DISABLED_ATTRIBUTE, commentOutXml, expandDisabledComments, serializeDisabledElements } from './disabledXml';
 
@@ -75,7 +75,9 @@ export function applyXmlDelta(sourceXml: string, beforeXml: string, afterXml: st
         const original = sourceXml.slice(span.openEnd, span.closeStart);
         if (source.hasAttribute('value')) opening = opening.replace(/(\svalue\s*=\s*)(["'])(.*?)\2/, (_all, prefix) => `${prefix}"${escape(value)}"`);
         else edits.push({ start: span.openEnd, end: span.closeStart,
-          text: (original.match(/^\s*/)?.[0] || '') + escape(value) + (original.match(/\s*$/)?.[0] || '') });
+          text: (source.tagName==='tableData' || (original.includes('<!--') && value!=='' &&
+            Number.isFinite(Number(source.textContent)) && Number.isFinite(Number(value)))) ? patchNumericTableText(original,value,newline)
+            : (original.match(/^\s*/)?.[0] || '') + escape(value) + (original.match(/\s*$/)?.[0] || '') });
       }
     } else {
       const usedNext = new Set<Element>(), usedSource = new Set<Element>();

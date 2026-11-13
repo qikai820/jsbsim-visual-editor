@@ -45,3 +45,17 @@ fn inertia_requires_capability_and_confirms_all_six_actual_values() {
     let error=apply(29,session,"live",&edits,|bytes|{let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(true,request,"invalid_inertia"));Ok(())}).unwrap_err();
     assert!(error.contains("正定") && error.contains("整组"));
 }
+
+#[test]
+fn expanded_parameters_require_capability_and_report_atomic_rejection() {
+    let session="0123456789abcd22";
+    let edits=[Edit{key:"_tuning/mass/emptywt".into(),value:12.}];
+    let frame=|cap:u32,request:u32,status:&str|json!({"instance_id":"28","model":"live","state":"paused","timestamp":23.5,"monitor":{"tuning":{"version":1,"parameters":cap,"session":session,"request":request,"status":status,"values":[12.]}}});
+    ingest(&frame(0,0,""));
+    assert!(apply(28,session,"live",&edits,|_|panic!("old firmware must not receive expanded edits")).unwrap_err().contains("更新仿真机固件"));
+    ingest(&frame(2,0,""));
+    let actual=apply(28,session,"live",&edits,|bytes|{let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(2,request,"applied"));Ok(())}).unwrap();
+    assert_eq!(actual["timestamp"],23.5);
+    let error=apply(28,session,"live",&edits,|bytes|{let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(2,request,"invalid_parameter"));Ok(())}).unwrap_err();
+    assert!(error.contains("整组"));
+}

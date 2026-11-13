@@ -25,6 +25,9 @@ export function submitRuntimeEdits(edits: RuntimeEdit[], modelNames = projectMod
   if (edits.some(edit => edit.key.startsWith('_tuning/inertia/')) && !snapshot.tuning.inertia) {
     useRuntimeTuningStore.setState({ message: '当前运行端尚不支持惯量实时更新，请更新仿真机固件；修改已保留', error: true }); return;
   }
+  if (edits.some(edit => /^_tuning\/(?:mass|pointmass|metrics|engine|thruster|tank|gear|table)\//.test(edit.key) || edit.key.includes('/table/')) && (snapshot.tuning.parameters || 0) < 2) {
+    useRuntimeTuningStore.setState({ message: '当前运行端尚不支持扩展模型参数，请更新仿真机固件；修改已保留', error: true }); return;
+  }
   chain = chain.catch(() => {}).then(async () => {
     if (!useRuntimeTuningStore.getState().enabled || Number(useSignalMonitorStore.getState().instance) !== instance) return;
     useRuntimeTuningStore.setState({ busy: true, message: '正在应用并回读…', error: false });

@@ -7,8 +7,8 @@ import {build} from 'esbuild';
 const work=await mkdtemp(path.join(tmpdir(),'runtime-parameters-'));
 try {
  const output=path.join(work,'params.cjs');
- await build({stdin:{contents:`export * from './client/src/sim/runtimeParameters';export {buildSignalGraph,graphToChannels} from './client/src/utils/signalGraph';`,resolveDir:process.cwd()},outfile:output,bundle:true,platform:'node',format:'cjs',logLevel:'silent'});
- const {projectParameterChanges,componentParameterKey,expressionParameters,environmentFromProject,inertiaParameterKey,buildSignalGraph,graphToChannels}=createRequire(import.meta.url)(output);
+ await build({stdin:{contents:`export * from './client/src/sim/runtimeParameters';export {useFlowStore} from './client/src/store/flowStore';export {buildSignalGraph,graphToChannels} from './client/src/utils/signalGraph';`,resolveDir:process.cwd()},outfile:output,bundle:true,platform:'node',format:'cjs',logLevel:'silent'});
+ const {projectParameterChanges,projectParameterDiagnostics,componentParameterKey,expressionParameters,environmentFromProject,inertiaParameterKey,buildSignalGraph,graphToChannels,useFlowStore}=createRequire(import.meta.url)(output);
  const node={id:'module',data:{componentType:'flight_control',params:{channels:JSON.stringify([{name:'FCS',items:[
   {type:'pure_gain',name:'fcs/gain',componentProps:{input:{value:'fcs/input'},gain:{value:'2'}},cliptoMin:'-2',cliptoMax:'2'},
   {type:'constant',name:'fcs/constant',componentProps:{constant:{value:'3'}}},
@@ -72,5 +72,39 @@ try {
  assert.deepEqual(projectParameterChanges(mass,multiple),[],'ambiguous inertia nodes cannot target the same base tensor');
  const invalid=structuredClone(mass);invalid.nodes[0].data.params.ixx.value=NaN;
  assert.deepEqual(projectParameterChanges(mass,invalid),[],'nonfinite drafts are never sent');
+ const physical={nodes:[{id:'mass',data:{componentType:'fuselage',params:{emptywt:{value:10,unit:'KG'},cg:{x:1,y:2,z:3,unit:'M'}}}},{id:'wing',data:{componentType:'wing',params:{wingarea:{value:2,unit:'M2'},chord:{value:1,unit:'M'}}}}]};
+ const physicalChanged=structuredClone(physical);physicalChanged.nodes[0].data.params.emptywt.value=20;physicalChanged.nodes[0].data.params.cg.y=4;physicalChanged.nodes[1].data.params.wingarea.value=3;
+ const physicalEdits=projectParameterChanges(physical,physicalChanged);
+ assert.ok(Math.abs(physicalEdits.find(e=>e.key==='_tuning/mass/emptywt').value-20/.45359237)<1e-12,'mass matches the exact XML conversion');
+ assert.equal(physicalEdits.find(e=>e.key==='_tuning/mass/cg-y').value,4*3.2808399*12);
+ assert.equal(physicalEdits.length,3);
+ const table={kind:'table',tableType:'2D',var1:'x',var2:'y',var3:'',breakpoints1:[0,10],breakpoints2:[0,20],breakpoints3:[],data:[[1,3],[5,7]]};
+ const props={nodes:[{id:'prop',data:{componentType:'propeller',params:{file:'prop',_source_file:'prop',diameter:2,tables:[{name:'C_THRUST',expression:table}],_tables:[{name:'C_THRUST',data:[[0,20],[0,1,3],[10,5,7]]}]}}}]};
+ const tableChanged=structuredClone(props);tableChanged.nodes[0].data.params.tables[0].expression.data[0][0]=9;
+ assert.deepEqual(projectParameterChanges(props,tableChanged),[{key:'_tuning/table/thruster/i0/C_THRUST/table/data/n4',value:9}]);
+ const resized=structuredClone(tableChanged);resized.nodes[0].data.params.tables[0].expression.data.push([9,9]);resized.nodes[0].data.params.tables[0].expression.breakpoints1.push(30);
+ assert.deepEqual(projectParameterChanges(tableChanged,resized,props),[]);assert.equal(projectParameterDiagnostics(tableChanged,resized,props).length,1,'table resize is explicitly reported');
+ const shared={aircraft:{name:'test'},nodes:[0,1].flatMap(i=>[
+  {id:'eng'+i,type:'aircraftComponent',position:{x:0,y:0},data:{componentType:'engine',params:{engine_type:'electric',file:'motor',_source_file:'motor',power:100,location:{x:0,y:0,z:0,unit:'IN'}}}},
+  {id:'prop'+i,type:'aircraftComponent',position:{x:0,y:0},data:{componentType:'propeller',params:{...structuredClone(props.nodes[0].data.params),location:{x:0,y:0,z:0,unit:'IN'}}}}
+ ]),edges:[0,1].map(i=>({id:'link'+i,source:'eng'+i,target:'prop'+i}))};
+ useFlowStore.getState().loadProject(shared);const sharedBefore=structuredClone(useFlowStore.getState().nodes);
+ useFlowStore.getState().updateNodeParams('eng0',{power:200});
+ const sharedNext=useFlowStore.getState();assert.equal(sharedNext.nodes.find(n=>n.id==='eng1').data.params.power,200,'a shared engine file updates every instance card');
+ assert.deepEqual(projectParameterChanges({nodes:sharedBefore,edges:shared.edges},sharedNext).map(e=>e.key),['_tuning/engine/i0/power','_tuning/engine/i1/power']);
+ useFlowStore.getState().updateNodeParams('eng1',{location:{x:12,y:0,z:0,unit:'IN'}});
+ assert.equal(useFlowStore.getState().nodes.find(n=>n.id==='prop1').data.params.location.x,12,'engine location updates the real thruster owner');
+ useFlowStore.getState().updateNodeParams('prop0',{_tables:JSON.stringify([{name:'C_THRUST',data:[[0,20],[0,9,3],[10,5,7]]}])});
+ assert.equal(useFlowStore.getState().nodes.find(n=>n.id==='prop1').data.params.tables[0].expression.data[0][0],9,'raw table edits keep shared editable and saved representations consistent');
+ const engineFunctions={nodes:[{id:'turbine',data:{componentType:'engine',params:{engine_type:'turbine',functions:[{name:'MilThrust',expression:{kind:'product',children:[{kind:'value',value:2},table]}}],tables:[{name:'',function_owner:'MilThrust',function_path:[0,1],expression:table}]}}}]};
+ const fnChanged=structuredClone(engineFunctions);fnChanged.nodes[0].data.params.functions[0].expression.children[0].value=3;
+ assert.deepEqual(projectParameterChanges(engineFunctions,fnChanged),[{key:expressionParameters('propulsion/engine[0]/MilThrust',fnChanged.nodes[0].data.params.functions[0].expression)[0].key,value:3}]);
+ useFlowStore.getState().loadProject({...engineFunctions,aircraft:{name:'test'},edges:[]});
+ const functions=structuredClone(engineFunctions.nodes[0].data.params.functions);functions[0].expression.children[1].data[0][0]=12;
+ useFlowStore.getState().updateNodeParams('turbine',{functions});
+ assert.equal(useFlowStore.getState().nodes[0].data.params.tables[0].expression.data[0][0],12,'function edits synchronize their nested table mirror');
+ const mirrored=structuredClone(useFlowStore.getState().nodes[0].data.params.tables);mirrored[0].expression.data[0][0]=13;
+ useFlowStore.getState().updateNodeParams('turbine',{tables:mirrored});
+ assert.equal(useFlowStore.getState().nodes[0].data.params.functions[0].expression.children[1].data[0][0],13,'table edits synchronize their function body');
  console.log('PASS: stable native parameter identities, numeric deltas, paired limits, constants, environment units and structural edit isolation');
 } finally {await rm(work,{recursive:true,force:true});}

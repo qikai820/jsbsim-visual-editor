@@ -1,5 +1,7 @@
 import { xmlContentEqual, xmlElementsEqual } from './xmlContentEqual';
 import { decodeDisabledComment } from './disabledXml';
+import { expressionToXmlText } from './expressionXml';
+import type { ExprNode } from '../types';
 
 const MODELED_SYSTEM_CHILDREN = new Set([
   'property', 'function', 'fcs_function', 'channel',
@@ -78,7 +80,38 @@ function patchPropulsionSource(sourceXml: string, params: Record<string, unknown
     if (unit !== null && unit.trim()) child.setAttribute('unit', unit);
   }
 
-  return new XMLSerializer().serializeToString(document);
+  const tableEdits=Array.isArray(params.tables) ? params.tables as any[] : [];
+  for(const item of tableEdits) {
+    if(item.expression?.kind!=='table') continue;
+    const candidates=Array.from(root.querySelectorAll('table')).filter(table=>(table.getAttribute('name') || '')===String(item.name || ''));
+    let tables:Element[]=item.function_owner ? candidates.filter(table=>table.closest('function')?.getAttribute('name')===item.function_owner) : candidates;
+    if(item.function_owner && Array.isArray(item.function_path)) {
+      let target:Element|undefined=Array.from(root.querySelectorAll('function')).find(fn=>fn.getAttribute('name')===item.function_owner);
+      for(const index of item.function_path) target=target && directElements(target).filter(child=>!['description','documentation','clipto','output','input','gain'].includes(child.tagName))[index];
+      tables=target?.tagName==='table'?[target]:[];
+    }
+    if(tables.length!==1) throw new Error(`无法唯一确定查表 ${item.name || item.function_owner || '(未命名)'}，请重新加载完整模型`);
+    const source=tables[0];
+    const rendered=parseDocument(expressionToXmlText(item.expression),'查表修改').querySelector('table')!;
+    if(source.getAttribute('type')==='internal') for(const iv of Array.from(rendered.querySelectorAll(':scope > independentVar'))) iv.remove();
+    for(const attr of Array.from(source.attributes)) rendered.setAttribute(attr.name,attr.value);
+    // Preserve non-table-data annotations and vendor elements from the source.
+    for(const child of directElements(source)) if(!['independentVar','tableData'].includes(child.tagName)) rendered.appendChild(rendered.ownerDocument.importNode(child,true));
+    source.replaceWith(document.importNode(rendered,true));
+  }
+  const functionEdits=Array.isArray(params.functions) ? params.functions as any[] : [];
+  for(const item of functionEdits) {
+    if(!item.expression)continue;
+    const candidates=Array.from(root.querySelectorAll('function')).filter(fn=>(fn.getAttribute('name') || '')===String(item._source_name ?? item.name));
+    const functions=item._source_parent ? candidates.filter(fn=>fn.parentElement?.tagName===item._source_parent) : candidates;
+    if(functions.length!==1)throw new Error(`无法唯一确定函数 ${item.name}，请重新加载完整模型`);
+    const source=functions[0], rendered=parseDocument(expressionToXmlText(item.expression as ExprNode),'函数修改').documentElement;
+    const old=directElements(source).filter(child=>FUNCTION_EXPRESSION_CHILDREN.has(child.tagName));
+    if(old.length!==1 || rendered.children.length!==1)throw new Error(`函数 ${item.name} 的表达式结构无法安全替换`);
+    old[0].replaceWith(document.importNode(rendered.children[0],true));
+  }
+
+  return patchSystemText(sourceXml, parseDocument(sourceXml, '原始子文件').documentElement, root);
 }
 
 function identity(element: Element): string {
@@ -181,6 +214,24 @@ function equivalentLookupTable(source: Element, candidate: Element): boolean {
   return xmlContentEqual(serializer.serializeToString(a), serializer.serializeToString(b));
 }
 
+/** Preserve comments, spacing and unchanged precision in a numeric XML matrix. */
+export function patchNumericTableText(current:string, wantedText:string, lineEnding='\n'):string {
+  const rows=(text:string)=>text.replace(/<!--[\s\S]*?-->/g,'').trim().split(/\r?\n/)
+    .map(row=>row.trim()).filter(Boolean).map(row=>row.split(/\s+/));
+  const before=rows(current),after=rows(wantedText),values=after.flat();
+  if(values.some(value=>!Number.isFinite(Number(value))))throw new Error('查表包含无效数值');
+  if(JSON.stringify(before.map(row=>row.length))!==JSON.stringify(after.map(row=>row.length))) {
+    return (current.match(/<!--[\s\S]*?-->/g)||[]).join(lineEnding)+wantedText;
+  }
+  let index=0;
+  const text=current.replace(/<!--[\s\S]*?-->|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g,token=> {
+    if(token.startsWith('<!--'))return token;
+    const value=values[index++];return Number(token)===Number(value)?token:value;
+  });
+  if(index!==values.length)throw new Error('查表数值数量不匹配');
+  return text;
+}
+
 function patchSystemText(sourceXml: string, source: Element, candidate: Element): string {
   const root = scanXmlSpans(sourceXml);
   const edits: TextEdit[] = [];
@@ -218,7 +269,6 @@ function patchSystemText(sourceXml: string, source: Element, candidate: Element)
       if (sourceChildren.length === 1 && candidateChildren.length === 1 &&
           equivalentLookupTable(sourceChildren[0], candidateChildren[0]) &&
           Array.from(wanted.attributes).every(attr => original.getAttribute(attr.name) === attr.value)) return;
-      throw new Error('查表函数存在无法安全合并的修改，请直接编辑原始 XML');
     }
     if (sourceChildren.length !== span.children.length) throw new Error('XML 子节点位置不匹配');
     for (let index = 0; index < sourceChildren.length; index++) {
@@ -237,6 +287,12 @@ function patchSystemText(sourceXml: string, source: Element, candidate: Element)
       if (original.textContent !== wanted.textContent) {
         if (span.closeStart === span.openEnd) throw new Error('自闭合元素的文本修改需要重新建模');
         const current = sourceXml.slice(span.openEnd, span.closeStart);
+        if (original.tagName === 'tableData' || (current.includes('<!--') &&
+            Number.isFinite(Number(original.textContent)) && Number.isFinite(Number(wanted.textContent)))) {
+          edits.push({start:span.openEnd,end:span.closeStart,
+            text:patchNumericTableText(current,wanted.textContent || '',lineEnding)});
+          return;
+        }
         if (original.childNodes.length > 1 || original.firstChild?.nodeType !== Node.TEXT_NODE) throw new Error('复杂文本节点需要 DOM 合并');
         const leading = current.match(/^\s*/)?.[0] || '';
         const trailing = current.match(/\s*$/)?.[0] || '';
@@ -249,7 +305,6 @@ function patchSystemText(sourceXml: string, source: Element, candidate: Element)
     const used = new Set<Element>();
     const additions: Element[] = [];
     for (const child of candidateChildren) {
-      if (child.tagName === 'table' || child.tagName === 'tableData') continue;
       const match = matchingChild(original, child, used);
       if (match) {
         used.add(match);
@@ -306,7 +361,8 @@ function patchSystemSource(sourceXml: string, generatedXml: string): string {
 
 /**
  * Update an existing child XML without rebuilding it from the reduced visual
- * model. Engine/propeller edits touch direct scalar fields only. System edits
+ * model. Engine/propeller edits update scalars and explicitly edited tables or
+ * functions. System edits
  * apply byte-range patches to the original source, preserving unrelated
  * whitespace, comments, lookup tables and vendor fields.
  */

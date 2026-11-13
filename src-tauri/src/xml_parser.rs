@@ -4,11 +4,19 @@
 //! JSON structure with aircraft metadata, nodes, and edges for the visual editor.
 
 use crate::expression_xml::{
-    extract_tables, find_child, find_children, get_attr, get_text, parse_xml_tree, xml_to_expr,
+    extract_functions, extract_tables, find_child, find_children, get_attr, get_text, parse_xml_tree, xml_to_expr,
     ExprNode, XmlElement,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
+
+fn component_property(element: &XmlElement) -> Value {
+    let mut value=json!({"value":get_text(element),"attrs":element.attrs});
+    let children: Vec<Value> = element.children.iter().filter(|child| !child.tag.starts_with('@') && child.tag!="#text")
+        .map(|child| {let mut value=component_property(child);value["name"]=json!(child.tag);value}).collect();
+    if !children.is_empty() {value["children"]=json!(children);}
+    value
+}
 
 // ── Layout state ───────────────────────────────────────────────────────────
 
@@ -493,7 +501,7 @@ fn parse_propulsion(
 
     // Engines
     let engines = find_children(prop, "engine");
-    for eng in &engines {
+    for (runtime_index, eng) in engines.iter().enumerate() {
         let mut eng_params = json!({});
         let inline_name = get_attr(eng, "name").unwrap_or("").to_string();
         if !inline_name.is_empty() {
@@ -618,6 +626,7 @@ fn parse_propulsion(
         if let Some(thruster) = find_child(eng, "thruster") {
             let thruster_file = get_attr(thruster, "file").unwrap_or("").to_string();
             let mut thr_params = json!({});
+            thr_params["_runtime_index"] = json!(runtime_index);
 
             if !thruster_file.is_empty() {
                 if let Some(content) = file_map.get(&thruster_file) {
@@ -845,6 +854,8 @@ fn extract_element_params(el: &XmlElement, merged: &mut Value) {
         }
     }
 
+    let functions=extract_functions(el);
+    if !functions.is_empty() { merged["functions"]=json!(functions); }
     let (tables_expr, tables_raw) = extract_tables(el);
     if !tables_expr.is_empty() {
         merged["tables"] = json!(tables_expr);
@@ -953,7 +964,7 @@ fn parse_component_section(
                 let known_fields = [
                     "input", "output", "gain", "test", "default", "trigger",
                     "lag", "noise", "drift_rate", "bias", "delay", "width", "rate_limit",
-                    "traverse", "quantization", "hysteresis", "sensitivity",
+                    "traverse", "quantization", "hysteresis", "sensitivity", "deadband_width", "hysteresis_width", "module", "rate", "set", "reset", "versus", "table",
                     "constant", "clipto", "domain", "range", "zero_centered", "min", "max", "c1", "c2", "c3", "c4", "c5", "c6",
                     "kp", "ki", "kd", "axis", "location", "orientation",
                 ];
@@ -979,24 +990,9 @@ fn parse_component_section(
                         continue;
                     }
                     if let Some(field_elem) = find_child(child, field) {
-                        let text = get_text(field_elem);
-                        let mut field_attrs = json!({});
-                        for (ak, av) in &field_elem.attrs {
-                            field_attrs[ak] = json!(av);
-                        }
-                        props[*field] = json!({
-                            "value": text,
-                            "attrs": field_attrs
-                        });
-                        if !field_elem.children.is_empty() {
-                            props[*field]["children"] = json!(field_elem.children.iter()
-                                .filter(|nested| !nested.tag.starts_with('@') && nested.tag != "#text")
-                                .map(|nested| json!({
-                                    "name": nested.tag,
-                                    "value": get_text(nested),
-                                    "attrs": nested.attrs
-                                })).collect::<Vec<_>>());
-                        }
+                        props[*field]=component_property(field_elem);
+                        let repeated: Vec<Value> = find_children(child,field).into_iter().skip(1).map(component_property).collect();
+                        if !repeated.is_empty() {props[*field]["repeated"]=json!(repeated);}
                     }
                 }
 
