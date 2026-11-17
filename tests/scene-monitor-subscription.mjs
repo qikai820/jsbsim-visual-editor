@@ -11,8 +11,13 @@ try {
   await build({ entryPoints: [fileURLToPath(new URL('../client/src/sim/sceneSignals.ts', import.meta.url))], outfile: output, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
   const { SCENE_POSE_KEYS, sceneSignalKeys, mergeSceneMonitorKeys } = createRequire(import.meta.url)(output);
   const scene = sceneSignalKeys('voliro_t');
-  assert.equal(scene.length, 29); assert.equal(scene[0], 'fcs/voliro_t/pitch-rad');
+  assert.equal(scene.length, 32); assert.equal(scene[0], 'fcs/voliro_t/pitch-rad');
   assert.ok(scene.includes('fcs/voliro_t/rpm[4]'));
+  for (const model of ['voliro_t','F450','MorphQuad']) {
+    const keys=mergeSceneMonitorKeys([],sceneSignalKeys(model));
+    for(const axis of ['north','east','down'])assert.ok(keys.includes(`atmosphere/total-wind-${axis}-fps`));
+    assert.ok(keys.length<=32);
+  }
   assert.ok(sceneSignalKeys('F450').includes('propulsion/engine[3]/propeller-rpm'));
   assert.ok(sceneSignalKeys('F450').includes('propulsion/engine[3]/propeller-sense'));
   assert.ok(SCENE_POSE_KEYS.every(key => scene.includes(key)), 'all six measured position and attitude channels are subscribed');
@@ -26,9 +31,9 @@ try {
   const partial = mergeSceneMonitorKeys(full.slice(0, 30), scene);
   assert.equal(partial.length, 32); assert.ok(partial.includes('fcs/voliro_t/pitch-rad'));
   assert.deepEqual(mergeSceneMonitorKeys(user, []), [...user].sort(), 'leaving scene restores user signals');
-  assert.equal(sceneSignalKeys('F450').length, 19);
+  assert.equal(sceneSignalKeys('F450').length, 22);
   const morph = sceneSignalKeys('MorphQuad');
-  assert.equal(morph.length, 35); assert.equal(new Set(morph).size, 35);
+  assert.equal(morph.length, 38); assert.equal(new Set(morph).size, 38);
   assert.deepEqual(morph.slice(0, 6), [...SCENE_POSE_KEYS], 'MorphQuad retains measured pose priority');
   for (let i = 0; i < 4; i++) for (const axis of ['outer', 'inner']) assert.ok(morph.includes(`fcs/gimbal-${axis}-rad[${i}]`));
   assert.ok(morph.includes('propulsion/engine[7]/propeller-rpm'));

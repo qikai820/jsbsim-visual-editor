@@ -29,7 +29,7 @@ try {
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
   const evaluate = async expression => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw Error(JSON.stringify(r.exceptionDetails)); return r.result.value; };
   const until = async expression => { for (let i = 0; i < 150; i++) { if (await evaluate('Boolean(' + expression + ')')) return; await new Promise(r => setTimeout(r, 100)); } throw Error(`Timeout ${expression}\n${await evaluate('document.body.innerText')}\n${exceptions.join('\n')}`); };
-  const clickText = text => evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!button)throw Error('No button '+${JSON.stringify(text)});button.click()})()`);
+  const clickText = async text => { await evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!button)throw Error('No button '+${JSON.stringify(text)});button.click()})()`); if(text==='编辑场景'){await until(`document.querySelector('.scene-editor')`);await evaluate(`document.querySelectorAll('.scene-editor-section').forEach(section=>section.open=true)`);} };
   const screenshot = async file => { const r = await send('Page.captureScreenshot', { format: 'png' }); await writeFile(file, Buffer.from(r.data, 'base64')); };
   await send('Runtime.enable'); await send('Page.enable');
   await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: profile });
@@ -82,6 +82,12 @@ try {
   const objectState = `(()=>{const s=${rootState},id=document.querySelector('[data-scene-object][aria-pressed=true]')?.dataset.sceneObject,o=s.scene.getObjectByName('scene-object-'+id);return o?{id,p:o.position.toArray(),r:[o.rotation.x,o.rotation.y,o.rotation.z],s:o.scale.toArray(),visible:o.visible}:null})()`;
   const setNumber = (label, value) => evaluate(`(()=>{const i=document.querySelector('input[aria-label="${label}"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,'${value}');i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const geoFields = `['原点纬度','原点经度','基准海拔'].map(label=>document.querySelector('input[aria-label="'+label+'"]').value)`;
+  // A display preference survives reopening without exporting a scene file.
+  await setNumber('视景地面高度偏移',-.15);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  await send('Page.reload');await until(`document.querySelector('.scene-empty')`);await clickText('编辑场景');
+  await until(`document.querySelector('input[aria-label="视景地面高度偏移"]')?.value==='-0.15'`);
+  await setNumber('视景地面高度偏移',0);
   // Model configuration fills the datum before any telemetry is received.
   await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
   const modelGeo = await evaluate(geoFields);
@@ -123,7 +129,7 @@ try {
   await evaluate(`document.querySelector('[data-aircraft="01"]').click()`);
   await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
   await screenshot('/tmp/jsbsim-scene-model-origin.png');
-  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),34);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),37);
   const builtinCases = [
     ['builtin-runway', [45,.2,-90], [0,15,0], [1.1,1,1.2]],
     ['builtin-hangar', [-30,1,-55], [0,25,0], [1.2,.9,.8]],
@@ -133,7 +139,15 @@ try {
     await evaluate(`document.querySelector('[data-scene-object="${id}"]').click()`);
     await until(`document.querySelector('[data-scene-object="${id}"]').getAttribute('aria-pressed')==='true'`);
   };
+  await selectObject('builtin-f35');await clickText('定位物体');
+  await until(`(${rootState}).scene.getObjectByName('scene-f35-airframe')`);
+  assert.ok(await evaluate(`(()=>{const s=${rootState},a=s.scene.getObjectByName('scene-object-builtin-apron'),f=s.scene.getObjectByName('scene-object-builtin-f35'),model=f.getObjectByName('scene-f35-airframe');let meshes=0,textured=0;model.traverse(n=>{if(n.isMesh){meshes++;if(n.material.map)textured++}});return f.position.distanceTo(a.position)<1e-9&&Math.abs(f.rotation.y-Math.PI)<1e-9&&model.userData.lengthM===15.7&&meshes===9&&textured===9})()`),'textured nine-material F-35 loads at metre scale, on its apron and facing away from the hangar');
+  await evaluate(`(()=>{const s=${rootState};s.camera.position.set(-17,12,16);s.controls.target.set(-35,1.8,-8);s.controls.update()})()`);
+  await new Promise(r=>setTimeout(r,200));await screenshot('/tmp/jsbsim-scene-f35-apron.png');
   const clickWorldPoint = async (id, point) => {
+    // Focusing and clearing a gizmo must reach the WebGL frame before projecting
+    // a pick point, including slow software-rendered PBR frames in CI.
+    await evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     const position=await evaluate(`(()=>{const s=${rootState},o=s.scene.getObjectByName('scene-object-${id}'),r=s.gl.domElement.getBoundingClientRect(),p=o.localToWorld(s.camera.position.clone().set(${point.join(',')})).project(s.camera);return{x:r.x+(p.x+1)*r.width/2,y:r.y+(1-p.y)*r.height/2}})()`);
     await send('Input.dispatchMouseEvent',{type:'mouseMoved',...position});
     await send('Input.dispatchMouseEvent',{type:'mousePressed',...position,button:'left',clickCount:1});
@@ -148,7 +162,9 @@ try {
     await until(`(()=>{const o=${objectState};return o?.id===${JSON.stringify(id)}&&JSON.stringify(o.p)===${JSON.stringify(JSON.stringify(position))}&&JSON.stringify(o.s)===${JSON.stringify(JSON.stringify(scale))}&&o.r.every((n,i)=>Math.abs(n-${JSON.stringify(rotation)}[i]*Math.PI/180)<1e-6)})()`);
     const actual=await evaluate(objectState);assert.deepEqual(actual.p,position);assert.deepEqual(actual.s,scale);
     assert.ok(actual.r.every((n,i)=>Math.abs(n-rotation[i]*Math.PI/180)<1e-6));
-    await clickText('定位物体');await new Promise(r=>setTimeout(r,150));
+    const cameraBeforeFocus = await evaluate(`(${rootState}).camera.position.toArray()`);
+    await clickText('定位物体');
+    await until(`(${rootState}).camera.position.toArray().some((value,index)=>Math.abs(value-${JSON.stringify(cameraBeforeFocus)}[index])>1e-6)`);
     await selectObject(id==='builtin-runway'?'builtin-hangar':'builtin-runway');
     await clickWorldPoint(id,id==='builtin-runway'?[3,0,10]:id==='builtin-hangar'?[0,4,0]:[0,5.2,Math.sin(1)*.5]);
   }
@@ -161,11 +177,11 @@ try {
   await until(`(()=>{const m=(${rootState}).scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(0,a);return Math.abs(a.elements[12]-(${firstTreeX + 5}))<1e-4})()`);
   assert.deepEqual(await evaluate(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(1,a);return a.elements})()`),treeMatrix,'editing one tree does not move its neighbour');
   builtinCases[2][1][0]=-85;
-  await evaluate(`document.querySelectorAll('.scene-editor-check input')[1].click()`);
+  await evaluate(`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示物体').querySelector('input').click()`);
   await until(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(0,a);return a.elements[0]===0&&a.elements[5]===0&&a.elements[10]===0})()`);
-  await evaluate(`document.querySelectorAll('.scene-editor-check input')[1].click()`);
+  await evaluate(`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示物体').querySelector('input').click()`);
   await selectObject('builtin-tree-32');await clickText('删除物体');
-  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),33);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),36);
   await screenshot('/tmp/jsbsim-scene-builtins.png');
   await importFiles([{ name: 'triangle.glb', data: glb.toString('base64') }]);
   await until(`document.querySelectorAll('[data-scene-source=model]').length===1 && !document.querySelector('fieldset').disabled`);
@@ -231,11 +247,20 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=model]').length`),beforeFailure,'late cancelled/timed-out models cannot replace the scene');
 
   // Set a nonzero reference elevation, verifying gizmo and object world frames.
-  await evaluate(`document.querySelector('.scene-settings').open=true`);
+  await evaluate(`document.querySelector('button[aria-label="视图设置"]').click();document.querySelector('.scene-view-settings>details').open=true`);
   await setNumber('参考地面海拔', 30);
-  await evaluate(`document.querySelector('.scene-settings').open=false`);
-  await evaluate(`(()=>{const input=[...document.querySelectorAll('.scene-editor-check input')][0];input.click()})()`);
+  await evaluate(`document.querySelector('button[aria-label="收起侧栏"]').click();document.querySelector('button[aria-label="场景属性"]').click()`);
+  await evaluate(`(()=>{const input=[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示默认试验场').querySelector('input');input.click()})()`);
   await setNumber('原点纬度',30);await setNumber('原点经度',120);await setNumber('基准海拔',30);
+  const groundPosition = `(${rootState}).scene.getObjectByName('scene-object-'+${JSON.stringify(await evaluate(`document.querySelector('[data-scene-source=model]').dataset.sceneObject`))}).parent.position.y`;
+  await until(`Math.abs(${groundPosition})<1e-6`);
+  const groundBeforeOffset = await evaluate(groundPosition);
+  const transformBeforeOffset = await evaluate(objectState);
+  await setNumber('视景地面高度偏移', .25);
+  await until(`Math.abs((${groundPosition})-(${groundBeforeOffset + .25}))<1e-6`);
+  assert.deepEqual(await evaluate(objectState),transformBeforeOffset,'display correction does not edit object-local transforms');
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="飞机包络半径"]').parentElement.nextElementSibling.querySelector('input').getAttribute('aria-label')`),'视景地面高度偏移','offset follows the envelope radius');
+  await screenshot('/tmp/jsbsim-scene-ground-offset.png');
   await clickText('保存场景');
   const saved = await evaluate(`window.__saved.text().then(JSON.parse)`);
   const imported = saved.objects.filter(object=>object.assetId);
@@ -243,8 +268,9 @@ try {
   for (let i=0;i<50;i++) { exported=(await readdir(profile)).find(file=>file.endsWith('.scene.json'));if(exported)break;await new Promise(r=>setTimeout(r,100)); }
   assert.ok(exported, 'save produces an actual downloaded scene file');
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, exported),'utf8')),saved);
-  assert.equal(saved.assets.length, 2);assert.equal(saved.objects.length, 35);assert.equal(saved.showBase, false);assert.equal(saved.groundAltitude, 30);
+  assert.equal(saved.assets.length, 2);assert.equal(saved.objects.length, 38);assert.equal(saved.showBase, false);assert.equal(saved.groundAltitude, 30);
   assert.equal(saved.version,2);assert.deepEqual(saved.georeference,{latitude:30,longitude:120,altitude:30});
+  assert.equal(saved.visualGroundOffsetM,.25);
   for(const [id,position,rotation,scale] of builtinCases){const o=saved.objects.find(o=>o.id===id);assert.deepEqual(o.position,position);assert.deepEqual(o.rotation,rotation);assert.deepEqual(o.scale,scale)}
   assert.ok(!saved.objects.some(o=>o.id==='builtin-tree-32'),'deleted defaults stay deleted in the saved document');
   assert.equal(saved.assets[1].files.length, 3, 'portable scene carries all dependencies');
@@ -256,12 +282,13 @@ try {
   await importFiles([portable], '加载场景文件');
   await until(`document.querySelectorAll('[data-scene-source=model]').length===2 && !document.querySelector('fieldset').disabled`);
   assert.deepEqual(await evaluate(geoFields),['30','120','30'],'loading a saved scene preserves its independent datum');
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="视景地面高度偏移"]').value`),'0.25','fresh load restores the display correction');
   await evaluate(`document.querySelector('[data-scene-source=model]').click()`);
   assert.deepEqual((await evaluate(objectState)).p, imported[0].position, 'fresh page restores positions from the saved file');
   assert.deepEqual((await evaluate(objectState)).s, imported[0].scale);
   assert.equal(await evaluate(`document.querySelector('input[aria-label="参考地面海拔"]').value`), '30');
-  assert.equal(await evaluate(`document.querySelector('.scene-editor-check input').checked`), false);
-  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),33,'load does not reintroduce a deleted default');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示默认试验场').querySelector('input').checked`), false);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),36,'load does not reintroduce a deleted default');
   for(const [id,position,rotation,scale] of builtinCases){await selectObject(id);const actual=await evaluate(objectState);assert.deepEqual(actual.p,position);assert.deepEqual(actual.s,scale);assert.ok(actual.r.every((n,i)=>Math.abs(n-rotation[i]*Math.PI/180)<1e-6))}
   await evaluate(`document.querySelectorAll('[data-scene-source=model]')[1].click()`);
   assert.equal(await evaluate(`(()=>{const s=${rootState},id=document.querySelector('[data-scene-object][aria-pressed=true]').dataset.sceneObject;let found=false;s.scene.getObjectByName('scene-object-'+id).traverse(n=>{if(n.material?.map?.image)found=true});return found})()`), true, 'fresh load restores embedded external texture');
@@ -276,6 +303,15 @@ try {
   assert(collision.startsWith('JSBSCENE1 '));
   await evaluate(`window.__collisionPacket={instance_id:'01',model:'ball',tree_generation:'collision-test',timestamp:1,state:'running',latitude_deg:30,longitude_deg:120,altitude_m:50,roll_deg:0,pitch_deg:0,yaw_deg:0,properties:{'scene/loaded':1,'scene/revision':${version},'scene/contact-count':2,'position/terrain-elevation-asl-ft':30/.3048},scene_property_age_ms:{'scene/loaded':0,'scene/revision':0,'scene/contact-count':0,'position/terrain-elevation-asl-ft':0}};window.__emit('scene-frames',[window.__collisionPacket])`);
   await until(`document.body.innerText.includes('与本次导出一致') && document.body.innerText.includes('接触 2')`);
+  await until(`Math.abs((${rootState}).scene.getObjectByName('scene-aircraft-01').position.y-20)<1e-6`);
+  const aircraftBeforeOffset = await evaluate(`(${rootState}).scene.getObjectByName('scene-aircraft-01').position.toArray()`);
+  const fieldBeforeOffset = await evaluate(groundPosition);
+  await setNumber('视景地面高度偏移', .4);
+  await until(`Math.abs((${groundPosition})-(${fieldBeforeOffset + .15}))<1e-6`);
+  assert.deepEqual(await evaluate(`(${rootState}).scene.getObjectByName('scene-aircraft-01').position.toArray()`),aircraftBeforeOffset,'display ground correction never moves the measured aircraft');
+  assert(await evaluate(`document.body.innerText.includes('与本次导出一致')`),'display-only edits retain collision acknowledgement');
+  await clickText('导出仿真碰撞地图');
+  assert.equal(await evaluate(`window.__collision.text()`),collision,'display correction never enters collision vertices, datum or revision');
   const baseline=await evaluate(`(${rootState}).scene.getObjectByName('scene-object-'+${JSON.stringify(imported[0].id)}).parent.position.y`);
   await evaluate(`window.__collisionPacket.timestamp=2;window.__collisionPacket.properties['position/terrain-elevation-asl-ft']=999/.3048;window.__emit('scene-frames',[window.__collisionPacket])`);
   assert.equal(await evaluate(`(${rootState}).scene.getObjectByName('scene-object-'+${JSON.stringify(imported[0].id)}).parent.position.y`),baseline,'telemetry cannot move scenery');
@@ -302,6 +338,25 @@ try {
   await clickText('完成');
   await until(`!document.querySelector('.scene-editor') && document.querySelector('.scene-inspector')`);
   assert.equal(await evaluate(`(${rootState}).scene.getObjectByName('scene-object-'+${JSON.stringify(imported[0].id)})!==undefined`), true, 'finishing editing retains imported scenery');
+  await clickText('地面');
+  await until(`Math.abs((${rootState}).camera.position.y-2.4)<1e-6`);
+  // The last change (.4) was never saved to .scene.json. It still survives a
+  // fresh page, and an older scene without the property must preserve it.
+  await send('Page.reload');await until(`document.querySelector('.scene-empty')`);await clickText('编辑场景');
+  await until(`document.querySelector('input[aria-label="视景地面高度偏移"]')?.value==='0.4'`);
+  const legacyScene = { format:'jsbsim-flight-scene',version:2,name:'Legacy',groundAltitude:null,showBase:true,assets:[],objects:[] };
+  await importFiles([{name:'legacy.scene.json',data:Buffer.from(JSON.stringify(legacyScene)).toString('base64')}],'加载场景文件');
+  await until(`document.querySelector('input[aria-label="场景名称"]').value==='Legacy' && !document.querySelector('fieldset').disabled`);
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="视景地面高度偏移"]').value`),'0.4');
+  await importFiles([portable],'加载场景文件');
+  await until(`document.querySelectorAll('[data-scene-source=model]').length===2 && !document.querySelector('fieldset').disabled`);
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="视景地面高度偏移"]').value`),'0.25','explicit scene-file preference is applied');
+  await send('Page.reload');await until(`document.querySelector('.scene-empty')`);await clickText('编辑场景');
+  await until(`document.querySelector('input[aria-label="视景地面高度偏移"]')?.value==='0.25'`);
+  await setNumber('视景地面高度偏移',0);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  await send('Page.reload');await until(`document.querySelector('.scene-empty')`);await clickText('编辑场景');
+  await until(`document.querySelector('input[aria-label="视景地面高度偏移"]')?.value==='0'`);
   assert.equal(exceptions.length, 0, exceptions.join('\n'));assert.equal(shaderErrors.length, 0, shaderErrors.join('\n'));
   console.log('Scene editor WebGL: default runway/hangar/individual-tree picking, transforms and instanced-tree matrices, neighbour isolation, visibility/deletion persistence; GLB/glTF, real gizmo dragging and orbit isolation, portable save/reload, atomic failures and resource disposal passed.');
 } finally {

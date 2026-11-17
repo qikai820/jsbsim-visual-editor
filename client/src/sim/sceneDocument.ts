@@ -1,7 +1,7 @@
 /** Portable scenery: local metre coordinates (X east, Y up, Z south).
  * Model sources are embedded so a saved scene never depends on temporary URLs. */
 export type Triple = [number, number, number];
-export type BuiltinSceneKind = 'runway' | 'hangar' | 'tree';
+export type BuiltinSceneKind = 'runway' | 'hangar' | 'tree' | 'windsock' | 'apron' | 'f35';
 export type SceneObject = {
   id: string; assetId?: string; builtin?: BuiltinSceneKind; seed?: number; name: string; visible: boolean;
   collision?: boolean; position: Triple; rotation: Triple; scale: Triple; // Euler XYZ, degrees
@@ -11,20 +11,50 @@ export type SceneSourceFile = SceneAsset['files'][number];
 export type SceneDocument = {
   format: 'jsbsim-flight-scene'; version: 2; name: string;
   georeference?: { latitude: number; longitude: number; altitude: number }; collisionRadius?: number;
+  visualGroundOffsetM?: number; // Display only: positive raises scenery, never exported to collision.
   groundAltitude: number | null; showBase: boolean; assets: SceneAsset[]; objects: SceneObject[];
 };
 export const MAX_SCENE_BYTES = 140 * 1024 * 1024;
+export const MAX_VISUAL_GROUND_OFFSET_M = 100;
+/** Wind indicators belong to the user's layout, even on imported terrain. */
+export const sceneObjectVisible = (object: SceneObject, showBase: boolean): boolean =>
+  object.visible && (!object.builtin || object.builtin === 'windsock' || showBase);
+
+/** Find a nearby free slot without sharing mutable transforms with a copy. */
+export function newSceneWindsock(objects: readonly SceneObject[], id: string, source?: SceneObject): SceneObject {
+  const windsocks = objects.filter(object => object.builtin === 'windsock');
+  const transform = source ?? defaultSceneTransform({ builtin: 'windsock' });
+  const spacing = 5 * Math.max(1, transform.scale[0], transform.scale[2],
+    ...windsocks.flatMap(object => [object.scale[0], object.scale[2]]));
+  const names = new Set(objects.map(object => object.name));
+  let number = 1;
+  while (names.has(`机场风袋 ${number}`) || number === 1 && names.has('机场风袋')) number++;
+  // Search square rings around the default location or the copied pole. At
+  // most 1000 scene objects are allowed, so this bounds even a dense layout.
+  for (let ring = 0; ring <= 64; ring++) for (let x = -ring; x <= ring; x++) for (let z = -ring; z <= ring; z++) {
+    if (Math.max(Math.abs(x), Math.abs(z)) !== ring) continue;
+    const position: Triple = [transform.position[0] + x * spacing, transform.position[1], transform.position[2] + z * spacing];
+    if (position.some(n => Math.abs(n) > 1e7) || windsocks.some(object =>
+      Math.hypot(object.position[0] - position[0], object.position[2] - position[2]) < spacing - 1e-6)) continue;
+    return { id, builtin: 'windsock', name: `机场风袋 ${number}`, visible: true, collision: source?.collision ?? false,
+      position, rotation: [...transform.rotation], scale: [...transform.scale] };
+  }
+  throw new Error('附近没有可用位置，请先调整风袋尺寸或位置');
+}
 export function defaultSceneTransform(object: Pick<SceneObject, 'builtin' | 'seed'>): Pick<SceneObject, 'position' | 'rotation' | 'scale'> {
-  let position: Triple = [0, 0, 0], scale: Triple = [1, 1, 1];
+  let position: Triple = [0, 0, 0], rotation: Triple = [0, 0, 0], scale: Triple = [1, 1, 1];
   if (object.builtin === 'runway') position = [50, .025, -100];
   if (object.builtin === 'hangar') position = [-35, 0, -50];
+  if (object.builtin === 'windsock') position = [-6, 0, 0];
+  if (object.builtin === 'apron' || object.builtin === 'f35') position = [-35, .024, -8];
+  if (object.builtin === 'f35') rotation = [0, 180, 0];
   if (object.builtin === 'tree') {
     const i = object.seed ?? 0, size = .8 + (Math.sin(i * 7.7) + 1) * .25;
     position = [i % 2 ? 115 + Math.sin(i * 17.1) * 38 : -105 + Math.sin(i * 17.1) * 35,
       0, 15 - (i / 32) * 380 + Math.cos(i * 13.3) * 12];
     scale = [size, size, size];
   }
-  return { position, rotation: [0, 0, 0], scale };
+  return { position, rotation, scale };
 }
 export function defaultSceneObjects(): SceneObject[] {
   const objects: SceneObject[] = [
@@ -33,11 +63,17 @@ export function defaultSceneObjects(): SceneObject[] {
   ];
   for (let i = 0; i < 32; i++) objects.push({ id: `builtin-tree-${i + 1}`, builtin: 'tree', seed: i,
     name: `树木 ${String(i + 1).padStart(2, '0')}`, visible: true, ...defaultSceneTransform({ builtin: 'tree', seed: i }) });
+  objects.push({ id: 'builtin-windsock', builtin: 'windsock', name: '机场风袋', visible: true, collision: false,
+    ...defaultSceneTransform({ builtin: 'windsock' }) });
+  objects.push({ id: 'builtin-apron', builtin: 'apron', name: '停机坪', visible: true,
+    ...defaultSceneTransform({ builtin: 'apron' }) });
+  objects.push({ id: 'builtin-f35', builtin: 'f35', name: 'F-35A · 静态展示', visible: true, collision: false,
+    ...defaultSceneTransform({ builtin: 'f35' }) });
   return objects;
 }
 export const newSceneDocument = (): SceneDocument => ({
   format: 'jsbsim-flight-scene', version: 2, name: '我的场景', groundAltitude: null,
-  showBase: true, assets: [], objects: defaultSceneObjects(),
+  showBase: true, visualGroundOffsetM: 0, assets: [], objects: defaultSceneObjects(),
 });
 
 export function scenePath(path: string): string {
@@ -70,6 +106,8 @@ export function validateSceneDocument(value: unknown): SceneDocument {
     || !Number.isFinite(doc.georeference.longitude) || Math.abs(doc.georeference.longitude) > 180
     || !Number.isFinite(doc.georeference.altitude) || Math.abs(doc.georeference.altitude) > 100000)) fail('地理基准');
   if (doc.collisionRadius !== undefined && (!Number.isFinite(doc.collisionRadius) || doc.collisionRadius < .01 || doc.collisionRadius > 100)) fail('飞机碰撞半径');
+  if (doc.visualGroundOffsetM !== undefined && (typeof doc.visualGroundOffsetM !== 'number'
+    || !Number.isFinite(doc.visualGroundOffsetM) || Math.abs(doc.visualGroundOffsetM) > MAX_VISUAL_GROUND_OFFSET_M)) fail('视景地面高度偏移');
   const ids = new Set<string>(), objectIds = new Set<string>(); let bytes = 0;
   const validId = (id: unknown) => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(id);
   for (const asset of doc.assets) {
@@ -90,7 +128,7 @@ export function validateSceneDocument(value: unknown): SceneDocument {
     if (!obj || !validId(obj.id) || objectIds.has(obj.id)
       || typeof obj.name !== 'string' || obj.name.length > 200 || typeof obj.visible !== 'boolean') fail('物体信息或资源引用');
     if (obj.builtin !== undefined) {
-      if (!['runway', 'hangar', 'tree'].includes(obj.builtin) || obj.assetId !== undefined
+      if (!['runway', 'hangar', 'tree', 'windsock', 'apron', 'f35'].includes(obj.builtin) || obj.assetId !== undefined
         || (obj.builtin === 'tree' ? !Number.isInteger(obj.seed) || obj.seed! < 0 || obj.seed! >= 32 : obj.seed !== undefined)) fail('默认地物类型或树木编号');
     } else if (typeof obj.assetId !== 'string' || !ids.has(obj.assetId) || obj.seed !== undefined) fail('模型资源引用');
     if (obj.collision !== undefined && typeof obj.collision !== 'boolean') fail('碰撞开关');

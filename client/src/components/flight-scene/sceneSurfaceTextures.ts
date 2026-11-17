@@ -48,6 +48,21 @@ function helipadMarkings(ctx: CanvasRenderingContext2D) {
   ctx.fillRect(91, 76, 9, 104); ctx.fillRect(156, 76, 9, 104); ctx.fillRect(91, 124, 74, 9);
 }
 
+function apronMarkings(ctx: CanvasRenderingContext2D) {
+  const { width, height } = ctx.canvas;
+  ctx.save(); ctx.scale(width / 800, height / 880);
+  // Concrete expansion joints and a perimeter safety line, 40 x 44 metres.
+  ctx.strokeStyle = 'rgba(50,57,57,.24)'; ctx.lineWidth = 1;
+  for (let x = 0; x <= 800; x += 100) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 880); ctx.stroke(); }
+  for (let y = 0; y <= 880; y += 100) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(800, y); ctx.stroke(); }
+  ctx.strokeStyle = '#e9bf45'; ctx.lineWidth = 4; ctx.strokeRect(24, 24, 752, 832);
+  ctx.setLineDash([20, 12]); ctx.lineWidth = 3; ctx.strokeRect(230, 200, 340, 440); ctx.setLineDash([]);
+  ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(400, 852); ctx.lineTo(400, 540); ctx.moveTo(365, 540); ctx.lineTo(435, 540); ctx.stroke();
+  ctx.fillStyle = '#e9bf45'; ctx.textAlign = 'center'; ctx.font = 'bold 34px sans-serif'; ctx.fillText('01', 400, 755);
+  ctx.font = 'bold 20px sans-serif'; ctx.fillText('F-35', 400, 176);
+  ctx.restore();
+}
+
 function noiseLayer(cells: number, rng: () => number) {
   const values = Array.from({ length: cells * cells }, rng);
   return (u: number, v: number) => {
@@ -91,6 +106,8 @@ export function createSceneSurfaceTextures() {
   const pad = canvas(256, 256);
   pad.ctx.drawImage(concrete.image, 0, 0);
   helipadMarkings(pad.ctx);
+  const apron = canvas(1024, 1024);
+  apron.ctx.drawImage(concrete.image, 0, 0, 1024, 1024); apronMarkings(apron.ctx);
 
   const shadow = canvas(64, 64), gradient = shadow.ctx.createRadialGradient(32, 32, 3, 32, 32, 32);
   gradient.addColorStop(0, 'rgba(255,255,255,.65)');
@@ -101,14 +118,14 @@ export function createSceneSurfaceTextures() {
   skyGradient.addColorStop(0, '#6194bf'); skyGradient.addColorStop(1, '#929ba3');
   sky.ctx.fillStyle = skyGradient; sky.ctx.fillRect(0, 0, 1024, 512);
 
-  // About 7.4 MiB with mipmaps, including the 1K panorama. The fallback grass
+  // About 12.7 MiB with mipmaps, including the 1K panorama and apron. The fallback grass
   // uses a 64 m tile; the photograph switches to its measured 2.51 m width.
   const ground = texture(grass.image, 4000 / 64);
   // The baked ground shader samples and outputs display RGB directly.
   ground.colorSpace = NoColorSpace;
   const background = texture(sky.image); background.colorSpace = NoColorSpace;
   const runway = texture(asphalt.image); runway.anisotropy = 2;
-  return { grass: ground, runway, concrete: texture(concrete.image), pad: texture(pad.image), shadow: texture(shadow.image), sky: background };
+  return { grass: ground, runway, concrete: texture(concrete.image), pad: texture(pad.image), apron: texture(apron.image), shadow: texture(shadow.image), sky: background };
 }
 
 export type SceneSurfaceTextures = ReturnType<typeof createSceneSurfaceTextures>;
@@ -150,9 +167,10 @@ export function loadSceneSurfaceTextures(maps: SceneSurfaceTextures) {
     ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.fillRect(0, 0, 256, 2048);
     runwayMarkings(ctx);
   });
-  load('concrete.jpg', 'concrete_floor_01', [maps.concrete, maps.pad], image => {
+  load('concrete.jpg', 'concrete_floor_01', [maps.concrete, maps.pad, maps.apron], image => {
     tiled(context(maps.concrete), image, 30, 22, 2);
     const ctx = context(maps.pad); tiled(ctx, image, 8, 8, 2); helipadMarkings(ctx);
+    const apron = context(maps.apron); tiled(apron, image, 40, 44, 4); apronMarkings(apron);
   });
   return () => {
     active = false;

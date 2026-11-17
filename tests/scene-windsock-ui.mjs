@@ -1,0 +1,127 @@
+// Render the real FlightScene with isolated IPC and controlled environment wind.
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+const base = process.argv[2] || 'http://127.0.0.1:5185';
+const name = `.windsock-test-${process.pid}`;
+const html = new URL(`../client/${name}.html`, import.meta.url), module = new URL(`../client/${name}.tsx`, import.meta.url);
+const profile = await mkdtemp(path.join(tmpdir(), 'windsock-chrome-'));
+await writeFile(html, `<html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="/${name}.tsx"></script></body></html>`);
+await writeFile(module, `import React from 'react';import{createRoot}from'react-dom/client';import{_roots}from'@react-three/fiber';import FlightScene from './src/components/flight-scene/FlightScene';import{demoPackets}from'./src/sim/flightSceneState';import{SCENE_WIND_KEYS}from'./src/sim/sceneWind';import{publishSceneMonitor}from'./src/sim/sceneSignals';import './src/App.css';window.__roots=_roots;window.__publishWind=publishSceneMonitor;window.__wind=[0,0,0];window.__state='running';window.__windAge=0;let t=10;window.__tick=()=>{t+=.1;const p=demoPackets(t)[0];p.state=window.__state;p.altitude_m=583.1;p.latitude_deg=34.07189;p.longitude_deg=108.99734;p.roll_deg=0;p.pitch_deg=0;p.yaw_deg=80;for(let i=0;i<3;i++){p.properties['/'+SCENE_WIND_KEYS[i]]=window.__wind[i]/.3048;p.scene_property_age_ms['/'+SCENE_WIND_KEYS[i]]=window.__windAge}p.properties['/position/h-agl-ft']=.5/.3048;window.__emit('scene-frames',[p,{...p,instance_id:'02',properties:Object.fromEntries(SCENE_WIND_KEYS.map(k=>['/'+k,0]))}])};createRoot(document.getElementById('root')).render(<div style={{display:'flex',height:'100vh'}}><FlightScene onClose={()=>{}} slots={{'01':'voliro_t','02':'voliro_t'}}/></div>);`);
+const chrome=spawn('/usr/bin/google-chrome-stable',['--headless=new','--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-first-run','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:['ignore','ignore','pipe']});
+let ws;
+try {
+  const endpoint=await new Promise((resolve,reject)=>{let out='';const timer=setTimeout(()=>reject(Error('Chrome timeout')),15000);chrome.stderr.on('data',chunk=>{out+=chunk;const found=out.match(/DevTools listening on (ws:\/\/[^\s]+)/);if(found){clearTimeout(timer);resolve(found[1])}})});
+  const page=(await fetch(`http://${new URL(endpoint).host}/json/list`).then(r=>r.json())).find(p=>p.type==='page');
+  ws=new WebSocket(page.webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));
+  let sequence=0;const pending=new Map(),errors=[];
+  ws.addEventListener('message',event=>{const m=JSON.parse(event.data),p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result)}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text)});
+  const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
+  const evaluate=async expression=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value};
+  const until=async expression=>{for(let i=0;i<100;i++){if(await evaluate(`Boolean(${expression})`))return;await new Promise(r=>setTimeout(r,100))}throw Error(`Timeout: ${expression}\n${errors.join('\n')}`)};
+  const click=text=>evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b)throw Error('Missing button');b.click()})()`);
+  const screenshot=async file=>{const r=await send('Page.captureScreenshot',{format:'png'});await writeFile(file,Buffer.from(r.data,'base64'))};
+  const scene=`window.__roots.get(document.querySelector('canvas')).store.getState()`;
+  const bearing=`(${scene}).scene.getObjectByName('scene-windsock-builtin-windsock-bearing')`;
+  const cloth=`(${scene}).scene.getObjectByName('scene-windsock-builtin-windsock-cloth').geometry.getAttribute('position')`;
+  await send('Runtime.enable');await send('Page.enable');
+  await send('Page.addScriptToEvaluateOnNewDocument',{source:`const callbacks=new Map(),events=new Map();let id=0;window.__emit=(event,payload)=>{for(const[n,fn]of events.get(event)||[])fn({event,id:n,payload})};window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};window.__TAURI_INTERNALS__={transformCallback(fn){callbacks.set(++id,fn);return id},unregisterCallback(n){callbacks.delete(n)},invoke:async(command,args)=>{if(command==='plugin:event|listen'){const n=++id;if(!events.has(args.event))events.set(args.event,new Map());events.get(args.event).set(n,callbacks.get(args.handler));return n}if(command==='plugin:event|unlisten'){events.get(args.event)?.delete(args.eventId);return}if(command==='ftp_download_sim_config')return{content:JSON.stringify({initial:{latitudeDeg:33.8935374113,longitudeDeg:108.99734,altitudeM:583.1}})};if(command==='ftp_list_xml_parent')return{exists:true,files:['reset.xml']};if(command==='ftp_download_xml')return{content:'<initialize><elevation unit="M">582.6</elevation></initialize>'};return []}};const create=URL.createObjectURL.bind(URL);URL.createObjectURL=blob=>{if(blob.type==='application/json')window.__saved=blob;return create(blob)};`});
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  await send('Page.navigate',{url:`${base}/${name}.html`});
+  await until(`document.querySelector('.scene-wind-status')?.dataset.state==='waiting' && window.__tick`);
+  await until(`window.__roots?.get(document.querySelector('canvas'))?.store`);
+  await evaluate(`window.__tick();window.__timer=setInterval(window.__tick,100)`);
+  await until(`${bearing}?.userData.fresh`);
+  await until(`document.querySelector('.scene-wind-status').textContent.includes('水平静风')`);
+  // Averaging the last ring removes radius/ripple and measures cloth sag.
+  const tipY=`(()=>{const p=${cloth};let y=0;for(let i=p.count-17;i<p.count-1;i++)y+=p.getY(i);return y/16})()`;
+  assert.ok(await evaluate(`(${tipY}) < -1.2`),'calm cloth hangs below its open mouth');
+  await click('自由');await new Promise(r=>setTimeout(r,150));
+  await evaluate(`(()=>{const s=${scene};s.camera.position.set(-2,4,7);s.controls.target.set(-5,2,0);s.controls.update()})()`);
+  const direction=`(()=>{const g=${bearing};return g.position.clone().set(1,0,0).applyQuaternion(g.getWorldQuaternion(g.quaternion.clone())).toArray()})()`;
+  for(const [n,e,from,x,z]of [[7,0,180,0,-1],[0,7,270,1,0],[-7,0,0,0,1],[0,-7,90,-1,0]]){
+    await evaluate(`window.__wind=[${n},${e},0];window.__tick()`);
+    await until(`Math.abs((${direction})[0]-(${x}))<.02 && Math.abs((${direction})[2]-(${z}))<.02`);
+    await until(`document.querySelector('.scene-wind-status').textContent.includes('来向 ${from}°')`);
+  }
+  await evaluate(`window.__wind=[0,2,0]`);await until(`${bearing}.userData.inflation<.3`);
+  const low=await evaluate(tipY);await evaluate(`window.__wind=[0,7,0]`);
+  await until(`${bearing}.userData.inflation>.99`);
+  assert.ok(await evaluate(`(${tipY}) > ${low+.3}`),'higher wind lifts the cloth');
+  await evaluate(`(()=>{const s=${scene};s.camera.position.set(-2,3.8,6);s.controls.target.set(-5,1.9,0);s.controls.update()})()`);
+  await new Promise(r=>setTimeout(r,400));
+  await screenshot('/tmp/jsbsim-windsock.png');
+  // The editable pole's north reference must not rotate the environmental wind.
+  await click('编辑场景');await evaluate(`document.querySelector('[data-scene-object="builtin-windsock"]').click()`);
+  await until(`document.querySelector('input[aria-label="旋转 Y"]')`);
+  await evaluate(`(()=>{const i=document.querySelector('input[aria-label="旋转 Y"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,'90');i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  await until(`Math.abs((${scene}).scene.getObjectByName('scene-object-builtin-windsock').rotation.y-Math.PI/2)<1e-6`);
+  await until(`Math.abs((${direction})[0]-1)<.02`); // Wait for the next WebGL frame to compensate the edited parent.
+  await click('保存场景');const saved=await evaluate(`window.__saved.text().then(JSON.parse)`);
+  assert.equal(saved.objects.find(o=>o.builtin==='windsock').rotation[1],90);
+  const beforeCount=saved.objects.length;await click('添加机场风袋');
+  await until(`document.querySelectorAll('.scene-object-row').length===${beforeCount+1}`);
+  await click('删除物体');await until(`document.querySelectorAll('.scene-object-row').length===${beforeCount}`);
+  await click('完成');
+  await evaluate(`window.__state='paused';window.__tick()`);await until(`${bearing}.userData.moving===false`);
+  const paused=await evaluate(`Array.from((${cloth}).array)`);
+  await evaluate(`window.__wind=[-7,0,0]`);await new Promise(r=>setTimeout(r,300));
+  assert.deepEqual(await evaluate(`Array.from((${cloth}).array)`),paused,'pause freezes cloth, including flutter');
+  await evaluate(`window.__state='running';window.__tick()`);await until(`${bearing}.userData.moving`);
+  await until(`Math.abs((${direction})[2]-1)<.02`);
+  await evaluate(`window.__windAge=5000;window.__tick()`);await until(`document.querySelector('.scene-wind-status').dataset.state==='stale'`);
+  const stale=await evaluate(`Array.from((${cloth}).array)`);await new Promise(r=>setTimeout(r,250));
+  assert.deepEqual(await evaluate(`Array.from((${cloth}).array)`),stale,'stale wind freezes while body telemetry continues');
+  await evaluate(`window.__windAge=0;window.__wind=[0,7,0];window.__tick()`);await until(`${bearing}.userData.moving`);
+  await evaluate(`document.querySelector('[data-aircraft="02"]').click()`);
+  await until(`${bearing}.userData.instance==='02' && ${bearing}.userData.speed===0`);
+  // Multiple placements remain independent, including rapid batched clicks.
+  await evaluate(`document.querySelector('[data-aircraft="01"]').click()`);await until(`${bearing}.userData.speed>6.9`);
+  await click('编辑场景');
+  await evaluate(`(()=>{const input=[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.includes('显示默认试验场')).querySelector('input');input.click();const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='添加机场风袋');for(let i=0;i<3;i++)button.click()})()`);
+  await until(`document.querySelectorAll('.scene-object-row').length===${saved.objects.length+3} && document.querySelector('[data-scene-object][aria-pressed=true]')`);
+  await click('保存场景');let multiple=await evaluate(`window.__saved.text().then(JSON.parse)`);
+  let socks=multiple.objects.filter(o=>o.builtin==='windsock');
+  assert.equal(socks.length,4);assert.equal(new Set(socks.map(o=>o.name)).size,4);
+  assert.equal(new Set(socks.map(o=>o.position.join(','))).size,4,'rapid additions never overlap');
+  const ids=socks.map(o=>o.id);
+  await until(`(${JSON.stringify(ids)}).every(id=>{const s=${scene},o=s.scene.getObjectByName('scene-object-'+id),g=s.scene.getObjectByName('scene-windsock-'+id+'-bearing');return o?.visible&&g?.userData.fresh&&g.userData.speed>6.9})`);
+  assert.equal(await evaluate(`new Set((${JSON.stringify(ids)}).map(id=>(${scene}).scene.getObjectByName('scene-windsock-'+id+'-cloth').geometry.uuid)).size`),4,'each cloth owns its geometry');
+  const sourceId=await evaluate(`document.querySelector('[data-scene-object][aria-pressed=true]').dataset.sceneObject`);
+  const setNumber=(label,value)=>evaluate(`(()=>{const input=document.querySelector('input[aria-label="${label}"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(String(value))});input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  await setNumber('位置 X',-1);await setNumber('缩放 X',1.5);await setNumber('旋转 Y',35);
+  await until(`(${scene}).scene.getObjectByName('scene-object-${sourceId}').position.x===-1 && (${scene}).scene.getObjectByName('scene-object-${sourceId}').scale.x===1.5`);
+  await until(`(()=>{const g=(${scene}).scene.getObjectByName('scene-windsock-${sourceId}-bearing');g.updateWorldMatrix(true,false);return g.position.clone().set(1,0,0).transformDirection(g.matrixWorld).x>.999})()`);
+  await click('复制风袋');await until(`document.querySelectorAll('.scene-object-row').length===${saved.objects.length+4}`);
+  await click('保存场景');const copiedLayout=await evaluate(`window.__saved.text().then(JSON.parse)`);
+  const copiedId=await evaluate(`document.querySelector('[data-scene-object][aria-pressed=true]').dataset.sceneObject`);
+  const original=copiedLayout.objects.find(o=>o.id===sourceId),copy=copiedLayout.objects.find(o=>o.id===copiedId);
+  assert.notEqual(copiedId,sourceId);assert.deepEqual(copy.scale,original.scale);assert.deepEqual(copy.rotation,original.rotation);assert.notDeepEqual(copy.position,original.position);
+  const showObject=`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示物体').querySelector('input')`;
+  await evaluate(`(${showObject}).click()`);
+  await until(`!(${scene}).scene.getObjectByName('scene-object-${copiedId}').visible`);
+  assert.ok(await evaluate(`(${JSON.stringify(ids)}).every(id=>(${scene}).scene.getObjectByName('scene-object-'+id).visible)`),'hiding a copy leaves other poles visible');
+  await click('删除物体');await until(`document.querySelectorAll('.scene-object-row').length===${saved.objects.length+3}`);
+  await click('保存场景');multiple=await evaluate(`window.__saved.text().then(JSON.parse)`);
+  assert.deepEqual(multiple.objects,copiedLayout.objects.filter(o=>o.id!==copiedId),'deleting a copy preserves other transforms');
+  assert.equal(multiple.showBase,false);
+  // A fresh page loads all placements and their independent transforms.
+  await send('Page.reload');await until(`document.querySelector('.scene-wind-status') && window.__tick`);
+  await until(`window.__roots?.get(document.querySelector('canvas'))?.store`);
+  await evaluate(`window.__wind=[0,7,0];window.__tick();window.__timer=setInterval(window.__tick,100)`);
+  await click('编辑场景');
+  await evaluate(`(()=>{const transfer=new DataTransfer();transfer.items.add(new File([${JSON.stringify(JSON.stringify(multiple))}],'multiple-windsocks.scene.json',{type:'application/json'}));const input=document.querySelector('input[aria-label="加载场景文件"]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  await until(`document.querySelectorAll('.scene-object-row').length===${multiple.objects.length} && !document.querySelector('fieldset').disabled`);
+  await click('保存场景');assert.deepEqual((await evaluate(`window.__saved.text().then(JSON.parse)`)).objects,multiple.objects);
+  await until(`(${JSON.stringify(ids)}).every(id=>{const s=${scene};return s.scene.getObjectByName('scene-object-'+id)?.visible&&s.scene.getObjectByName('scene-windsock-'+id+'-bearing')?.userData.speed>6.9})`);
+  await evaluate(`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示默认试验场').querySelector('input').click()`);await click('完成');await click('自由');await new Promise(r=>setTimeout(r,250));
+  await evaluate(`(()=>{const s=${scene};s.camera.position.set(5,10,18);s.controls.target.set(-6,1.5,0);s.controls.update()})()`);
+  await new Promise(r=>setTimeout(r,400));await screenshot('/tmp/jsbsim-multiple-windsocks.png');
+  assert.equal(errors.length,0,errors.join('\n'));
+  console.log('Windsock WebGL: wind response, pause/expiry, instance switch; four independent poles, rapid additions, copy, transforms, visibility without base field, deletion and fresh-page save/load passed. Screenshots: /tmp/jsbsim-{windsock,multiple-windsocks}.png');
+} finally {
+  ws?.close();chrome.kill();await Promise.all([rm(html,{force:true}),rm(module,{force:true})]);
+  await new Promise(r=>chrome.once('exit',r));await rm(profile,{recursive:true,force:true,maxRetries:6,retryDelay:100});
+}

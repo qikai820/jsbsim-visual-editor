@@ -1,8 +1,9 @@
 import { canonicalMonitorProperty } from './monitorIdentity';
 import { rotorCount, rotorRpmKey } from './sceneRotors';
 import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
+import { SCENE_WIND_KEYS } from './sceneWind';
 
-export interface SceneMonitorTarget { instance: string; model: string }
+export interface SceneMonitorTarget { instance: string; model: string; extraKeys?: string[] }
 const sceneListeners = new Set<(frame: any) => void>();
 export function listenSceneMonitor(listener: (frame: any) => void): () => void {
   sceneListeners.add(listener); return () => { sceneListeners.delete(listener); };
@@ -14,14 +15,22 @@ export const SCENE_POSE_KEYS = ['position/lat-geod-deg', 'position/long-gc-deg',
 export function sceneSignalKeys(model: string): string[] {
   const ground = ['scene/loaded', 'scene/revision', 'scene/contact-count', 'position/h-agl-ft', 'position/terrain-elevation-asl-ft'];
   const rpm = Array.from({ length: rotorCount(model) }, (_, i) => rotorRpmKey(model, i));
-  if (isMorphQuad(model)) return [...SCENE_POSE_KEYS, ...ground,
+  if (isMorphQuad(model)) return [...SCENE_POSE_KEYS, ...SCENE_WIND_KEYS, ...ground,
     ...MORPHQUAD_ARMS.flatMap((_, i) => [gimbalKey(i, 'outer'), gimbalKey(i, 'inner')]), ...rpm,
     ...Array.from({ length: 8 }, (_, i) => `propulsion/engine[${i}]/propeller-sense`)];
   return /voliro/i.test(model) ? ['fcs/voliro_t/pitch-rad',
-    ...SCENE_POSE_KEYS, ...ground, ...rpm, 'fcs/voliro_t/rpm-model/version', 'fcs/voliro_t/rpm-model/tail-calibrated',
+    ...SCENE_POSE_KEYS, ...SCENE_WIND_KEYS, ...ground, ...rpm, 'fcs/voliro_t/rpm-model/version', 'fcs/voliro_t/rpm-model/tail-calibrated',
     ...Array.from({ length: 5 }, (_, i) => `fcs/esc-out[${i}]`),
-    ...Array.from({ length: 5 }, (_, i) => `fcs/voliro_t/thrust-lbf[${i}]`)] : [...SCENE_POSE_KEYS, ...ground, ...rpm,
+    ...Array.from({ length: 5 }, (_, i) => `fcs/voliro_t/thrust-lbf[${i}]`)] : [...SCENE_POSE_KEYS, ...SCENE_WIND_KEYS, ...ground, ...rpm,
       ...Array.from({ length: rotorCount(model) }, (_, i) => `propulsion/engine[${i}]/propeller-sense`)];
+}
+
+/** Keep pose/ground intact, then reserve room for explicitly configured values. */
+export function sceneMonitorKeys(model: string, extraKeys: string[] = []): string[] {
+  if (!extraKeys.length) return sceneSignalKeys(model);
+  const keys = [...SCENE_POSE_KEYS, 'position/h-agl-ft', 'position/terrain-elevation-asl-ft', ...extraKeys, ...sceneSignalKeys(model)];
+  const seen = new Set<string>();
+  return keys.filter(key => { const canonical = canonicalMonitorProperty(key); if (seen.has(canonical)) return false; seen.add(canonical); return true; });
 }
 
 // One VMON subscription per instance: preserve the user's signals and use free

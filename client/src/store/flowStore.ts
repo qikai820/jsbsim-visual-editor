@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { synchronizeTablePatch } from '../sim/runtimeTables';
 import { withoutLegacyForwarders, removeLegacyForwarderXml } from '../utils/legacyForwarder';
+import { restoreHilTransport } from '../utils/restoreHilTransport';
 import { useSignalMonitorStore } from './signalMonitorStore';
 import {
   applyNodeChanges, applyEdgeChanges, addEdge,
@@ -358,6 +359,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   setAircraft: (aircraft) => set({ aircraft }),
 
   loadProject: (data) => {
+    data = restoreHilTransport(data);
     data = withoutLegacyForwarders(data);
     data = { ...data, xmlFiles:data.xmlFiles?.map(file=>({...file,currentXml:removeLegacyForwarderXml(file.currentXml||file.originalXml||'')})) };
     useSignalMonitorStore.getState().load((data as any).monitoring);

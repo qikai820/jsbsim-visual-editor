@@ -32,6 +32,7 @@ import { validateXmlSource, showXmlDiagnostic } from '../utils/xmlDiagnostics';
 import { getToolbarAppearance, saveToolbarAppearance, toolbarBackground, type ToolbarAppearance } from '../utils/toolbarAppearance';
 
 interface ToolbarProps {
+  sceneToolbarRef?: (element: HTMLDivElement | null) => void;
   onShow3D?: () => void;
   jsbsimLogs?: string[];
   onLog?: (message: string) => void;
@@ -277,7 +278,7 @@ function importCategoryLabel(category: ImportFileCategory | 'main', isZh: boolea
 }
 
 export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbsimLog, onToggleHud, hudVisible = true, onShowLogCenter, fleetControls, workspace = 'editor', onSelectWorkspace, activeInstance = '01', instanceSlots = {}, editorSwitchRequest,
-  onEditorSwitchHandled, onSelectInstance, onSelectMultiInstance, onAssignInstanceModel, initialOverrides, networkOverrides, onLoadFleetGroup, onModelContextChange, onUndo, onRedo, onCopy, onPaste }: ToolbarProps) {
+  onEditorSwitchHandled, onSelectInstance, onSelectMultiInstance, onAssignInstanceModel, initialOverrides, networkOverrides, onLoadFleetGroup, onModelContextChange, onUndo, onRedo, onCopy, onPaste, sceneToolbarRef }: ToolbarProps) {
   const { isZh } = useLanguage();
   const { aircraft, setAircraft, nodes, edges, subFiles, xmlFiles, xmlEditBaseline, loadProject, clearAll } = useFlowStore();
   const hasLoadedModel = nodes.length > 0 || xmlFiles.length > 0;
@@ -1091,7 +1092,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
 
   return (
     <>
-      <div className="toolbar" style={{ backgroundColor: toolbarBackground(toolbarAppearance) }} data-tauri-drag-region onPointerDown={event => { void startWindowDrag(event); }}>
+      <div className={`toolbar ${workspace === 'scene' ? 'toolbar-scene' : ''}`} style={{ backgroundColor: toolbarBackground(toolbarAppearance) }} data-tauri-drag-region onPointerDown={event => { void startWindowDrag(event); }}>
         <div className="toolbar-left" data-tauri-drag-region>
         </div>
         <div className="toolbar-center" data-tauri-drag-region>
@@ -1113,6 +1114,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               <button role="menuitem" onClick={() => { setShowLocalSettings(true); setShowWorkspaceMenu(false); }} title={isZh ? '本地配置' : 'Local Settings'} aria-label={isZh ? '本地配置' : 'Local Settings'}>🔧 {isZh ? '本地' : 'Settings'}</button>
             </div>}
           </div>
+          {workspace === 'scene' && <div className="scene-toolbar-host" ref={sceneToolbarRef} onPointerDown={event => event.stopPropagation()} />}
           {workspace === 'editor' && <div className="file-menu-anchor" ref={instanceMenuRef}>
             <button type="button" className={`file-menu-trigger editor-instance-trigger ${showInstanceMenu ? 'active' : ''}`}
               aria-label={`${instanceSlots[activeInstance] || (isZh ? '未绑定模型' : 'No model assigned')}，编辑实例 ${activeInstance}`} aria-haspopup="menu" aria-expanded={showInstanceMenu}
@@ -1145,7 +1147,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               </button>
             </div>}
           </div>}
-          <div className="file-menu-anchor" ref={fileMenuRef}>
+          <div className="file-menu-anchor" ref={fileMenuRef} hidden={workspace === 'scene'}>
             <button
               className={`file-menu-trigger ${showFileMenu ? 'active' : ''}`}
               onClick={() => setShowFileMenu(value => !value)}
@@ -1187,7 +1189,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               </div>
             )}
           </div>
-          <div className="file-menu-anchor" ref={editMenuRef}>
+          <div className="file-menu-anchor" ref={editMenuRef} hidden={workspace === 'scene'}>
             <button className={`file-menu-trigger ${showEditMenu ? 'active' : ''}`}
               onClick={() => setShowEditMenu(value => !value)} aria-haspopup="menu" aria-expanded={showEditMenu}>
               ✏️ {isZh ? '编辑' : 'Edit'} <span className="file-menu-caret" aria-hidden="true">▾</span>
@@ -1202,7 +1204,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               </div>
             )}
           </div>
-          <div className="file-menu-anchor" ref={displayMenuRef}>
+          <div className="file-menu-anchor" ref={displayMenuRef} hidden={workspace === 'scene'}>
             <button className={`file-menu-trigger ${showDisplayMenu ? 'active' : ''}`} onClick={() => setShowDisplayMenu(value => !value)} aria-haspopup="menu" aria-expanded={showDisplayMenu}>
               👁️ {isZh ? '显示' : 'View'} <span className="file-menu-caret" aria-hidden="true">▾</span>
             </button>

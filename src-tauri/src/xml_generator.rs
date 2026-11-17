@@ -1958,9 +1958,10 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                 if !host.trim().is_empty() { attrs.push(("host".to_string(), host.trim().to_string())); }
             }
         } else if matches!(output_type, "HIL_SENSOR" | "HIL_GPS") {
-            let serial = p.get("transport").and_then(Value::as_str) == Some("SERIAL");
-            if serial {
-                attrs.push(("transport".to_string(), "SERIAL".to_string()));
+            let transport = p.get("transport").and_then(Value::as_str).unwrap_or("UDP");
+            let serial = transport == "SERIAL";
+            if serial || transport == "AUTO" {
+                attrs.push(("transport".to_string(), transport.to_string()));
                 attrs.push(("editor_module".to_string(), "output".to_string()));
                 for key in ["device", "baud"] {
                     if let Some(value) = p.get(key) {
@@ -1968,8 +1969,11 @@ fn build_output(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Stri
                         if !text.is_empty() { attrs.push((key.to_string(), text)); }
                     }
                 }
-            } else if let Some(host) = p.get("host").and_then(Value::as_str) {
-                if !host.trim().is_empty() { attrs.push(("host".to_string(), host.trim().to_string())); }
+            }
+            if !serial {
+                if let Some(host) = p.get("host").and_then(Value::as_str) {
+                    if !host.trim().is_empty() { attrs.push(("host".to_string(), host.trim().to_string())); }
+                }
             }
         }
 
@@ -2022,8 +2026,8 @@ fn build_input(groups: &std::collections::HashMap<String, Vec<&Value>>) -> Strin
             }
         }
         if params.get("type").and_then(Value::as_str) == Some("HIL_ACTUATOR_CONTROLS") &&
-            params.get("transport").and_then(Value::as_str) == Some("SERIAL") {
-            attrs.push(("transport".to_string(), "SERIAL".to_string()));
+            matches!(params.get("transport").and_then(Value::as_str), Some("SERIAL") | Some("AUTO")) {
+            attrs.push(("transport".to_string(), params["transport"].as_str().unwrap().to_string()));
             attrs.push(("editor_module".to_string(), "input".to_string()));
             for key in ["device", "baud"] {
                 if let Some(value) = params.get(key) {

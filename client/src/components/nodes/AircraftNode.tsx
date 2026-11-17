@@ -37,10 +37,18 @@ function AircraftNode({ id, data, selected }: NodeProps) {
 
   const hilInput = nodeData.componentType === 'input' && nodeData.params?.type === 'HIL_ACTUATOR_CONTROLS';
   const hilOutput = nodeData.componentType === 'output' && ['HIL_SENSOR', 'HIL_GPS'].includes(String(nodeData.params?.type));
+  const hilIo = hilInput || hilOutput;
+  const transport = String(nodeData.params?.transport || 'UDP').toUpperCase();
+  const transportLabel = transport === 'AUTO' ? 'USB / 网口自动'
+    : transport === 'SERIAL' ? (String(nodeData.params?.device || '').includes('ttyACM') ? 'USB 串口' : '串口')
+    : '网口 UDP';
+  const hilTitle = hilInput ? 'PX4 执行器输入'
+    : nodeData.params?.type === 'HIL_GPS' ? 'PX4 GPS 输出' : 'PX4 传感器输出';
   const paramEntries = hilInput || hilOutput
-    ? ['name', 'type', 'transport',
+    ? ['name',
         ...(hilOutput && nodeData.params?.transport !== 'SERIAL' ? ['host'] : []),
-        nodeData.params?.transport === 'SERIAL' ? 'device' : 'port']
+        ...(nodeData.params?.transport === 'AUTO' ? ['device', 'port']
+          : [nodeData.params?.transport === 'SERIAL' ? 'device' : 'port'])]
         .map(key => [key, def.params[key]] as const)
     : Object.entries(def.params).slice(0, 4);
   let pwmChannels = [] as ReturnType<typeof getPwmCaptureChannels>;
@@ -70,7 +78,7 @@ function AircraftNode({ id, data, selected }: NodeProps) {
       {nodeData.params?.disabled && <span className="module-commented-badge">已注释</span>}
       <div className="node-header" style={{ background: def.color }}>
         <span className="node-icon"><AviationIcon type={nodeData.componentType} size={14} /></span>
-        <span className="node-label">{nodeData.componentType === 'input' || nodeData.componentType === 'output'
+        <span className="node-label" title={hilIo ? String(nodeData.params?.name || '') : undefined}>{hilIo ? hilTitle : nodeData.componentType === 'input' || nodeData.componentType === 'output'
           ? `${nodeData.componentType === 'input' ? 'Input' : 'Output'}: ${String(nodeData.params?.name || '')}`
           : nodeData.label}</span>
         {isModule && (
@@ -82,13 +90,14 @@ function AircraftNode({ id, data, selected }: NodeProps) {
 
       {/* Body - parameter summary */}
       <div className="node-body">
+        {hilIo && <div className="node-hil-transport" data-transport={transport}>{transportLabel}</div>}
         {nodeData.componentType === 'pwm_capture' ? <>
           <div className="node-param"><span className="param-label">捕获通道:</span><span className="param-value">{pwmChannels.length}/10</span></div>
           <div className="node-param"><span className="param-label">设备:</span><span className="param-value">{pwmChannels.map(channel => channel.device.replace('/dev/', '')).join(', ')}</span></div>
         </> : paramEntries.map(([key, paramDef]) => {
           const raw = nodeData.params[key];
           const val = key === 'transport'
-            ? (raw === 'SERIAL' ? '串口' : '网口 UDP')
+            ? transportLabel
             : key === 'host' && !String(raw || '').trim() ? '板端默认'
             : displayVal(raw ?? paramDef.default);
           const unit = displayUnit(raw, paramDef.unit);
@@ -96,8 +105,12 @@ function AircraftNode({ id, data, selected }: NodeProps) {
           if (val.length > 20 || val.startsWith('[')) return null;
           return (
             <div key={key} className="node-param">
-              <span className="param-label">{key === 'name' && hilInput && nodeData.params?.transport !== 'SERIAL' ? '监听 IP' : paramDef.label}:</span>
-              <span className="param-value">
+              <span className="param-label">{hilIo && key === 'device' && transport === 'AUTO' ? 'USB 设备'
+                : hilIo && key === 'baud' && transport === 'AUTO' ? 'USB 波特率'
+                : hilIo && key === 'host' ? 'UDP 目标 IP'
+                : hilIo && key === 'port' ? 'UDP 端口'
+                : key === 'name' && hilInput && transport !== 'SERIAL' ? '监听 IP' : paramDef.label}:</span>
+              <span className="param-value" title={val}>
                 {val}{unit ? ` ${unit}` : ''}
               </span>
             </div>

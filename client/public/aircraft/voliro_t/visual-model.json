@@ -1,0 +1,99 @@
+{
+  "version": 5,
+  "units": "m",
+  "basis": "Body FRD relative to existing simulated CG; viewer maps (x,y,z) to (y,-z,-x)",
+  "provenance": {
+    "measured": "Existing user geometry: 0.90 m lateral centres, 0.78 m front-to-tail, 0.11 m coaxial spacing",
+    "estimated": "2026-11-11 photos establish approximate body/electronics. User-supplied Word hardware document confirms 25 mm tubes and 68.7 x 25.8 mm M6208 reference dimensions.",
+    "landingGear": "2026-11-12 user sets landing-gear height to 190 mm. Existing height convention is the vertical distance from simulated CG to all three ground contacts; attachment points and lateral/longitudinal footprint are retained.",
+    "propellers": "User MSC 21x6.3 PDF: 533.4 mm diameter, 160.02 mm pitch, 47 g per complete two-blade propeller. Front propulsion now uses actual RPM to source thrust/torque; PWM-to-RPM remains estimated. Tail retains 6045 three-blade geometry.",
+    "battery": "2026-11-11 user: mount the battery under the body with its front face aligned to the front cross-tube centreline. Product dimensions are 177 x 65 x 56 mm, long axis fore-aft; 4 mm clearance below the bottom plate is a visual mounting assumption."
+  },
+  "frontBodyX": 0.07,
+  "halfSpan": 0.45,
+  "tailBodyX": -0.71,
+  "coaxialSpacing": 0.11,
+  "frontPropellerRadius": 0.2667,
+  "frontPropellerPitch": 0.16002,
+  "frontPropellerMassKg": 0.047,
+  "frontPropellerHubThickness": 0.0048,
+  "frontPropellerCenterHoleDiameter": 0.006,
+  "frontPropellerModel": "HOBBYWING MSC 21x6.3",
+  "frontPropellerPerformanceData": "data/msc_21x6p3_specification.json",
+  "frontPropulsionModel": "MSC21 RPM-to-thrust/torque, new-diameter coaxial estimate, gain 1, default 5000 RPM cap. Existing 23 V PWM-to-RPM speed target is an uncalibrated reference; below 3320 RPM F/Q use quadratic extrapolation.",
+  "propellerOutlineEstimated": true,
+  "tailPropellerRadius": 0.0762,
+  "tailPropellerPitch": 0.1143,
+  "body": {
+    "length": 0.3,
+    "width": 0.2,
+    "height": 0.08,
+    "centerBodyX": 0.055
+  },
+  "battery": {
+    "model": "Tattu 10000mAh 6S 25C classic",
+    "length": 0.177,
+    "width": 0.065,
+    "height": 0.056,
+    "labelMassKg": 1.275,
+    "mountClearance": 0.004,
+    "alignment": "front face at frontBodyX; centred laterally; below lower fuselage plate"
+  },
+  "crossTubeDiameter": 0.025,
+  "tailTubeDiameter": 0.025,
+  "motorDiameter": 0.0687,
+  "motorHeight": 0.0258,
+  "gear": {
+    "diameter": 0.016,
+    "contactsBody": [
+      [
+        0.17,
+        -0.18,
+        0.19
+      ],
+      [
+        0.17,
+        0.18,
+        0.19
+      ],
+      [
+        -0.25,
+        0,
+        0.19
+      ]
+    ],
+    "attachmentsBody": [
+      [
+        0.14,
+        -0.075,
+        0.04
+      ],
+      [
+        0.14,
+        0.075,
+        0.04
+      ],
+      [
+        -0.25,
+        0,
+        0.008
+      ]
+    ]
+  },
+  "asset": "voliro_t.glb",
+  "bareAsset": "voliro_t_bare.glb",
+  "renderer": "sceneVoliroT.ts",
+  "animation": {
+    "pivotAxis": "scene X; rotation=-common tilt",
+    "right": [
+      0,
+      1
+    ],
+    "left": [
+      2,
+      3
+    ],
+    "tail": 4
+  },
+  "geometryCoordinates": "CG relative; +X right, +Y up, -Z forward"
+}

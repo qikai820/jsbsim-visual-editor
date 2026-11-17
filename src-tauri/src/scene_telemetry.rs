@@ -49,7 +49,8 @@ fn visual_property(path: &str, id: u8) -> Option<String> {
     let path = format!("/{path}");
     let selected =
     ["/position/h-agl-ft", "/position/terrain-elevation-asl-ft", "/fcs/voliro_t/pitch-rad",
-        "/fcs/voliro_t/rpm-model/version", "/fcs/voliro_t/rpm-model/tail-calibrated"]
+        "/fcs/voliro_t/rpm-model/version", "/fcs/voliro_t/rpm-model/tail-calibrated",
+        "/atmosphere/total-wind-north-fps", "/atmosphere/total-wind-east-fps", "/atmosphere/total-wind-down-fps"]
         .contains(&path.as_str())
         || (0..5).any(|i| {
             let index = if i == 0 { String::new() } else { format!("[{i}]") };
@@ -230,6 +231,29 @@ mod tests {
         assert_eq!(frames[0]["timestamp"], 1.0);
         assert_eq!(frames[0]["properties"].as_object().unwrap().len(), 2);
         assert!(frames[0]["scene_property_age_ms"].is_object());
+    }
+    #[test]
+    fn total_environment_wind_survives_tree_and_monitor_cache() {
+        let mut cache = SceneTelemetry::default();
+        let mut packet = frame(1.0, 1);
+        packet["properties"] = json!({"/01/jsbsim/atmosphere[0]/total-wind-north-fps":10.0,
+            "/02/jsbsim/atmosphere/total-wind-east-fps":999.0,
+            "/atmosphere/total-wind-east-fps":0.0, "/atmosphere/total-wind-down-fps":-1.0});
+        cache.ingest(&packet);
+        let received = cache.entries[&1].received;
+        let mut monitored = frame(1.1, 1);
+        monitored.as_object_mut().unwrap().remove("latitude_deg");
+        monitored["monitor"] = json!({"version":1,"sequence":1,"samples":{
+            "atmosphere/total-wind-east-fps":[20.0,1.1,false]}});
+        cache.ingest(&monitored);
+        assert_eq!(cache.entries[&1].received, received);
+        let snapshot = &cache.snapshots()[0];
+        assert_eq!(snapshot["properties"]["/atmosphere/total-wind-north-fps"],10.0);
+        assert_eq!(snapshot["properties"]["/atmosphere/total-wind-east-fps"],20.0);
+        assert_eq!(snapshot["properties"]["/atmosphere/total-wind-down-fps"],-1.0);
+        assert_eq!(snapshot["scene_property_sources"]["/atmosphere/total-wind-east-fps"],"monitor");
+        cache.ingest(&frame(0.0, 2));
+        assert!(cache.snapshots()[0]["properties"].as_object().unwrap().is_empty());
     }
     #[test]
     fn generations_and_instances_are_isolated() {

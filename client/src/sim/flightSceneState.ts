@@ -3,6 +3,7 @@ import { SCENE_POSE_KEYS, sceneSignalKeys } from './sceneSignals';
 import { rotorCount, rotorRpmKey } from './sceneRotors';
 import { ScenePlaybackClock } from './scenePlayback';
 import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
+import { SCENE_WIND_KEYS, type SceneWind } from './sceneWind';
 
 export type ScenePacket = Record<string, unknown>;
 export type SceneOrigin = { latitude: number; longitude: number; altitude: number };
@@ -20,6 +21,7 @@ export type ScenePose = {
   gimbals: { outer: number | null; inner: number | null; outerSampleAt: number | null; innerSampleAt: number | null }[];
   tiltSampleAt: number | null; motorSampleAt: (number | null)[];
   thrustSampleAt: number | null; groundSampleAt: number | null;
+  wind: SceneWind | null; windSampleAt: number | null;
   tiltSource: 'monitor' | 'tree' | null;
 };
 type SceneAircraft = { latest: ScenePose; samples: ScenePose[]; trail: ScenePose[]; history: ScenePose[];
@@ -101,6 +103,14 @@ export function decodeScenePose(packet: ScenePacket, now: number): ScenePose | n
   const ground = groundFeet === undefined ? null : groundFeet.value * .3048;
   const agl = aglFeet === undefined ? null : aglFeet.value * .3048;
   const tilt = scenePropertyReading(packet, 'fcs/voliro_t/pitch-rad');
+  const winds = SCENE_WIND_KEYS.map(key => scenePropertyReading(packet, key));
+  // All three components must be measured, with at most 250 ms skew. A partial
+  // cycle cannot fabricate zero components or revive an old vector.
+  const windAges = winds.map(reading => reading?.age ?? Infinity);
+  const windComplete = winds.every(reading => reading !== undefined)
+    && Math.max(...windAges) - Math.min(...windAges) <= 250;
+  const wind = windComplete ? { north: winds[0]!.value * .3048,
+    east: winds[1]!.value * .3048, down: winds[2]!.value * .3048 } : null;
   const motors = Array.from({ length: 5 }, (_, i) => scenePropertyReading(packet, `fcs/esc-out[${i}]`));
   const thrusts = Array.from({ length: 5 }, (_, i) => scenePropertyReading(packet, `fcs/voliro_t/thrust-lbf[${i}]`));
   const thrust = thrusts.every(reading => reading !== undefined)
@@ -129,6 +139,7 @@ export function decodeScenePose(packet: ScenePacket, now: number): ScenePose | n
       : scenePropertyReading(packet, 'fcs/voliro_t/rpm-model/tail-calibrated')!.value >= .5,
     tiltSampleAt: tilt ? now - tilt.age : null, motorSampleAt: motors.map(reading => reading ? now - reading.age : null),
     thrustSampleAt: thrust !== null ? now - Math.max(...thrusts.map(reading => reading!.age)) : null,
+    wind, windSampleAt: windComplete ? now - Math.max(...windAges) : null,
     groundSampleAt: groundFeet || aglFeet ? now - (groundFeet ?? aglFeet)!.age : null, tiltSource: tilt?.source ?? null,
   };
 }
@@ -236,9 +247,11 @@ export class FlightSceneFeed {
     const tilt = prefer(fast.tiltSampleAt, pose.tiltSampleAt), thrust = prefer(fast.thrustSampleAt, pose.thrustSampleAt);
     const ground = prefer(fast.groundSampleAt, pose.groundSampleAt);
     const scene = prefer(fast.sceneStatusSampleAt ?? null, pose.sceneStatusSampleAt ?? null);
+    const wind = fast.windSampleAt !== null && (pose.windSampleAt === null || fast.windSampleAt >= pose.windSampleAt);
     return { ...pose, ...(scene ? { sceneStatusSampleAt: fast.sceneStatusSampleAt, sceneLoaded: fast.sceneLoaded, sceneRevision: fast.sceneRevision, sceneContacts: fast.sceneContacts } : {}), ...(tilt ? { tilt: fast.tilt, tiltSampleAt: fast.tiltSampleAt, tiltSource: fast.tiltSource } : {}),
       ...(thrust ? { thrust: fast.thrust, thrustSampleAt: fast.thrustSampleAt } : {}),
       ...(ground ? { ground: fast.ground ?? pose.ground, agl: fast.agl ?? pose.agl, groundSampleAt: fast.groundSampleAt } : {}),
+      ...(wind ? { wind: fast.wind, windSampleAt: fast.windSampleAt } : {}),
       motors: pose.motors.map((value, i) => prefer(fast.motorSampleAt[i], pose.motorSampleAt[i]) ? fast.motors[i] : value),
       motorSampleAt: pose.motorSampleAt.map((seen, i) => prefer(fast.motorSampleAt[i], seen) ? fast.motorSampleAt[i] : seen),
       rpm: pose.rpm.map((value, i) => prefer(fast.rpmSampleAt[i], pose.rpmSampleAt[i]) ? fast.rpm[i] : value),
@@ -275,6 +288,11 @@ export class FlightSceneFeed {
     const rewound = restarted || previous && pose.time < (existing!.telemetryTime ?? previous.time) - 1
       && pose.capture !== undefined && previous.capture !== undefined && pose.capture > previous.capture;
     if (changed || rewound) this.monitor.delete(pose.id);
+    // Keep the last coherent wind through incomplete/rotating property slices.
+    // Its original sampling age still expires, independently of live body pose.
+    if (previous && !changed && !rewound && pose.wind === null) {
+      pose = { ...pose, wind: previous.wind, windSampleAt: previous.windSampleAt };
+    }
     pose = this.withMonitor(pose, now);
     if (previous && !changed && !rewound) {
       if (pose.capture !== undefined && previous.capture !== undefined && pose.capture < previous.capture) return false;
@@ -290,6 +308,7 @@ export class FlightSceneFeed {
             groundSampleAt: pose.groundSampleAt, tiltSource: pose.tiltSource,
             rpm: pose.rpm, rpmSampleAt: pose.rpmSampleAt, rpmSense: pose.rpmSense,
             gimbals: pose.gimbals,
+            wind: pose.wind, windSampleAt: pose.windSampleAt,
             rpmModelVersion: pose.rpmModelVersion, rpmTailCalibrated: pose.rpmTailCalibrated }, now);
         }
         return false;
@@ -351,6 +370,10 @@ export function demoPackets(time: number): ScenePacket[] {
     const north = i === 0 ? Math.sin(time * .08) * 8 : 24 + Math.floor((i - 1) / 3) * 18;
     const east = i === 0 ? Math.cos(time * .08) * 8 : ((i - 1) % 3 - 1) * 16;
     const properties: Record<string, number> = { '/position/terrain-elevation-asl-ft': 582.6 / .3048, '/position/h-agl-ft': (12.4 + Math.sin(time * .2 + i) * .3) / .3048 };
+    // Shared synthetic field, explicitly shown as demonstration data in the UI.
+    properties['/' + SCENE_WIND_KEYS[0]] = (2 + Math.sin(time * .12) * 1.5) / .3048;
+    properties['/' + SCENE_WIND_KEYS[1]] = (3 + Math.cos(time * .18)) / .3048;
+    properties['/' + SCENE_WIND_KEYS[2]] = Math.sin(time * .6) * .15 / .3048;
     if (i === 0) {
       properties['/fcs/voliro_t/pitch-rad'] = (18 + Math.sin(time * .3) * 4) * rad;
       for (let m = 0; m < 5; m++) { properties[`/fcs/esc-out[${m}]`] = m === 4 ? -.08 : .5 + Math.sin(time + m) * .04; properties[`/fcs/voliro_t/thrust-lbf[${m}]`] = m === 4 ? -.1 : 2.9; }

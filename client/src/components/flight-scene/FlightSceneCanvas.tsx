@@ -1,10 +1,12 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Html, Line, OrbitControls } from '@react-three/drei';
-import { ArrowHelper, Box3, Color, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Vector3 } from 'three';
+import { ArrowHelper, Box3, BoxGeometry, Color, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Vector3 } from 'three';
 import { bodyToSceneBasis, FlightSceneFeed, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode } from '../../sim/flightSceneState';
 import { rotorReading } from '../../sim/sceneRotors';
 import { isMorphQuad, MORPHQUAD_ARMS, MORPHQUAD_ROTOR_RADIUS } from '../../sim/sceneMorphQuad';
+import { createVoliroTModel, VOLIRO_T_GEOMETRY } from '../../sim/sceneVoliroT';
+import { createPropellerBlade, createPropellerHub } from '../../sim/scenePropeller';
 import { Field, SCENE_FOG, SceneSky } from './FlightSceneEnvironment';
 import { createSceneSurfaceTextures, loadSceneSurfaceTextures, type SceneSurfaceTextures } from './sceneSurfaceTextures';
 import SceneObjects from './SceneObjects';
@@ -18,9 +20,13 @@ type Props = {
   editor: SceneEditor;
 };
 
-const Rotor = memo(function Rotor({ x, y, z, radius = .28, feed, id, index, blades = 2 }: {
-  x: number; y: number; z: number; radius?: number; feed: FlightSceneFeed; id: string; index: number; blades?: number;
+const Rotor = memo(function Rotor({ x, y, z, radius = .28, feed, id, index, blades = 2, showMotor = true, bladeOffset = .029, pitch, handedness = 1 }: {
+  x: number; y: number; z: number; radius?: number; feed: FlightSceneFeed; id: string; index: number; blades?: number; showMotor?: boolean; bladeOffset?: number; pitch?: number; handedness?: number;
 }) {
+  const bladeGeometry = useMemo(() => pitch ? createPropellerBlade(radius, pitch, handedness)
+    : new BoxGeometry(radius * .95, .008, .024), [radius, pitch, handedness]);
+  const hubGeometry = useMemo(() => pitch ? createPropellerHub(blades === 2 ? .0095 : .006, blades === 2 ? .0048 : .004, blades === 2 ? .003 : .0015) : null, [pitch, blades]);
+  useEffect(() => () => { bladeGeometry.dispose(); hubGeometry?.dispose(); }, [bladeGeometry, hubGeometry]);
   const spinner = useRef<Group>(null), blur = useRef<Mesh>(null);
   const bladeMesh = useRef<InstancedMesh>(null);
   const bladeMaterial = useRef<MeshStandardMaterial>(null), blurMaterial = useRef<MeshBasicMaterial>(null);
@@ -30,14 +36,14 @@ const Rotor = memo(function Rotor({ x, y, z, radius = .28, feed, id, index, blad
     for (let blade = 0; blade < blades; blade++) {
       const angle = blade * Math.PI * 2 / blades;
       const transform = new Matrix4().makeRotationY(angle);
-      transform.setPosition(Math.cos(angle) * radius * .48, 0, -Math.sin(angle) * radius * .48);
+      if (!pitch) transform.setPosition(Math.cos(angle) * radius * .48, 0, -Math.sin(angle) * radius * .48);
       bladeMesh.current.setMatrixAt(blade, transform);
-      bladeMesh.current.setColorAt(blade, new Color(blade === 0 ? '#dce4ee' : '#a7b7c8'));
+      bladeMesh.current.setColorAt(blade, new Color(pitch ? (blade === 0 ? '#42464b' : '#353a40') : (blade === 0 ? '#dce4ee' : '#a7b7c8')));
     }
     bladeMesh.current.instanceMatrix.needsUpdate = true;
     if (bladeMesh.current.instanceColor) bladeMesh.current.instanceColor.needsUpdate = true;
     bladeMesh.current.computeBoundingSphere();
-  }, [radius, blades]);
+  }, [radius, blades, pitch]);
   useFrame((_, dt) => {
     const pose = feed.aircraft.get(id)?.latest;
     if (!pose || !spinner.current) return;
@@ -56,14 +62,15 @@ const Rotor = memo(function Rotor({ x, y, z, radius = .28, feed, id, index, blad
     if (bladeMaterial.current) bladeMaterial.current.opacity = reading.blur ? .45 : 1;
   });
   return <group position={[x, y, z]}>
-    <mesh><cylinderGeometry args={[.021, .021, .045, 8]} /><meshStandardMaterial color="#343e49" /></mesh>
-    <mesh ref={blur} rotation={[-Math.PI / 2, 0, 0]} position={[0, .027, 0]} visible={false}>
+    {showMotor && <mesh><cylinderGeometry args={[.021, .021, .045, 8]} /><meshStandardMaterial color="#343e49" /></mesh>}
+    <mesh ref={blur} rotation={[-Math.PI / 2, 0, 0]} position={[0, bladeOffset - .002, 0]} visible={false}>
       <circleGeometry args={[radius, 24]} /><meshBasicMaterial ref={blurMaterial} color="#dce8f2" transparent opacity={0} depthWrite={false} side={2} />
     </mesh>
-    <group ref={spinner} name={`scene-rotor-${id}-${index}`} position={[0, .029, 0]}>
+    <group ref={spinner} name={`scene-rotor-${id}-${index}`} position={[0, bladeOffset, 0]}>
       <instancedMesh ref={bladeMesh} args={[undefined, undefined, blades]}>
-        <boxGeometry args={[radius * .95, .008, .024]} /><meshStandardMaterial ref={bladeMaterial} color="#ffffff" transparent />
+        <primitive object={bladeGeometry} attach="geometry" /><meshStandardMaterial ref={bladeMaterial} color="#ffffff" transparent roughness={pitch ? .7 : .5} metalness={pitch ? .12 : .1} />
       </instancedMesh>
+      {hubGeometry && <mesh geometry={hubGeometry}><meshStandardMaterial color="#363b40" roughness={.7} /></mesh>}
     </group>
   </group>;
 });
@@ -118,6 +125,8 @@ function Airframe({ model, color, feed, id, showThrust, showAxes }: {
   model: string; color: string; feed: FlightSceneFeed; id: string; showThrust: boolean; showAxes: boolean;
 }) {
   const voliro = /voliro/i.test(model);
+  const photoModel = useMemo(() => voliro ? createVoliroTModel(color) : null, [voliro, color]);
+  useEffect(() => () => photoModel?.dispose(), [photoModel]);
   const multirotor = /f450|quad|multi|h7|morph/i.test(model);
   const latest = feed.aircraft.get(id)!.latest;
   const lastTilt = useRef(latest.tilt ?? 0);
@@ -129,17 +138,17 @@ function Airframe({ model, color, feed, id, showThrust, showAxes }: {
     for (const pivot of pivots.current) if (pivot) pivot.rotation.x = -lastTilt.current;
   });
   return <group>
-    <mesh><boxGeometry args={[.16, .09, .22]} /><meshStandardMaterial color="#d9e1e8" roughness={.65} /></mesh>
-    <mesh position={[0, .048, -.065]}><boxGeometry args={[.12, .008, .04]} /><meshBasicMaterial color={color} /></mesh>
+    {!voliro && <><mesh><boxGeometry args={[.16, .09, .22]} /><meshStandardMaterial color="#d9e1e8" roughness={.65} /></mesh>
+      <mesh position={[0, .048, -.065]}><boxGeometry args={[.12, .008, .04]} /><meshBasicMaterial color={color} /></mesh></>}
     {isMorphQuad(model) ? <MorphQuadAirframe key={`${model}:${latest.generation}`} feed={feed} id={id} color={color} showThrust={showThrust} /> : voliro ? <>
-      <mesh position={[0, 0, -.03]}><boxGeometry args={[.9, .025, .025]} /><meshStandardMaterial color="#303b48" /></mesh>
-      <mesh position={[0, 0, .36]}><boxGeometry args={[.025, .025, .78]} /><meshStandardMaterial color="#303b48" /></mesh>
-      {[-.45, .45].map((x, index) => <group key={x} name={`scene-tilt-${id}-${index}`} ref={node => { pivots.current[index] = node; }} position={[x, 0, -.03]}>
-        <Rotor feed={feed} id={id} index={index === 1 ? 0 : 2} x={0} y={.055} z={0} />
-        <Rotor feed={feed} id={id} index={index === 1 ? 1 : 3} x={0} y={-.055} z={0} />
+      {photoModel && <primitive object={photoModel.frame} />}
+      {[-VOLIRO_T_GEOMETRY.halfSpan, VOLIRO_T_GEOMETRY.halfSpan].map((x, index) => <group key={x} name={`scene-tilt-${id}-${index}`} ref={node => { pivots.current[index] = node; }} position={[x, 0, -VOLIRO_T_GEOMETRY.frontBodyX]}>
+        {photoModel && <primitive object={photoModel.pods[index]} />}
+        <Rotor feed={feed} id={id} index={index === 1 ? 0 : 2} x={0} y={VOLIRO_T_GEOMETRY.coaxialSpacing / 2} z={0} radius={VOLIRO_T_GEOMETRY.frontPropellerRadius} pitch={VOLIRO_T_GEOMETRY.frontPropellerPitch} handedness={index === 1 ? 1 : -1} showMotor={false} bladeOffset={0} />
+        <Rotor feed={feed} id={id} index={index === 1 ? 1 : 3} x={0} y={-VOLIRO_T_GEOMETRY.coaxialSpacing / 2} z={0} radius={VOLIRO_T_GEOMETRY.frontPropellerRadius} pitch={VOLIRO_T_GEOMETRY.frontPropellerPitch} handedness={index === 1 ? -1 : 1} showMotor={false} bladeOffset={0} />
         {showThrust && latest.tilt !== null && (propertyAgeMs(latest.tiltSampleAt) ?? Infinity) < STALE_MS && <ThrustArrow />}
       </group>)}
-      <Rotor feed={feed} id={id} index={4} x={0} y={0} z={.75} radius={.0762} blades={3} />
+      <Rotor feed={feed} id={id} index={4} x={0} y={.031} z={-VOLIRO_T_GEOMETRY.tailBodyX} radius={VOLIRO_T_GEOMETRY.tailPropellerRadius} pitch={VOLIRO_T_GEOMETRY.tailPropellerPitch} handedness={1} blades={3} showMotor={false} bladeOffset={0} />
     </> : multirotor ? <>
       {[-Math.PI / 4, Math.PI / 4].map(angle => <mesh key={angle} rotation={[0, angle, 0]}>
         <boxGeometry args={[.64, .024, .025]} /><meshStandardMaterial color="#35414f" />
@@ -199,13 +208,14 @@ function Aircraft({ id, feed, layers, selected, onSelect, revision, groundY, gro
   </>;
 }
 
-function Rig({ feed, selected, mode, onFps, cameraVersion, groundAltitude, editor }: Props) {
+function Rig({ feed, selected, mode, onFps, cameraVersion, groundY, editor }: Props & { groundY: number }) {
   const controls = useRef<any>(null);
   const previous = useRef(new Vector3());
   const reset = useRef(true);
   const fps = useRef({ elapsed: 0, frames: 0 });
   const focus = useRef(-1);
   useEffect(() => { reset.current = true; }, [selected, mode, cameraVersion, feed.origin]);
+  useEffect(() => { if (mode === 'ground') reset.current = true; }, [mode, groundY]);
   useFrame(({ camera, clock, scene }, dt) => {
     fps.current.elapsed += dt; fps.current.frames++;
     if (fps.current.elapsed > 1) { onFps(Math.round(fps.current.frames / fps.current.elapsed)); fps.current = { elapsed: 0, frames: 0 }; }
@@ -245,7 +255,6 @@ function Rig({ feed, selected, mode, onFps, cameraVersion, groundAltitude, edito
           focus = center; offset = new Vector3(extent * .5, extent * 1.3, extent * 1.7);
         }
         if (mode === 'ground') {
-          const groundY = groundAltitude !== null && feed.origin ? groundAltitude - feed.origin.altitude : 0;
           offset = new Vector3(14, groundY + 2 - target.y, 18);
         }
         camera.position.copy(focus).add(offset); controls.current.target.copy(focus);
@@ -268,16 +277,17 @@ export default function FlightSceneCanvas(props: Props) {
     return () => { stop(); for (const map of Object.values(maps)) map.dispose(); };
   }, [maps]);
   const baseline = props.editor.document.georeference?.altitude ?? props.groundAltitude;
-  const groundY = baseline !== null && props.feed.origin ? baseline - props.feed.origin.altitude : 0;
-  return <Canvas className="flight-scene-webgl" dpr={[1, 1.5]} camera={{ position: [10, 8, 18], near: .05, far: 5000, fov: 55 }}
+  const groundY = (baseline !== null && props.feed.origin ? baseline - props.feed.origin.altitude : 0)
+    + (props.editor.document.visualGroundOffsetM ?? 0);
+  return <Canvas className="flight-scene-webgl" dpr={[1, 1.5]} resize={{ offsetSize: true }} camera={{ position: [10, 8, 18], near: .05, far: 5000, fov: 55 }}
     gl={{ antialias: true, powerPreference: 'low-power' }}>
     <color attach="background" args={[SCENE_FOG.color]} /><fog attach="fog" args={[SCENE_FOG.color, SCENE_FOG.near, SCENE_FOG.far]} />
     <SceneSky maps={maps} />
     <hemisphereLight args={['#d6e7f5', '#74795e', 1.7]} /><directionalLight position={[-30, 60, 20]} intensity={2} color="#fff1d6" />
     <Field grid={props.layers.grid} groundY={groundY} maps={maps} scenery={props.editor.document.showBase} />
-    <SceneObjects editor={props.editor} groundY={groundY} maps={maps} />
+    <SceneObjects editor={props.editor} groundY={groundY} maps={maps} feed={props.feed} instance={props.selected} />
     {[...props.feed.aircraft.keys()].map(id => <Aircraft key={id} id={id} {...props} selected={props.selected === id}
       groundY={groundY} groundKnown={props.groundAltitude !== null} maps={maps} />)}
-    <Rig {...props} groundAltitude={baseline} />
+    <Rig {...props} groundY={groundY} />
   </Canvas>;
 }

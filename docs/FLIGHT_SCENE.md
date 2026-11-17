@@ -4,6 +4,22 @@
 
 视景模式的顶部工具栏保留仿真机性能、飞控连接和 MCAP 日志状态，可点击查看详情；“多机控制”入口也仍可使用。
 
+## 视景布局与自定义仪表
+
+视景工具合并到顶部工具栏。左侧使用浮动工具条，飞机列表、图层、遥测和视图设置按需展开；遥测面板可以固定停靠。姿态趋势、小地图默认收起，相机视角通过左下角下拉菜单选择。“专注”隐藏辅助面板和仪表，顶部连接、暂停与录制状态、遥测过期提示仍可查看。
+
+右下角数值条默认 2 行 × 5 列，宽度为视窗的 40%；圆形 HUD 直径为视窗宽度的 9.6%，在普通桌面窗口下按参考图比例并排贴底。HUD 保留 100 px 最小尺寸和 184 px 上限；窄视窗自动换行并将 HUD 移至上方，防止仪表相互遮挡。WebGL 测量使用布局尺寸，适配自动显示缩放与面板开合。
+
+- 点击“数值”或任一单元格进入配置。支持 1–6 行、1–8 列，选择数据项、名称、单位、小数位，拖动交换位置，也可使用前移/后移按钮。缩减行列后，被移出的指标进入“未放置指标”，可重新加入；移除按钮只清除当前单元格。
+- 内置高度、速度、姿态、时间、环境风、倾转、推力、各电机输出与 RPM。单位选项执行实际换算；RPM 台架回退保留 `≈` 和来源说明，不把尾桨旋转示意当作 RPM。
+- 自定义 JSBSim 属性在路径框失焦或按 Enter 后提交到所选实例的 VMON 订阅，可设置原始值倍率与偏移。与已有观察/示波器共享 32 路上限，已有用户信号保留优先权，视景保留位姿与地面通道后安排自定义属性。通道不足时配置栏显示未安排的属性；未知值显示 `—`，不生成示例数值。
+- 数据保留各自采样时间，超过 2 s 后变灰并显示年龄。自定义属性按实例和模型代次隔离；演示场景不读取实时自定义属性。圆形 HUD 使用同一所选飞机位姿，上弧显示横滚、右弧显示俯仰，抬头时右弧向上。点击 HUD 可切换北向上或机头朝上。
+- 布局、仪表显隐、航向模式和遥测停靠偏好以 `jsbsim-flight-scene-display-v1` 保存在本机，不写入飞机模型或场景文件。存储不可用时提示本次配置仅在窗口内保留。
+
+场景编辑器优先显示所选物体属性，场景资源、在线加载、碰撞与物体列表可折叠。收起属性面板不会退出编辑，顶部“完成编辑”或面板“完成”退出编辑；保存入口保留在面板标题栏。
+
+验证：`node tests/scene-instruments.mjs`、`node --experimental-websocket tests/scene-instruments-ui.mjs`。后者使用实际 React 仪表组件与隔离采样，检查参考比例、行列编辑、恢复指标、排序、采样代次、持久化和 320–1916 px 布局，不连接实际仿真机。
+
 视景支持离线试验场、单机与多机位姿、航迹、局部位置小图、自由/跟随/地面/机载/编队相机，以及姿态和执行器状态。几何体使用米制尺寸。Voliro T 外形对应工程模型的两组前部共轴旋翼、单尾桨和前部共用倾转；MorphQuad 使用 H 构型、四组双轴云台及八个共轴旋翼，尺寸和通道见下文。其余飞机使用参考外形，不代表从 XML 重建的精确几何。
 
 ## 使用
@@ -18,12 +34,14 @@
 
 ## 场景导入与编辑
 
-点击右上角“编辑场景”，视窗暂用自由相机，右侧显示场景编辑器；点击“完成”返回飞行状态面板，导入物体继续显示。
+点击右上角“编辑场景”，视窗暂用自由相机，右侧显示场景编辑器；点击“完成”退出编辑，导入物体继续显示，可通过左侧“遥测”展开飞行状态。
 
 - “导入 GLB/glTF”可一次选择多个模型。glTF 的 `.bin` 与贴图必须一起选择；有子目录、父目录引用或同名文件时，使用“导入目录”保留目录结构。支持相对路径和 URL 编码文件名，不在运行时下载网络资源。每个模型主文件作为一个可编辑物体，保留内部节点层级及原有尺寸，不自动归一化。
 - Linux 桌面版“导入目录”使用原生目录选择器，补齐 WebKitGTK 不支持 HTML 目录上传的差异；仅扫描所选普通目录，保留子目录路径，读取上限为 100 MB / 2000 文件。取消选择不改变场景。
 - 在物体列表或视窗中选择物体，通过“移动 / 旋转 / 缩放”切换三轴手柄，也可输入三轴数值。拖动手柄时暂停相机轨道操作，释放后恢复。支持物体重命名、显示/隐藏、重置变换、删除和定位；双击列表物体也可定位。
-- 默认跑道、机库和 32 棵树共 34 个独立物体，直接显示在同一列表中，也能在视窗点击选择。每棵树可独立移动、旋转、非等比缩放；机库的门、地坪和阴影跟随整体变换。默认物体的“重置变换”恢复原始位置和尺寸，导入模型则恢复原点与单位缩放。
+- 默认跑道、机库、32 棵树、机场风袋、停机坪和 F-35 共 37 个独立物体，直接显示在同一列表中，也能在视窗点击选择。每棵树可独立移动、旋转、非等比缩放；机库的门、地坪和阴影跟随整体变换。默认物体的“重置变换”恢复原始位置和尺寸，导入模型则恢复原点与单位缩放。
+- 机库前方有 40 × 44 m 混凝土停机坪，带黄色安全边线、01 号机位和滑入引导线；F-35A 停在机位内，机头朝向机库外。机体采用用户下载的 shangus930 写实模型（CC BY 4.0），由 USDZ 转成自包含 GLB，保留颜色、法线、金属度、粗糙度及座舱透明材质，共 190514 个三角形、9 组材质、25 张内嵌贴图。USD 动画第 875 帧的起落架放下姿态烘焙为静态网格；源文件经 AR 展示归一化，转换时将机长恢复为 15.7 m，转换后包围盒为 10.954 × 4.547 × 15.7 m，机轮最低点对齐 Y=0。不是经测量校准的工程 CAD 或飞行动力学模型。来源、署名、变更及源文件校验值见 `client/public/aircraft/f35a/README.md` 和 `visual-model.json`；可用 `scripts/convert-f35a-usdz.py` 重建。
+- 停机坪与 F-35 可分别编辑、隐藏、删除和保存，原有直升机起降点保留。停机坪默认参与碰撞导出，F-35 默认仅显示；勾选“参与仿真碰撞”后导出同一已加载的静态模型网格，资源未加载时明确报错。GLB 随应用离线提供，离开视景或删除全部 F-35 后释放模型资源；内置 F-35 类型及布局随 `.scene.json` 保存，模型资源由更新后的应用提供。独立 GLB 也可直接导入其他场景，并按导入模型的规则内嵌保存。已有 v2 场景保持其原有布局；若包含之前的内置 F-35，则自动使用新版外形。
 - 位置以米计，X 向东、Y 向上、Z 向南，相对场景原点的参考地面。旋转为 XYZ 欧拉角，输入单位为度；缩放为正倍数。模型本身的节点变换保留，编辑变换作用于整个导入物体。“显示默认试验场”可隐藏默认地物，网格继续由场景图层控制。
 - “保存场景”导出 `.scene.json`，内嵌模型主文件、二进制与贴图，保存物体布局、名称、可见性、默认试验场开关和参考地面海拔。“加载场景”替换当前场景，文件通过完整校验和资源加载后才生效。文件可在原模型目录不可用时重新加载。离开视景前请显式保存，当前没有自动保存。
 - 场景格式 v2 将默认地物的类型、树木编号、变换、名称和可见性一起保存；隐藏或删除的默认地物不会在重载时重新出现。兼容读取 v1 文件：保留旧文件的导入模型与设置，并补上原先固定的默认地物。v2 的空物体列表保持为空。“显示默认试验场”同时控制默认地物及草地、远山，不改变单个物体已经保存的可见性。
@@ -39,6 +57,8 @@
 无需启动模型或等待遥测。经纬度显示 7 位小数，保存和导出保留读取精度。自动基准随所选模型切换更新，飞行中的位姿及地面高程不会持续改动基准。等待或读取失败时留空并提示状态，不使用占位 0；配置中的合法零坐标照常生效。模型位置与地面高程读取等待上限为 15 秒，可点击“重新读取模型基准”重试。若旧场景已保存错误的机体海拔，需点击“使用模型基准”，重新保存场景并同步碰撞地图；只改界面不会修复仿真机现有文件。
 
 手动修改过的基准和加载 `.scene.json` 时保存的基准保持固定；选择其他模型不会覆盖，可点击“使用模型基准”显式恢复自动值。更改基准属于地图编辑，必须重新保存、导出及加载；海拔基准转换不会自动进行。演示模式仍用演示位置与地面高程初始化，不读取仿真机模型配置。
+
+“飞机包络半径”下方的“视景地面高度偏移 / m”用于微调飞机与地面的显示距离，首次使用默认 0，支持 -100～100 m，步进 0.01 m。正值整体抬高视景地面与地物，缩短显示距离；负值降低地面。默认场地、导入地物、地面网格、参考阴影和地面相机使用同一偏移；飞机仍按遥测坐标显示，海拔/离地高度数值及碰撞几何、版本均不改变。修改后自动保存为本机偏好，下次进入视景或重新打开上位机时恢复上次值，无需点击“保存场景”。参数也以 `visualGroundOffsetM` 随 `.scene.json` 保存；加载带此参数的场景时采用文件值并自动保存，旧场景未携带该参数时保留当前本机偏移。仅调整此值无需向仿真机同步地图。
 
 1. 在“编辑场景”设置原点、基准海拔、飞机包络半径，并编辑物体。半径以飞机重心为球心；应根据机体尺寸及起落架高度选择，过大可能先于起落架接地。这是无弹性球形包络，不是机体网格或损伤模型。
 2. 保存 `.scene.json`。选择仿真实例后，点击“同步到模型（读回校验）”，或导出 `scene.collision` 手动放进实际加载的飞机模型目录（与模型 XML 同目录）。同步目标路径是存储库的 `jsbsim/aircraft/<model>/scene.collision`；同模型的实例共用该文件，各实例在启动时独立加载。
@@ -64,6 +84,7 @@ cmake --build jsbsim_realtime/build/native -j 8
 ctest --test-dir jsbsim_realtime/build/native -R SceneCollision --output-on-failure
 cd jsbsim-visual-editor
 node tests/scene-collision.mjs
+node tests/scene-collision.mjs --builtins-only # 无需外部山地资源，检查内置地物及 F-35 可选碰撞
 node tests/scene-document.mjs
 node tests/scene-monitor-subscription.mjs
 cargo test --manifest-path src-tauri/Cargo.toml --test scene_collision
@@ -122,13 +143,13 @@ NuttX UDP/USB JSON 和 POSIX bridge 紧凑 JSON 通过现有 `SimClient` 接收�
 
 本地试验场使用随应用打包的 Poly Haven CC0 摄影素材：[Kloppenheim 03 (Pure Sky)](https://polyhaven.com/a/kloppenheim_03_puresky) 天空、[Grass Ground](https://polyhaven.com/a/grass_ground) 草地、[Asphalt 02](https://polyhaven.com/a/asphalt_02) 沥青和 [Concrete Floor 01](https://polyhaven.com/a/concrete_floor_01) 混凝土。天空使用官方已映射为普通亮度的全景 JPG，表面使用颜色纹理。四个优化 JPG 合计约 187 KiB，运行时只访问本地资源，无需 Poly Haven API、CDN 或互联网。来源、作者、许可、原始 MD5 和本地 SHA-256 记录在 `client/public/scenery/polyhaven/manifest.json`，重建和离线校验见同目录 `README.md`。
 
-天空 1024×512、草地 512×512；沥青与混凝土在打开视景时绘入原有跑道/停机坪纹理，标线与磨损继续烘入同一张图。草地按素材的 2.51 m 宽度重复。六张共享纹理含 mipmap 约占 7.4 MiB，图片只填充现有纹理一次，图层切换和面板刷新复用同一 GPU 纹理；离开或进入后台卸载视景时释放。素材缺失或解码失败时保留即时生成的示意外观，重新进入视景可重试。
+天空 1024×512、草地 512×512；沥青与混凝土在打开视景时绘入跑道、直升机起降点和新增停机坪纹理，标线与磨损继续烘入同一张图。草地按素材的 2.51 m 宽度重复。七张共享场地纹理含 mipmap 约占 12.7 MiB，图片只填充现有纹理一次，图层切换和面板刷新复用同一 GPU 纹理；离开或进入后台卸载视景时释放。摄影素材缺失或解码失败时保留即时生成的场地外观，重新进入视景可重试。
 
-32 棵树合并为三次实例化绘制，每棵树保存独立变换，选中和拖动不拆分绘制，编辑时更新对应实例矩阵。远山使用低面数示意几何。草地采用固定日光外观的一次纹理采样与雾混合；树木采用简单光照，飞机保留受光材质。天空在不透明地物之后以最远深度绘制，减少被地面遮挡区域的纹理采样；透明桨盘和航迹仍正常叠加。没有新增后处理、HDR 渲染目标、动态环境反射、法线/位移贴图或实时阴影贴图，像素比上限仍为 1.5。
+32 棵树合并为三次实例化绘制，每棵树保存独立变换，选中和拖动不拆分绘制，编辑时更新对应实例矩阵。远山使用低面数示意几何。草地采用固定日光外观的一次纹理采样与雾混合；树木采用简单光照，飞机保留受光材质。天空在不透明地物之后以最远深度绘制，减少被地面遮挡区域的纹理采样；透明桨盘和航迹仍正常叠加。F-35 保留 25 张 PBR 贴图（包括法线），以 9 组材质绘制；为其金属表面一次生成本地中性环境光探针，后续逐帧复用，其他飞机保持原有光照。不增加后处理、逐帧环境反射或实时阴影贴图，像素比上限仍为 1.5。
 
 飞机与地面之间的淡柔影投到已知高程的参考平面，随高度扩大、淡出；未知地面高程时不显示飞机柔影。它是距离参照，不是精确机体投影。场景草地、远山和地物均为外观资源，不改变仿真接地面或代表真实 DEM。
 
-`flight-scene-ui.mjs` 在阻断 Poly Haven API/CDN 后检查本地素材正常加载，并覆盖素材丢失后的降级和恢复。八机广角场景检查每帧不超过 240 次绘制、少于 10000 个三角形、六张纹理复用以及未启用阴影贴图。帧耗时需在固定视角、分辨率、像素比与渲染设备下比较；软件 WebGL 的结果不能当作目标电脑 HIL 帧率。
+`flight-scene-ui.mjs` 在阻断 Poly Haven API/CDN 后检查本地素材正常加载，并覆盖场地摄影素材丢失后的降级和恢复（F-35 继续加载）。八机加静态 F-35 的广角场景检查暂停时不超过 240 次绘制、206000 个三角形，运行时不超过 255 次绘制、208000 个三角形；共享七张场地纹理、25 张 F-35 贴图和一个中性光照探针，最多另有一张机身碳纤维纹理，并保持阴影贴图关闭。帧耗时需在固定视角、分辨率、像素比与渲染设备下比较；软件 WebGL 的结果不能当作目标电脑 HIL 帧率。
 
 ## 验证
 
@@ -141,15 +162,31 @@ node tests/flight-scene-playback.mjs
 node tests/flight-scene-native.mjs
 node tests/scene-monitor-subscription.mjs
 node tests/scene-document.mjs
+node tests/scene-wind.mjs
 cargo test --manifest-path src-tauri/Cargo.toml --test scene_files --offline
 # 在另一个终端启动 Vite 后；测试使用 Chromium 软件 WebGL 和隔离 IPC。
 node --experimental-websocket tests/flight-scene-ui.mjs http://127.0.0.1:5174
 node --experimental-websocket tests/scene-editor-ui.mjs http://127.0.0.1:5174
+node --experimental-websocket tests/scene-windsock-ui.mjs http://127.0.0.1:5174
 ```
 
 `scene-editor-ui.mjs` 检查真实 GLB、带二进制与贴图的 glTF 目录、三轴拖动与相机隔离、数值变换、保存后刷新页面再加载、取消/超时及迟到结果、同步阶段与失败后重试，以及删除物体释放几何与贴图，并生成 `/tmp/jsbsim-scene-editor.png` 与 `/tmp/jsbsim-scene-sync-progress.png`。`scene_asset_upload` 使用隔离 curl/存储夹具验证大文件节流、分阶段进度、临时文件校验失败不替换原文件，以及最终读回失败不误报成功；该测试不会访问实际设备。
 
 本版尚未包含卫星影像、DEM 高程接入和日志回放。已有本地进程 CSV 遥测未接入本版视景，使用 bridge JSON 链路。硬件 HIL 性能和长时间运行须在目标电脑与仿真机上另行验证。
+
+## 机场风袋
+
+默认试验场在起飞区西侧 `[-6, 0, 0]` 增加一个红白五段机场风袋，立杆约 3.5 m、袋长 1.8 m。它是可编辑的内置物体，可以移动、旋转、缩放、隐藏、删除并随 `.scene.json` 保存。已有 v2 场景保持原物体列表；可用“编辑场景 → 添加机场风袋”补上。
+
+支持连续放置多个风袋：“添加机场风袋”自动生成唯一编号并在原点西侧附近寻找空位；选中风袋后，“复制风袋”保留其旋转、缩放和碰撞设置，在原物体附近错开放置。自动放置只避开已有风袋，基础间距为 5 m，并随场景中风袋的水平缩放增大；可以使用三轴手柄或位置数值自行布局。每个风袋独立显示、隐藏、编辑与删除，关闭“显示默认试验场”不会隐藏风袋，因此也可放在导入的自定义地景中。全部位置与属性随场景文件保存并恢复，仍受场景总物体数 1000 的现有限制。
+
+风袋与左侧风信息均随所选飞机实例切换，读取 JSBSim `FGWinds` 的 `atmosphere/total-wind-{north,east,down}-fps`。总风包含稳态风、阵风、余弦阵风和湍流；客户端将 ft/s 换算为 m/s，并将 NED 映射到场景东/上/南。袋尾指向风吹去的方向，界面“来向”采用从北顺时针的来风方位：北向速度为正时，袋尾向北，来向 180°。水平静风没有虚构来向，垂直风另外显示。
+
+三分量加入现有 VMON 订阅和原生精简缓存，各分量保留年龄；向量要求三项齐全且采样偏差不超过 250 ms，年龄采用最老一项。Voliro 无其他观测时共 32 路，F450 共 22 路；MorphQuad 的候选项共 38 路，受现有 32 路上限约束时优先保留位姿、风、地面、云台和 RPM，再保留桨旋向。用户已有信号仍优先占用订阅容量；风数据不完整时显示等待，不使用配置风或飞行速度替代。独立风包不能刷新机体位姿；过期 2 s、暂停或停止时冻结最后形态，恢复有效数据后继续。演示场景明确显示“演示风场”。
+
+风袋朝向使用世界坐标，旋转立杆的 Y 角不会改变环境风方向。无风时袋尾下垂，风增强时逐渐鼓起、接近风向，小幅波动表现布料飘动。布料采用轻量程序几何，约 640 个三角形，不增加纹理、阴影贴图或物理求解器。形变在约 7 m/s 达到完全鼓起的显示上限，这个映射和布料摆动未做实物标定；风数值来自仿真，外观是近似表现。当前采用飞机采样点的环境风，未独立求解风袋位置/高度的局部风、遮挡或旋翼下洗。风袋默认不参与碰撞；手动开启时仅导出固定立杆、底座，布料不参与静态碰撞。
+
+`scene-wind.mjs` 覆盖单位、四向、静风/垂直风、采样一致性、实例隔离、暂停/过期、快速采样合并和模型重载。`scene-windsock-ui.mjs` 使用隔离 IPC 的真实 WebGL 画面检查四向、风强响应、立杆旋转、保存/增删、暂停、机体数据仍在更新时的风断流、恢复和实例切换，并检查连续添加、多个风袋独立变换/隐藏/删除、复制、隐藏默认试验场后的显示与刷新页面后重新加载布局，生成 `/tmp/jsbsim-windsock.png` 和 `/tmp/jsbsim-multiple-windsocks.png`。
 
 ## 螺旋桨转速与动画
 
@@ -170,3 +207,52 @@ Voliro 桨位对应当前 XML：M1/M2 右上/右下，M3/M4 左上/左下，M5 �
 前四桨的稳态目标使用单桨台架转速曲线，动态极点按现有电机配置 9.6/s 建模。尾桨默认采用 1900 KV × 23 V 的空载参考上限；它不是带 6045 桨的实测负载转速，界面明确显示“未标定”。可通过模型参数 `tail-loaded-full-rpm` 替换为已标定的加载满速。它们是新增模型中的仿真状态，不是物理电调反馈。
 
 约 2400 RPM 在 40 FPS 下每帧恰好转一圈，直接绘制可能看起来静止。视景保留完整的模型 RPM 数值和物理角速度，仅对显示相位压缩并限制每帧角步长，确保可见旋转方向；高速桨盘继续表达高速状态。面板注明“动画作可视化降速，RPM 数值保持原值”。暂停、停止和对应采样过期仍停止动画。
+# Voliro T photo reconstruction (2026-11-11)
+
+`client/src/sim/sceneVoliroT.ts` builds the black carbon T-frame, bevelled shell,
+round cross/tail tubes, four motor housings in two common-tilt coaxial pods, tail
+motor, GPS mast/puck, controller case, wiring and three landing legs. Static pieces
+are batched by material. Five independent rotor animations retain the existing
+RPM and stale-data handling. The rotor planes now use the model's actual 110 mm
+spacing, with centres relative to the simulated CG: front X=+0.07 m, Y=±0.45 m;
+tail X=-0.71 m. Scene coordinates are (body Y, -body Z, -body X).
+
+`voliroTGeometry.json` records provenance. The user's three photographs establish
+appearance; the existing simulation establishes motor centres, CG and contacts.
+The latest user-supplied MSC 21x6.3 sheet establishes the front visual propeller
+diameter (533.4 mm) and nominal pitch (160.02 mm). Shell dimensions and electronics are estimates. The supplied hardware Word
+document confirms 25 mm tube OD and the M6208 68.7 x 25.8 mm reference housing.
+On 2026-11-12 the user set all three landing contacts to 0.19 m below CG.
+The existing attachment points and footprint are retained; the preview ground
+follows that height. The slanted-leg end caps terminate at the contact plane. This is a visual reconstruction,
+not a photogrammetric CAD measurement or a revised mass/inertia model.
+
+The Tattu 177 x 65 x 56 mm battery is mounted beneath the fuselage, with its
+177 mm length along body X and its front face aligned to the front cross-tube
+centreline. It is laterally centred. Its centre is body (-0.0185, 0, +0.075) m
+relative to the existing simulated CG; the 4 mm clearance beneath the lower
+plate is a visual mounting allowance. The pack, straps and connector remain
+fixed to the body during pod tilt. This visual mounting update does not
+recalculate the existing rigid-body mass/CG/inertia or the 30-station drag model.
+
+Generate full/bare GLB assets, metadata and an entirely offline interactive preview:
+
+```sh
+node scripts/export-voliro-visual.mjs /tmp/voliro-visual
+node --experimental-websocket tests/scene-voliro-visual.mjs http://127.0.0.1:8788/preview.html /tmp
+```
+
+The same geometry JSON is deployed as `data/airframe_geometry_20261111.json` beside
+the aircraft model. The companion `VoliroTBodyDrag.xml` uses distributed, passive
+wind-relative drag at 30 stations. Its coefficients and shell sizes are engineering
+estimates, not identified flight data. Mass, inertia, CG and propulsion remain unchanged. The 2026-11-12 gear update
+changes only contact Z (0.50 to 0.19 m), the initial height and leg drag geometry.
+The 0.50 m scene obstacle sphere is retained; deployed-gear support is verified
+with the current landing-surface solver. External model files take effect on the next model
+load; deploying an asset does not restart a running or armed HIL instance.
+
+## MSC 21×6.3 桨叶与硬件资料更新
+
+前部四支主桨的视景采用用户提供的 MSC 21×6.3 PDF 和图片，直径 533.4 mm、名义螺距 160.02 mm、整桨质量 47 g。`scenePropeller.ts` 生成带弦宽、后掠、近似扭转、厚度和安装孔的几何；M1/M4 为 CCW 外形，M2/M3 为镜像 CW 外形。尾部保持三叶 6045。离线预览默认显示全部五支桨，可关闭显示以检查机架。几何不代表经过测量的完整翼型或加工模型。
+
+来源、17 组厂家性能点及范围限制已写入 PX4 的 `docs/zh/voliro_t_five_motor_design.md`，数据归档在 `docs/assets/voliro_t/msc_21x6p3_{specification.json,performance.csv}`。原始厂家表未给出 M6208 KV310 / 6S / ESC 油门映射。前部推力/扭矩现由实际 RPM 查询 MSC 21×6.3 曲线，共轴表按新桨径生成，旧悬停倍率改为 1。油门到转速仍使用暂定参考，默认上限 5000 RPM；低于首个 3320 RPM 测点为二次外推。旧加速反作用候选尚未重新辨识，也不将 47 g 桨重重复加到总质量。

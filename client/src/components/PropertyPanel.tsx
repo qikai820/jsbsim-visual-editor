@@ -319,11 +319,12 @@ export default function PropertyPanel() {
   }
 
   const handleChange = (key: string, value: any) => {
-    if (key === 'transport' && value === 'SERIAL' &&
+    if (key === 'transport' && (value === 'SERIAL' || value === 'AUTO') &&
         ['input', 'output'].includes(node.data.componentType)) {
       updateNodeParams(node.id, {
-        transport: 'SERIAL',
-        device: node.data.params.device || '/dev/ttyS1',
+        transport: value,
+        device: value === 'AUTO' && (!node.data.params.device || node.data.params.device === '/dev/ttyS1')
+          ? '/dev/ttyACM0' : node.data.params.device || '/dev/ttyS1',
         baud: node.data.params.baud || '921600',
       });
       return;
@@ -478,11 +479,13 @@ export default function PropertyPanel() {
             <label>{paramDef.label}</label>
             <select value={raw} onChange={e => handleChange(key, e.target.value)}>
               {paramDef.options?.map(opt => (
-                <option key={opt} value={opt}>{key === 'device' ? SERIAL_DEVICE_LABELS[opt] || opt : key === 'transport' ? (opt === 'SERIAL' ? '串口' : '网口（UDP）') : selectLabels[opt] || opt}</option>
+                <option key={opt} value={opt}>{key === 'device' ? SERIAL_DEVICE_LABELS[opt] || opt : key === 'transport' ? (opt === 'AUTO' ? '自动（USB / 网口）' : opt === 'SERIAL' ? '串口' : '网口（UDP）') : selectLabels[opt] || opt}</option>
               ))}
             </select>
             {key === 'device' &&
-              <small>S1 是 UART2，未接 J23；J23 提供 S2/S4/S5/S6/S7。S2 与板载 RS485 共线，使用板载收发器还需控制 /dev/rs485_dir。{['input', 'output'].includes(node.data.componentType) && 'HIL 输入与输出共用串口时，请选择相同设备和波特率。'}</small>}
+              <small>{String(raw || '').includes('ttyACM')
+                ? 'USB HIL 输入与输出使用同一设备和波特率。自动模式会选择可用的 USB 或 UDP 链路。'
+                : <>S1 是 UART2，未接 J23；J23 提供 S2/S4/S5/S6/S7。S2 与板载 RS485 共线，使用板载收发器还需控制 /dev/rs485_dir。{['input', 'output'].includes(node.data.componentType) && 'HIL 输入与输出共用串口时，请选择相同设备和波特率。'}</>}</small>}
           </div>
         );
       }
@@ -574,7 +577,7 @@ export default function PropertyPanel() {
             if (['transport', 'device', 'baud', 'host'].includes(key) && !hilInput && !hilOutput && !(viztraOutput && key === 'host')) return false;
             const serial = node.data.params?.transport === 'SERIAL';
             if (serial && !viztraOutput && ['port', 'host'].includes(key)) return false;
-            if (!serial && ['device', 'baud'].includes(key)) return false;
+            if (!serial && node.data.params?.transport !== 'AUTO' && ['device', 'baud'].includes(key)) return false;
           }
           if (node.data.componentType === 'output') {
             if (selectedType === 'VIZTRA_UDP_JSON' || selectedType === 'VIZTRA_UDP_QGC') {

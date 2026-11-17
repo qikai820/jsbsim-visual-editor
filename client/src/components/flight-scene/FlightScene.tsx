@@ -1,19 +1,36 @@
-import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { listenSceneFrames, listenTelemetry, simInstanceControl } from '../../utils/tauriApi';
 import { FlightSceneFeed, demoPackets, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode, type ScenePose } from '../../sim/flightSceneState';
-import { listenSceneMonitor, type SceneMonitorTarget } from '../../sim/sceneSignals';
+import { listenSceneMonitor, mergeSceneMonitorKeys, sceneMonitorKeys, type SceneMonitorTarget } from '../../sim/sceneSignals';
+import { canonicalMonitorProperty } from '../../sim/monitorIdentity';
+import { loadSceneDisplay, SCENE_DISPLAY_KEY, sceneValueKeys, type SceneDisplay } from '../../sim/sceneInstruments';
+import { CircularSceneHud, SceneIcon, SceneInstrumentSettings, SceneValueGrid } from './SceneInstruments';
 import { useSignalMonitorStore } from '../../store/signalMonitorStore';
 import { rotorCount, rotorLabel, rotorReading } from '../../sim/sceneRotors';
 import { isMorphQuad, MORPHQUAD_ARMS } from '../../sim/sceneMorphQuad';
+import { windReading } from '../../sim/sceneWind';
 import FlightSceneCanvas, { type SceneLayers } from './FlightSceneCanvas';
 import SceneEditorPanel from './SceneEditorPanel';
 import { useSceneEditor } from './useSceneEditor';
 import { useSceneModelOrigin } from './useSceneModelOrigin';
 import './flightScene.css';
+import './flightSceneWorkspace.css';
 
 const MODES: [CameraMode, string][] = [['free', '自由'], ['follow', '跟随'], ['ground', '地面'], ['cockpit', '机载'], ['fleet', '编队']];
 const INITIAL_LAYERS: SceneLayers = { grid: true, trails: true, labels: true, thrust: false, axes: false };
 const LAYERS: [keyof SceneLayers, string][] = [['grid', '地面网格'], ['trails', '飞行航迹'], ['labels', '飞机标签'], ['thrust', '推力方向'], ['axes', '机体坐标轴']];
+
+// Keep telemetry and FPS renders from rewriting native checkbox state. Desktop
+// WebKit can repaint the controls even when checked is assigned the same value.
+const SceneLayerControls = memo(function SceneLayerControls({ layers, onChange }: {
+  layers: SceneLayers; onChange: (key: keyof SceneLayers, checked: boolean) => void;
+}) {
+  return <section className="scene-layer-list"><strong>场景图层</strong>{LAYERS.map(([key, label]) => <label key={key}>
+    <input type="checkbox" checked={layers[key]} onChange={event => onChange(key, event.target.checked)} />{label}
+  </label>)}</section>;
+});
+
 const format = (n: number | null | undefined, digits = 1) => n == null || !Number.isFinite(n) ? '—' : n.toFixed(digits);
 const color = (id: string) => SCENE_COLORS[(Number(id) - 1) % SCENE_COLORS.length];
 const fresh = (p: ScenePose | undefined, now: number) => !!p && now - p.receivedAt < STALE_MS;
@@ -62,9 +79,24 @@ function MiniMap({ feed, selected, onSelect }: { feed: FlightSceneFeed; selected
   </svg>;
 }
 
-export default function FlightScene({ onClose, slots = {}, initialSelected = '01', onMonitorTargetChange }: {
+function WindStatus({ pose, instance, demo, now }: { pose?: ScenePose; instance: string; demo: boolean; now: number }) {
+  const wind = windReading(pose, now);
+  const state = !wind.wind ? 'waiting' : !wind.fresh ? 'stale' : pose?.state === 'paused' ? 'paused'
+    : pose?.state !== 'running' ? 'stopped' : 'live';
+  return <div className={`scene-wind-status ${state}`} data-state={state} aria-label="环境风">
+    <strong>风袋 · 环境风 <span>{instance}</span></strong>
+    <b>{format(wind.horizontal)} <small>m/s</small><span>{wind.fromDegrees === null ? wind.wind ? '水平静风' : '来向 —' : `来向 ${format(wind.fromDegrees, 0)}°`}</span></b>
+    <span>{!wind.wind ? '等待环境风采样' : !wind.fresh ? '风数据过期 · 保留最后外形' : pose?.state === 'paused' ? '已暂停 · 风袋冻结'
+      : pose?.state !== 'running' ? '已停止 · 风袋冻结' : demo ? '演示风场' : 'JSBSim 总环境风'}</span>
+    {wind.wind && <small>垂直风 {format(-wind.wind.down)} m/s（向上为正）</small>}
+    <small>袋尾朝下风向 · 随所选实例切换</small>
+  </div>;
+}
+
+export default function FlightScene({ onClose, slots = {}, initialSelected = '01', onMonitorTargetChange, toolbarHost }: {
   onClose: () => void; slots?: Record<string, string>; initialSelected?: string;
   onMonitorTargetChange?: (target: SceneMonitorTarget | null) => void;
+  toolbarHost?: HTMLElement | null;
 }) {
   const [feed, setFeed] = useState(() => new FlightSceneFeed());
   const [demo, setDemo] = useState(false);
@@ -72,6 +104,9 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const [selected, setSelected] = useState(initialSelected);
   const [mode, setMode] = useState<CameraMode>('follow');
   const [layers, setLayers] = useState(INITIAL_LAYERS);
+  const changeLayer = useCallback((key: keyof SceneLayers, checked: boolean) => {
+    setLayers(current => ({ ...current, [key]: checked }));
+  }, []);
   const [revision, setRevision] = useState(0);
   const [cameraVersion, setCameraVersion] = useState(0);
   const [groundAltitude, setGroundAltitude] = useState<number | null>(null);
@@ -79,7 +114,16 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(!document.hidden);
+  const [display, setDisplay] = useState<SceneDisplay>(loadSceneDisplay);
+  const [panel, setPanel] = useState<'aircraft' | 'layers' | 'settings' | 'telemetry' | 'instruments' | 'editor' | null>(null);
+  const [focus, setFocus] = useState(false), [valueSelected, setValueSelected] = useState(0), [hudSettings, setHudSettings] = useState(false);
+  const [storageError, setStorageError] = useState(false);
+  const customKeys = useMemo(() => sceneValueKeys(display.values), [display.values]);
+  const customSignature = customKeys.join('\n');
+  useEffect(() => { try { localStorage.setItem(SCENE_DISPLAY_KEY, JSON.stringify(display)); setStorageError(false); } catch { setStorageError(true); } }, [display]);
+  const togglePanel = (next: typeof panel) => { setFocus(false); setPanel(current => current === next ? null : next); };
   const editor = useSceneEditor();
+  useEffect(() => { if (!editor.enabled) setPanel(current => current === 'editor' ? null : current); }, [editor.enabled]);
   const viewMode = editor.enabled ? 'free' : mode;
   const demoTime = useRef(0);
   const groundPlane = useRef<{ feed: FlightSceneFeed; altitude: number | null }>({ feed, altitude: null });
@@ -113,9 +157,9 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const selectedModel = pose?.model || slots[selected] || '';
   const modelOrigin = useSceneModelOrigin(selectedModel, !demo, editor.applyModelOrigin);
   useEffect(() => {
-    onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel });
+    onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel, extraKeys: customSignature ? customSignature.split('\n') : [] });
     return () => onMonitorTargetChange?.(null);
-  }, [onMonitorTargetChange, demo, selected, selectedModel]);
+  }, [onMonitorTargetChange, demo, selected, selectedModel, customSignature]);
   const online = [...feed.aircraft.values()].filter(item => fresh(item.latest, now)).length;
   const ids = [...new Set([...Object.keys(slots).filter(id => slots[id]), ...feed.aircraft.keys()])].sort();
   const selectedFresh = fresh(pose, now);
@@ -161,34 +205,67 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
     try { await simInstanceControl({ instanceId: selected, action: pose.state === 'paused' ? 'resume' : 'pause' }); }
     catch (e) { setError(String(e)); } finally { setBusy(false); }
   };
-  return <div className="flight-scene" data-testid="flight-scene" data-mode={demo ? 'demo' : 'live'}>
-    <div className="scene-toolbar">
-      <div className="scene-breadcrumb"><button onClick={onClose} title="返回模型编辑">←</button><strong>飞行视景</strong><span>/ 本地试验场</span></div>
+  const editScene = () => { const enabled = !editor.enabled; editor.setEnabled(enabled); setFocus(false); setPanel(enabled ? 'editor' : null); };
+  const toggleTrend = () => { setFocus(false); setDisplay(current => ({ ...current, trend: !current.trend })); };
+  const openInstruments = (hud = false, index = valueSelected) => { setFocus(false); setHudSettings(hud); setValueSelected(index); setPanel('instruments'); };
+  const userProject = useSignalMonitorStore.getState().project;
+  const userKeys = [...Object.values(userProject.labels).flatMap(label => label.bindings), ...userProject.scopes.flatMap(scope => scope.channels)].map(binding => binding.key);
+  const subscribed = new Set(mergeSceneMonitorKeys(userKeys, sceneMonitorKeys(selectedModel, customKeys)).map(canonicalMonitorProperty));
+  const unavailableKeys = demo ? [] : customKeys.filter(key => !subscribed.has(canonicalMonitorProperty(key)));
+  const rightOpen = !focus && (panel === 'telemetry' || panel === 'instruments' || editor.enabled && panel === 'editor');
+  const toolbar = <div className={`scene-toolbar ${toolbarHost ? 'scene-toolbar-embedded' : ''}`}>
+      <div className="scene-breadcrumb"><button onClick={onClose} title="返回模型编辑" aria-label="返回模型编辑">←</button><strong>飞行视景</strong></div>
+      <select className="scene-aircraft-select" aria-label="选择视景飞行器" value={selected} onChange={event => setSelected(event.target.value)}>
+        {!ids.includes(selected) && <option value={selected}>{selected} · 等待飞机</option>}
+        {ids.map(id => <option key={id} value={id}>{id} · {feed.aircraft.get(id)?.latest.model || slots[id]}</option>)}
+      </select>
       <span className={`scene-state ${selectedFresh ? 'online' : ''}`}><i />{state}</span>
       <button className="scene-action" disabled={!demo && (!selectedFresh || busy || !['running', 'paused'].includes(pose?.state ?? ''))} onClick={() => void command()}>{(demo ? demoPaused : pose?.state === 'paused') ? '▶ 继续' : 'Ⅱ 暂停'}<small> {selected}</small></button>
-      <button className="scene-action" onClick={() => { feed.clearTrails(); setRevision(v => v + 1); }}>清除航迹</button>
-      <span className="scene-clock">仿真时间 <b>{clock(pose?.time)}</b></span>
       <div className="scene-toolbar-right">
-        <button className={`scene-action ${editor.enabled ? 'active' : ''}`} aria-pressed={editor.enabled} onClick={() => editor.setEnabled(value => !value)}>编辑场景</button>
-        <button className={`scene-action ${demo ? 'active' : ''}`} onClick={toggleDemo}>{demo ? '退出演示' : '演示场景'}</button>
-        <details className="scene-settings"><summary>视图设置</summary><div>
-          <label>参考地面海拔 / m<input aria-label="参考地面海拔" type="number" placeholder="使用遥测地面" value={groundAltitude ?? ''} onChange={e => setGroundAltitude(e.target.value === '' || !Number.isFinite(e.target.valueAsNumber) ? null : e.target.valueAsNumber)} /></label>
-          <p>未收到地面高程时显示参考平面，离地高度留空。所有距离按米显示。</p>
-          <button className="scene-action" disabled={!pose || !!editor.document.georeference} onClick={() => { feed.recenter(selected); setCameraVersion(v => v + 1); }}>以所选飞机重设场景原点</button>
+        <button className={`scene-action ${editor.enabled ? 'active' : ''}`} aria-pressed={editor.enabled} onClick={editScene}>{editor.enabled ? '完成编辑' : '编辑场景'}</button>
+        <button className="scene-action scene-focus-toggle" aria-pressed={focus} onClick={() => setFocus(value => !value)}><SceneIcon name="focus" />{focus ? '退出专注' : '专注'}</button>
+        <details className="scene-more" onClick={event => { if ((event.target as Element).closest('button')) event.currentTarget.open = false; }}><summary aria-label="更多视景操作">•••</summary><div>
+          <button onClick={() => { feed.clearTrails(); setRevision(v => v + 1); }}>清除航迹</button>
+          <button onClick={toggleDemo}>{demo ? '退出演示' : '演示场景'}</button>
+          <button onClick={() => togglePanel('settings')}>视图设置</button>
+          <button onClick={() => openInstruments()}>自定义数值与 HUD</button>
         </div></details>
       </div>
-    </div>
+    </div>;
+  return <div className={`flight-scene flight-scene-immersive ${focus ? 'scene-focus' : ''}`} data-testid="flight-scene" data-mode={demo ? 'demo' : 'live'}>
+    {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
     {error && <div className="scene-error" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
-    <div className="scene-layout">
-      <aside className="scene-sidebar"><header><strong>飞行器</strong><span>{ids.length} 架</span></header>
+    {storageError && <div className="scene-error" role="status">本机存储不可用，本次数值布局将在当前窗口内保留。</div>}
+    <div className={`scene-layout ${rightOpen && (display.pinned || editor.enabled || panel === 'instruments') ? 'scene-panel-docked' : ''}`}>
+      <nav className="scene-tool-rail" aria-label="视景工具">
+        <button aria-label="飞行器列表" aria-pressed={panel === 'aircraft'} onClick={() => togglePanel('aircraft')}><SceneIcon name="plane" /><span>飞机</span></button>
+        <button aria-label="场景图层" aria-pressed={panel === 'layers'} onClick={() => togglePanel('layers')}><SceneIcon name="layers" /><span>图层</span></button>
+        <button aria-label={editor.enabled ? '场景属性' : '飞行遥测'} aria-pressed={panel === 'telemetry' || panel === 'editor'} onClick={() => togglePanel(editor.enabled ? 'editor' : 'telemetry')}><SceneIcon name="gauge" /><span>{editor.enabled ? '属性' : '遥测'}</span></button>
+        <button aria-label="姿态趋势" aria-pressed={display.trend} disabled={editor.enabled} onClick={toggleTrend}><SceneIcon name="chart" /><span>趋势</span></button>
+        <button aria-label="视图设置" aria-pressed={panel === 'settings'} onClick={() => togglePanel('settings')}><SceneIcon name="settings" /><span>设置</span></button>
+      </nav>
+      <aside className="scene-sidebar" hidden={focus || !['aircraft', 'layers', 'settings'].includes(panel ?? '')}><header><strong>{panel === 'layers' ? '场景图层' : panel === 'settings' ? '视图设置' : `飞行器 · ${ids.length} 架`}</strong><button className="scene-panel-close" aria-label="收起侧栏" onClick={() => setPanel(null)}><SceneIcon name="close" /></button></header>
+        <div hidden={panel !== 'aircraft'}>
         <div className="scene-aircraft-list">{ids.length ? ids.map(id => {
           const item = feed.aircraft.get(id)?.latest;
           return <button key={id} data-aircraft={id} className={selected === id ? 'selected' : ''} onClick={() => setSelected(id)} aria-pressed={selected === id}>
             <i className={`scene-dot ${fresh(item, now) ? 'online' : ''}`} /><span><b>{id} · {item?.model || slots[id]}</b><small>{selected === id ? `已选中 · ${MODES.find(m => m[0] === mode)?.[1]}` : fresh(item, now) ? item?.state === 'paused' ? '已暂停' : '实时遥测' : '等待数据'}</small></span><em style={{ background: color(id) }} />
           </button>;
         }) : <p className="scene-muted">尚无飞行器数据</p>}</div>
-        <section className="scene-layer-list"><strong>场景图层</strong>{LAYERS.map(([key, label]) => <label key={key}><input type="checkbox" checked={layers[key]} onChange={e => setLayers(current => ({ ...current, [key]: e.target.checked }))} />{label}</label>)}</section>
-        <div className="scene-environment"><strong>△ 离线试验场</strong><span>{ground === null ? '参考平面 · 地面高程未知' : `地面海拔 ${format(ground)} m`}</span><small>{editor.document.georeference ? `固定场景基准 ${format(editor.document.georeference.altitude)} m` : "场景尚未固定地理基准"}</small><small>场景比例 1 m / 单位</small><small>场景素材：Poly Haven · CC0</small></div>
+        </div><div hidden={panel !== 'layers'}>
+        <SceneLayerControls layers={layers} onChange={changeLayer} />
+        <WindStatus pose={pose} instance={selected} demo={demo} now={now} />
+        <details className="scene-resource-info"><summary>环境与资源信息</summary><div className="scene-environment"><strong>△ 离线试验场</strong><span>{ground === null ? '参考平面 · 地面高程未知' : `地面海拔 ${format(ground)} m`}</span><small>{editor.document.georeference ? `固定场景基准 ${format(editor.document.georeference.altitude)} m` : "场景尚未固定地理基准"}</small><small>场景比例 1 m / 单位</small><small>场景素材：Poly Haven · CC0</small>
+          {editor.document.objects.some(object => object.builtin === 'f35') && <small>F-35A：<a href="https://sketchfab.com/3d-models/f-35a-lightning-ii-a06d6113cfb44a0aa7b8f17106aca9c4" target="_blank" rel="noreferrer">shangus930</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a> · 已转换为静态模型</small>}
+        </div></details></div>
+        <div className="scene-view-settings" hidden={panel !== 'settings'}>
+          <label className="scene-view-check"><input type="checkbox" checked={display.numbers} onChange={event => setDisplay(current => ({ ...current, numbers: event.target.checked }))} />显示数值信息条</label>
+          <label className="scene-view-check"><input type="checkbox" checked={display.hud} onChange={event => setDisplay(current => ({ ...current, hud: event.target.checked }))} />显示圆形 HUD</label>
+          <label className="scene-view-check"><input type="checkbox" checked={display.minimap} onChange={event => setDisplay(current => ({ ...current, minimap: event.target.checked }))} />显示小地图</label>
+          <button className="scene-action" onClick={() => openInstruments()}>自定义数值与 HUD</button>
+          <details><summary>参考地面与场景原点</summary><label>参考地面海拔 / m<input aria-label="参考地面海拔" type="number" placeholder="使用遥测地面" value={groundAltitude ?? ''} onChange={event => setGroundAltitude(event.target.value === '' || !Number.isFinite(event.target.valueAsNumber) ? null : event.target.valueAsNumber)} /></label>
+            <p className="scene-muted">未收到地面高程时显示参考平面，离地高度留空。</p><button className="scene-action" disabled={!pose || !!editor.document.georeference} onClick={() => { feed.recenter(selected); setCameraVersion(v => v + 1); }}>以所选飞机重设场景原点</button></details>
+        </div>
       </aside>
       <main className="scene-main"><div className="scene-viewport">
         <SceneBoundary resetKey={cameraVersion}>{visible && <FlightSceneCanvas feed={feed} revision={revision} selected={selected} onSelect={setSelected} mode={viewMode} layers={layers} onFps={setFps} groundAltitude={groundPlane.current.altitude} cameraVersion={cameraVersion} editor={editor} />}</SceneBoundary>
@@ -196,11 +273,18 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         <div className="scene-viewport-tools"><span>N ↑</span><button title="重新定位相机" aria-label="重新定位相机" onClick={() => setCameraVersion(v => v + 1)}>◎</button></div>
         {!feed.aircraft.size && !editor.enabled && !editor.document.objects.some(object => object.assetId) && <div className="scene-empty"><span>飞行视景已就绪</span><p>连接仿真机后显示实时飞机与航迹</p><button onClick={toggleDemo}>浏览演示场景 →</button></div>}
         {pose && !selectedFresh && <div className="scene-stale" role="status">遥测已过期 · 飞机保持最后位姿</div>}
-        <div className="scene-camera-tabs" aria-label="相机视角">{MODES.map(([key, label]) => <button key={key} disabled={editor.enabled && key !== 'free'} aria-pressed={viewMode === key} className={viewMode === key ? 'active' : ''} onClick={() => setMode(key)}>{label}</button>)}</div>
-        <MiniMap feed={feed} selected={selected} onSelect={setSelected} />
-        <span className="scene-view-hint">拖动旋转 · 右键平移 · 滚轮缩放</span>
-      </div><Trend history={entry?.history ?? []} selected={selected} /></main>
-      {editor.enabled ? <SceneEditorPanel model={selectedModel} modelOrigin={demo ? undefined : modelOrigin} sceneLoaded={selectedFresh && (propertyAgeMs(pose?.sceneStatusSampleAt) ?? Infinity) < 2000 ? pose?.sceneLoaded ?? null : null} sceneRevision={pose?.sceneRevision ?? null} sceneContacts={pose?.sceneContacts ?? null} editor={editor} groundAltitude={ground} onGroundLoaded={setGroundAltitude} /> : <aside className="scene-inspector"><header><strong>{selected} · {pose?.model || slots[selected] || '未选择'}</strong><span className={selectedFresh ? 'live' : ''}>{demo ? '演示' : selectedFresh ? '实时' : '等待'}</span></header>
+        <details className="scene-camera-select"><summary><SceneIcon name="camera" />{MODES.find(item => item[0] === viewMode)?.[1]}<SceneIcon name="chevron" /></summary><div className="scene-camera-tabs" aria-label="相机视角">{MODES.map(([key, label]) => <button key={key} disabled={editor.enabled && key !== 'free'} aria-pressed={viewMode === key} className={viewMode === key ? 'active' : ''} onClick={event => { setMode(key); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{label}</button>)}</div></details>
+        <button className="scene-minimap-toggle" aria-label="切换小地图" aria-pressed={display.minimap} onClick={() => setDisplay(current => ({ ...current, minimap: !current.minimap }))}><SceneIcon name="map" /><span>小地图</span></button>
+        {display.minimap && <MiniMap feed={feed} selected={selected} onSelect={setSelected} />}
+        {!editor.enabled && <div className={`scene-instruments ${display.hud ? 'with-hud' : ''}`}>
+          {display.numbers && <SceneValueGrid layout={display.values} pose={pose} ground={ground} now={now} demo={demo} editing={panel === 'instruments'} selected={valueSelected}
+            onSelect={index => openInstruments(false, index)} onConfigure={() => panel === 'instruments' ? setPanel(null) : openInstruments()}
+            onMove={(from, to) => { setDisplay(current => { const cells = [...current.values.cells]; [cells[from], cells[to]] = [cells[to], cells[from]]; return { ...current, values: { ...current.values, cells } }; }); setValueSelected(to); }} />}
+          {display.hud && <CircularSceneHud pose={pose} noseUp={display.noseUp} now={now} onConfigure={() => openInstruments(true)} />}
+        </div>}
+      </div>{display.trend && !editor.enabled && !focus && <div className="scene-trend-drawer"><button className="scene-trend-close" aria-label="收起姿态趋势" onClick={() => setDisplay(current => ({ ...current, trend: false }))}><SceneIcon name="chevron" /></button><Trend history={entry?.history ?? []} selected={selected} /></div>}</main>
+      {panel === 'instruments' && !focus && <SceneInstrumentSettings display={display} selected={valueSelected} onSelected={setValueSelected} onChange={setDisplay} onClose={() => setPanel(null)} unavailableKeys={unavailableKeys} initialHud={hudSettings} />}
+      {editor.enabled ? <div className="scene-editor-container" hidden={focus || panel !== 'editor'}><SceneEditorPanel model={selectedModel} modelOrigin={demo ? undefined : modelOrigin} sceneLoaded={selectedFresh && (propertyAgeMs(pose?.sceneStatusSampleAt) ?? Infinity) < 2000 ? pose?.sceneLoaded ?? null : null} sceneRevision={pose?.sceneRevision ?? null} sceneContacts={pose?.sceneContacts ?? null} editor={editor} groundAltitude={ground} onGroundLoaded={setGroundAltitude} onCollapse={() => setPanel(null)} /></div> : <aside className="scene-inspector scene-telemetry-inspector" hidden={focus || panel !== 'telemetry'}><header><strong>{selected} · {pose?.model || slots[selected] || '未选择'}</strong><span className={selectedFresh ? 'live' : ''}>{demo ? '演示' : selectedFresh ? '实时' : '等待'}</span><div className="scene-panel-buttons"><button aria-label="固定遥测面板" aria-pressed={display.pinned} onClick={() => setDisplay(current => ({ ...current, pinned: !current.pinned }))}><SceneIcon name="pin" /></button><button aria-label="收起遥测面板" onClick={() => setPanel(null)}><SceneIcon name="close" /></button></div></header>
         <section><h3>飞行状态</h3><div className="scene-metrics">
           <Metric label="离地高度" value={agl} unit="m" /><Metric label="地速" value={pose?.speed} unit="m/s" />
           <Metric label="海拔高度" value={pose?.altitude} unit="m" /><Metric label="航向" value={pose?.yaw} unit="°" />
@@ -228,7 +312,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         <section className="scene-position"><h3>位置</h3><span>纬度 <b>{format(pose?.latitude, 7)}°</b></span><span>经度 <b>{format(pose?.longitude, 7)}°</b></span><span>垂直速度 <b>{format(pose?.verticalSpeed)} m/s</b></span></section>
       </aside>}
     </div>
-    <footer className="scene-status"><span><i className={`scene-dot ${online ? 'online' : ''}`} />{demo ? '演示模式' : online ? '正在接收仿真数据' : '等待仿真遥测'}</span><span>位姿 {format(hz, 0)} Hz</span><span>渲染 {visible ? fps : 0} FPS</span><span>数据年龄 {pose ? Math.max(0, Math.round(now - pose.receivedAt)) : '—'} ms</span><span>{online} / {ids.length} 在线</span><small>{demo ? '演示数据 · 不控制仿真机' : '实时视景 · 本地资源'}</small></footer>
+    <footer className="scene-status"><span><i className={`scene-dot ${online ? 'online' : ''}`} />{demo ? '演示模式' : online ? '正在接收仿真数据' : '等待仿真遥测'}</span><span>位姿 {format(hz, 0)} Hz</span><span>渲染 {visible ? fps : 0} FPS</span><span>数据年龄 {pose ? Math.max(0, Math.round(now - pose.receivedAt)) : '—'} ms</span><span>{online} / {ids.length} 在线</span><small>{demo ? '演示数据 · 不控制仿真机' : '实时视景 · 本地资源'}</small><button aria-pressed={display.trend} disabled={editor.enabled} onClick={toggleTrend}>姿态趋势 <SceneIcon name="chevron" /></button></footer>
   </div>;
 }
 

@@ -1267,11 +1267,11 @@ fn parse_output(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut La
         let is_serial_hil = get_attr(out, "transport") == Some("SERIAL") &&
             matches!(get_attr(out, "type"), Some("HIL_SENSOR") | Some("HIL_GPS")) &&
             get_attr(out, "editor_module") != Some("output");
-        if get_attr(out, "transport") == Some("SERIAL") {
-            params["transport"] = json!("SERIAL");
+        if matches!(get_attr(out, "transport"), Some("SERIAL") | Some("AUTO")) {
+            params["transport"] = json!(get_attr(out, "transport").unwrap());
         }
         if let Some(host) = get_attr(out, "host") { params["host"] = json!(host); }
-        if get_attr(out, "editor_module") == Some("output") || is_serial_hil {
+        if get_attr(out, "editor_module") == Some("output") || is_serial_hil || get_attr(out, "transport") == Some("AUTO") {
             for key in ["device", "baud"] {
                 if let Some(value) = get_attr(out, key) { params[key] = json!(value); }
             }
@@ -1411,8 +1411,8 @@ fn parse_input(fdm_config: &XmlElement, nodes: &mut Vec<Value>, layout: &mut Lay
         let is_serial_hil = get_attr(input, "transport") == Some("SERIAL") &&
             get_attr(input, "type") == Some("HIL_ACTUATOR_CONTROLS") &&
             get_attr(input, "editor_module") != Some("input");
-        if get_attr(input, "transport") == Some("SERIAL") {
-            params["transport"] = json!("SERIAL");
+        if matches!(get_attr(input, "transport"), Some("SERIAL") | Some("AUTO")) {
+            params["transport"] = json!(get_attr(input, "transport").unwrap());
             for key in ["device", "baud"] {
                 if let Some(value) = get_attr(input, key) { params[key] = json!(value); }
             }
@@ -2229,4 +2229,29 @@ mod ownership_tests {
             .filter(|item| item["data"]["componentType"] == "serial_hil").count(), 0);
         assert_eq!(node(&reloaded, "input")["data"]["params"]["device"], "/dev/ttyS5");
     }
+    #[test]
+    fn automatic_hil_preserves_usb_and_network_endpoints() {
+        let xml = r#"<fdm_config name="Auto" version="2.0">
+<input name="0.0.0.0" type="HIL_ACTUATOR_CONTROLS" transport="AUTO" device="/dev/ttyACM0" baud="921600" port="14560"><property>fcs/a</property></input>
+<output name="PX4" type="HIL_SENSOR" transport="AUTO" device="/dev/ttyACM0" baud="921600" host="192.168.101.100" port="14560" rate="400"><property>imu/ax</property></output>
+<output name="PX4" type="HIL_GPS" transport="AUTO" device="/dev/ttyACM0" baud="921600" host="192.168.101.100" port="14560" rate="10"><property>gps/lat</property></output>
+</fdm_config>"#;
+        let graph = parse_xml(xml, &HashMap::new()).unwrap();
+        let saved = crate::xml_generator::generate_xml(&graph).unwrap();
+        let reloaded = parse_xml(&saved, &HashMap::new()).unwrap();
+        let channels: Vec<&Value> = reloaded["nodes"].as_array().unwrap().iter()
+            .filter(|n| matches!(n["data"]["componentType"].as_str(), Some("input") | Some("output"))).collect();
+        assert_eq!(channels.len(), 3);
+        for channel in channels {
+            let p = &channel["data"]["params"];
+            assert_eq!(p["transport"], "AUTO");
+            assert_eq!(p["device"], "/dev/ttyACM0");
+            assert_eq!(p["baud"], "921600");
+            assert_eq!(p["port"], 14560);
+            if channel["data"]["componentType"] == "output" {
+                assert_eq!(p["host"], "192.168.101.100");
+            }
+        }
+    }
+
 }

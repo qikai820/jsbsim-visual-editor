@@ -11,6 +11,7 @@ export const SERIAL_SENSOR_DEVICES = [
 ] as const;
 
 export const SERIAL_DEVICE_LABELS: Record<string, string> = {
+  '/dev/ttyACM0': '/dev/ttyACM0 · USB 飞控',
   '/dev/ttyS1': '/dev/ttyS1 · UART2（非 J23）',
   '/dev/ttyS2': '/dev/ttyS2 · UART3 · J23 17/18（RS485 共线）',
   '/dev/ttyS4': '/dev/ttyS4 · UART5 · J23 43/40',

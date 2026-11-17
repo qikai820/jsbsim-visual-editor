@@ -1,0 +1,36 @@
+{
+  "title": "F-35A Lightning II",
+  "author": "shangus930 (https://sketchfab.com/shangus930)",
+  "license": "CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)",
+  "sourceUrl": "https://sketchfab.com/3d-models/f-35a-lightning-ii-a06d6113cfb44a0aa7b8f17106aca9c4",
+  "sourceSha256": "5b1586d69bc16f5ec543ce4708869393d520a14b93820c5dd893dcb42fdfdf41",
+  "sourceFile": "F-35A_Lightning_II.usdz",
+  "asset": "f35a.glb",
+  "units": "m",
+  "axes": "+X right, +Y up, -Z nose",
+  "pose": "Final USD animation frame, landing gear down",
+  "sourceFrame": 875.0,
+  "lengthM": 15.7,
+  "sizeM": [
+    10.954245399181175,
+    4.547296118279262,
+    15.699999999999998
+  ],
+  "bounds": {
+    "min": [
+      -5.477122699590588,
+      0.0,
+      -7.849999999999999
+    ],
+    "max": [
+      5.477122699590588,
+      4.547296118279262,
+      7.849999999999999
+    ]
+  },
+  "triangles": 190514,
+  "materials": 9,
+  "textures": 25,
+  "conversion": "Skinning and transforms baked; real length restored; UV V flipped; metallic/roughness packed; original colour/normal maps embedded",
+  "bytes": 13742712
+}

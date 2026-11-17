@@ -1,5 +1,6 @@
 import { BoxGeometry, CylinderGeometry, Euler, IcosahedronGeometry, Matrix4, Mesh, Object3D, PlaneGeometry, Vector3, type BufferGeometry } from 'three';
-import { validateSceneDocument, type SceneDocument } from './sceneDocument';
+import { sceneObjectVisible, validateSceneDocument, type SceneDocument } from './sceneDocument';
+import { F35_MODEL_KEY } from './sceneF35';
 /** Bake exactly the editable object transforms. Shadows are deliberately absent. */
 export function exportSceneCollision(document: SceneDocument, models: Map<string, Object3D>): string {
   const doc = validateSceneDocument(document), geo = doc.georeference;
@@ -25,7 +26,7 @@ export function exportSceneCollision(document: SceneDocument, models: Map<string
     emit(pad, pose.matrix); pad.dispose();
   }
   for (const object of doc.objects) {
-    if (!object.visible || object.collision === false || (object.builtin && !doc.showBase)) continue;
+    if (!sceneObjectVisible(object, doc.showBase) || object.collision === false) continue;
     const parent = new Object3D(); parent.position.fromArray(object.position);
     parent.rotation.copy(new Euler(...object.rotation.map(n => n * Math.PI / 180) as [number, number, number]));
     parent.scale.fromArray(object.scale); parent.updateMatrix();
@@ -34,6 +35,7 @@ export function exportSceneCollision(document: SceneDocument, models: Map<string
       emit(geometry, new Matrix4().multiplyMatrices(parent.matrix, pose.matrix)); geometry.dispose();
     };
     if (object.builtin === 'runway') primitive(new PlaneGeometry(18, 320), [0, 0, 0], [1, 1, 1], [-Math.PI / 2, 0, 0]);
+    else if (object.builtin === 'apron') primitive(new PlaneGeometry(40, 44), [0, 0, 0], [1, 1, 1], [-Math.PI / 2, 0, 0]);
     else if (object.builtin === 'hangar') {
       primitive(new PlaneGeometry(30, 22), [0, .018, 18], [1, 1, 1], [-Math.PI / 2, 0, 0]);
       primitive(new BoxGeometry(22, 8, 16), [0, 4, 0]); primitive(new BoxGeometry(13, 6, .1), [0, 3, 8.05]);
@@ -41,8 +43,12 @@ export function exportSceneCollision(document: SceneDocument, models: Map<string
       const i = object.seed!;
       primitive(new CylinderGeometry(.65, 1, 1, 5), [0, 1.5, 0], [.24, 3, .24], [0, i * 2.4, 0]);
       for (let lobe = 0; lobe < 3; lobe++) primitive(new IcosahedronGeometry(1, 0), [(lobe - 1) * .65, lobe === 1 ? 5.2 : 4.1, Math.sin(i + lobe) * .5], [1.9, lobe === 1 ? 2.4 : 1.8, 1.8], [0, i * 2.4, 0]);
+    } else if (object.builtin === 'windsock') {
+      // Optional static pole collision only; fluttering cloth is decorative.
+      primitive(new CylinderGeometry(.032, .055, 3.4, 10), [0, 1.75, 0]);
+      primitive(new CylinderGeometry(.24, .28, .14, 12), [0, .07, 0]);
     } else {
-      const model = models.get(object.assetId!); if (!model) throw new Error(`模型尚未加载：${object.name}`);
+      const model = models.get(object.builtin === 'f35' ? F35_MODEL_KEY : object.assetId!); if (!model) throw new Error(`模型尚未加载：${object.name}`);
       model.updateMatrixWorld(true);
       model.traverseVisible(node => {
         // Animated/skinned geometry cannot be represented by a static sidecar.

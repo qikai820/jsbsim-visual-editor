@@ -56,10 +56,18 @@ try {
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
   await send('Page.navigate', { url: `${base}/${name}.html` });
   await until(`document.querySelector('.scene-empty') && window.__events.get('scene-frames')?.size===1`);
-  await until(`(${assetStates}).length===5 && (${assetStates}).every(asset=>asset.state==='ready')`);
-  assert.deepEqual(await evaluate(`(${assetStates}).map(asset=>asset.asset).sort()`), ['asphalt_02','concrete_floor_01','concrete_floor_01','grass_ground','kloppenheim_03_puresky'], 'all photographic surfaces are loaded from the bundle');
+  await until(`(${assetStates}).length===6 && (${assetStates}).every(asset=>asset.state==='ready')`);
+  assert.deepEqual(await evaluate(`(${assetStates}).map(asset=>asset.asset).sort()`), ['asphalt_02','concrete_floor_01','concrete_floor_01','concrete_floor_01','grass_ground','kloppenheim_03_puresky'], 'all photographic surfaces including the apron are loaded from the bundle');
   assert.equal(await evaluate(`document.querySelector('[data-testid=flight-scene]').dataset.mode`), 'live');
-  await until(`window.__calls.some(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.includes('fcs/voliro_t/pitch-rad')&&c.args.keys.length===29)`);
+  // Telemetry/FPS refreshes must leave native layer controls untouched. Even
+  // assigning the same checked value invalidates their paint in desktop WebKit.
+  await evaluate(`window.__layerInputs=[...document.querySelectorAll('.scene-layer-list input')];window.__layerWrites=0;
+    for(const input of window.__layerInputs){const checked=Object.getOwnPropertyDescriptor(input,'checked');
+      Object.defineProperty(input,'checked',{configurable:true,get(){return checked.get.call(this)},set(value){window.__layerWrites++;checked.set.call(this,value)}})};true`);
+  await new Promise(r => setTimeout(r, 700));
+  assert.equal(await evaluate('window.__layerWrites'), 0, 'inspector refresh must not rewrite unchanged layer controls');
+  assert.ok(await evaluate(`window.__layerInputs.every((input,i)=>input===document.querySelectorAll('.scene-layer-list input')[i])`), 'layer controls keep their DOM identity');
+  await until(`window.__calls.some(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.includes('fcs/voliro_t/pitch-rad')&&c.args.keys.length===32)`);
   await evaluate(`(async()=>{const{demoPackets}=await import('/src/sim/flightSceneState.ts');window.__packets=demoPackets(12);window.__emit('scene-frames',window.__packets)})()`);
   await until(`document.querySelectorAll('[data-aircraft]').length===8 && !document.querySelector('.scene-empty')`);
   await until(`document.querySelector('.scene-status').textContent.includes('8 / 8 在线')`);
@@ -157,6 +165,20 @@ try {
   await clickText('演示场景');
   await until(`document.querySelector('[data-testid=flight-scene]').dataset.mode==='demo' && document.querySelectorAll('[data-aircraft]').length===8`);
   assert.equal(await evaluate(`window.__events.get('scene-frames').size`), 0, 'native subscription is released in demo mode');
+  for (let i = 0; i < 5; i++) {
+    const initial = i < 3;
+    await evaluate(`window.__layerInputs[${i}].click()`);
+    await until(`window.__layerInputs[${i}].checked===${!initial}`);
+    await evaluate(`window.__layerInputs[${i}].click()`);
+    await until(`window.__layerInputs[${i}].checked===${initial}`);
+  }
+  await evaluate(`document.querySelector('button[aria-label="场景图层"]').click()`);
+  await until(`window.__layerInputs[0].getClientRects().length>0`);
+  await evaluate(`window.__layerInputs[0].focus();window.__layerWrites=0`);
+  await new Promise(r => setTimeout(r, 1200));
+  assert.equal(await evaluate('window.__layerWrites'), 0, 'running fleet telemetry and FPS updates leave the layer controls untouched');
+  assert.ok(await evaluate('document.activeElement===window.__layerInputs[0]'), 'layer keyboard focus survives telemetry updates');
+  await evaluate(`document.querySelector('button[aria-label="收起侧栏"]').click()`);
   for (const label of ['自由', '地面', '机载', '编队', '跟随']) {
     await evaluate(`document.querySelector('.scene-camera-tabs button:nth-child(${['自由','跟随','地面','机载','编队'].indexOf(label)+1})').click()`);
     await until(`document.querySelector('.scene-camera-tabs button.active').textContent===${JSON.stringify(label)}`);
@@ -173,18 +195,19 @@ try {
   await new Promise(r => setTimeout(r, 400));
   const rendering = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();return {calls:s.gl.info.render.calls,triangles:s.gl.info.render.triangles,textures:s.gl.info.memory.textures,geometries:s.gl.info.memory.geometries,shadows:s.gl.shadowMap.enabled}})()`);
   assert.ok(rendering.calls <= 240, `eight-aircraft draw budget: ${JSON.stringify(rendering)}`);
-  assert.ok(rendering.triangles < 10000, `eight-aircraft triangle budget: ${JSON.stringify(rendering)}`);
-  assert.equal(rendering.textures, 6, 'small shared surface and sky maps only');
+  // The detailed F-35 contributes 190514 triangles and 25 embedded PBR maps.
+  assert.ok(rendering.triangles < 206000, `eight-aircraft plus detailed F-35 triangle budget: ${JSON.stringify(rendering)}`);
+  assert.ok(rendering.textures >= 33 && rendering.textures <= 34, 'seven environment maps, 25 F-35 maps, one neutral PBR light probe and at most one carbon map');
   assert.equal(rendering.shadows, false, 'scenery never enables a shadow-map render pass');
-  const surfaceIds = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`);
+  const surfaceIds = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map?.value)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`);
   await screenshot('/tmp/jsbsim-flight-scene-scenery.png');
   await screenshot('/tmp/jsbsim-flight-scene-polyhaven.png');
   const viewportClip = await evaluate(`(()=>{const r=document.querySelector('.scene-viewport').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()`);
   const gridOn = (await send('Page.captureScreenshot', { format: 'png', clip: viewportClip })).data;
   await evaluate(`document.querySelector('.scene-layer-list input').click()`);
   await new Promise(r => setTimeout(r, 300));
-  assert.deepEqual(await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`), surfaceIds, 'layer changes and inspector refresh reuse the same surface maps');
-  assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures`), 6, 'layer changes do not allocate textures');
+  assert.deepEqual(await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map?.value)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`), surfaceIds, 'layer changes and inspector refresh reuse the same surface maps');
+  assert.ok(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures<=34`), 'layers reuse the bundled environment, F-35 maps and light probe');
   await new Promise(r => setTimeout(r, 250));
   const gridOff = (await send('Page.captureScreenshot', { format: 'png', clip: viewportClip })).data;
   assert.ok(gridOn !== gridOff, 'grid switch changes the rendered viewport pixels');
@@ -193,13 +216,18 @@ try {
   await evaluate(`document.querySelector('.scene-toolbar .scene-action').click()`);
   await new Promise(r => setTimeout(r, 300));
   const runningRendering = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();return {calls:s.gl.info.render.calls,triangles:s.gl.info.render.triangles}})()`);
-  assert.ok(runningRendering.calls <= 240 && runningRendering.triangles < 10000, `running eight-aircraft budget: ${JSON.stringify(runningRendering)}`);
+  // Photo shell/pods and lofted MSC blades add detail; keep the draw-call cap.
+  // Nine F-35 materials, transparent canopy passes, its shadow and the apron.
+  assert.ok(runningRendering.calls <= 255 && runningRendering.triangles < 208000, `running eight-aircraft plus detailed F-35 budget: ${JSON.stringify(runningRendering)}`);
   await evaluate(`document.querySelector('.scene-camera-tabs button:nth-child(2)').click()`);
   assert.equal(await evaluate(`window.__calls.filter(c=>c.command==='sim_instance_control').length`), callsBefore, 'demo pause/resume never sends flight-control commands');
   await screenshot('/tmp/jsbsim-flight-scene-1600.png');
   await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false });
   await screenshot('/tmp/jsbsim-flight-scene-1024.png');
   assert.equal(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'), true);
+  await evaluate('window.__layerWrites=0');
+  await new Promise(r => setTimeout(r, 700));
+  assert.equal(await evaluate('window.__layerWrites'), 0, 'narrow layout retains the layer controls during telemetry updates');
   await clickText('退出演示');
   await until(`document.querySelector('.scene-empty') && window.__events.get('scene-frames')?.size===1`);
   // The approved Voliro fallback uses the actual ESC output and the bench
@@ -214,8 +242,10 @@ try {
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-ground-shade-01').visible`); // Fixed georeference keeps the field/shade baseline stable.
   await evaluate(`(()=>{const input=document.querySelector('input[aria-label="参考地面海拔"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-ground-shade-01').visible`);
-  const rotatingAngle=await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').rotation.y`);
-  await new Promise(r=>setTimeout(r,90));
+  // Keep this sample fresh after the preceding UI operations, and wait for a
+  // rendered phase change rather than assuming a frame arrives within 90 ms.
+  const rotatingAngle=await evaluate(`(()=>{window.__bench={...window.__bench,timestamp:20.01,capture_monotonic_us:20.01e6};window.__emit('scene-frames',[window.__bench]);return window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').rotation.y})()`);
+  await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').rotation.y!==${rotatingAngle}`);
   assert.notEqual(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').rotation.y`),rotatingAngle,'bench RPM animates the actual blade mesh');
   await evaluate(`document.querySelector('.scene-rpm').scrollIntoView({block:'center'})`);
   await screenshot('/tmp/jsbsim-flight-scene-rpm.png');
@@ -271,19 +301,22 @@ try {
   await clickText('◈ 飞行视景');
   await until(`document.querySelector('[data-testid=flight-scene]')`);
   assert.ok(await evaluate(`!!(document.querySelector('.sim-flight-controller') && document.querySelector('.sim-runtime-metrics') && document.querySelector('.sim-mcap-status'))`), 'board status remains available after returning to scene');
-  await until(`(${assetStates}).length===5 && (${assetStates}).every(asset=>asset.state==='ready')`);
+  await until(`(${assetStates}).length===6 && (${assetStates}).every(asset=>asset.state==='ready')`);
   // A missing bundle file must leave a usable fallback, and a fresh viewport
   // must recover after the file becomes available again.
   await send('Network.setCacheDisabled', { cacheDisabled: true });
   await send('Network.setBlockedURLs', { urls: [`${base}/scenery/polyhaven/*.jpg`] });
   await send('Page.navigate', { url: `${base}/?workspace=scene` });
   await connectRoots();
-  await until(`(${assetStates}).length===5 && (${assetStates}).every(asset=>asset.state==='fallback')`);
-  assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures`), 6, 'missing images preserve the fallback scene');
+  await until(`(${assetStates}).length===6 && (${assetStates}).every(asset=>asset.state==='fallback')`);
+  await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-f35-airframe')`);
+  await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();s.camera.position.set(-17,12,16);s.controls.target.set(-35,1.8,-8);s.controls.update()})()`);
+  await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures>=33`);
+  assert.ok(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures<=34`), 'missing ground photographs preserve the procedural field and loaded F-35 materials');
   await send('Network.setBlockedURLs', { urls: ['https://*.polyhaven.com/*', 'https://*.polyhaven.org/*'] });
   await send('Page.navigate', { url: `${base}/?workspace=scene` });
   await connectRoots();
-  await until(`(${assetStates}).length===5 && (${assetStates}).every(asset=>asset.state==='ready')`);
+  await until(`(${assetStates}).length===6 && (${assetStates}).every(asset=>asset.state==='ready')`);
   assert.equal(exceptions.length, 0, exceptions.join('\n'));
   assert.equal(shaderErrors.length, 0, shaderErrors.join('\n'));
   console.log('Flight scene scenery render budget:', { paused: rendering, running: runningRendering });

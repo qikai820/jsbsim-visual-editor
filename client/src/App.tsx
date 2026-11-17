@@ -21,7 +21,7 @@ import './App.css';
 import './components/monitor/monitor.css';
 import ScopeWindow from './components/monitor/ScopeWindow';
 import { useSignalMonitor } from './sim/useSignalMonitor';
-import { sceneSignalKeys, type SceneMonitorTarget } from './sim/sceneSignals';
+import { sceneMonitorKeys, type SceneMonitorTarget } from './sim/sceneSignals';
 import { useSignalMonitorStore } from './store/signalMonitorStore';
 import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simInstanceControl, simInstanceSnapshot, simSyncTime, usbConsoleRead, type SimInstanceSummary } from './utils/tauriApi';
 import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
@@ -251,8 +251,9 @@ function AppContent() {
   const followLogTailRef = useRef(true);
   const { telemetry, connected } = useSimSocket();
   const [sceneMonitorTarget, setSceneMonitorTarget] = useState<SceneMonitorTarget | null>(null);
+  const [sceneToolbarHost, setSceneToolbarHost] = useState<HTMLDivElement | null>(null);
   useSignalMonitor(sceneMonitorTarget?.instance ?? activeInstance,
-    sceneMonitorTarget ? sceneSignalKeys(sceneMonitorTarget.model) : []);
+    sceneMonitorTarget ? sceneMonitorKeys(sceneMonitorTarget.model, sceneMonitorTarget.extraKeys) : []);
   const armedScope = useSignalMonitorStore(state => state.armedScope);
   const monitorWindow = useSignalMonitorStore(state => state.openScope);
   const monitorError = useSignalMonitorStore(state => state.error);
@@ -563,7 +564,7 @@ function AppContent() {
       if (saved) {
         const data = JSON.parse(saved);
         if (data && data.nodes && data.nodes.length > 0) {
-          useFlowStore.getState().loadProject(data);
+          useFlowStore.getState().loadProject({ ...data, preserveLayout: true });
         }
       }
     } catch (e) {
@@ -724,7 +725,7 @@ function AppContent() {
 
   return (
     <div className="app">
-      <Toolbar onShow3D={handleShow3D}
+      <Toolbar onShow3D={handleShow3D} sceneToolbarRef={setSceneToolbarHost}
         onShowLogCenter={() => setShowLogCenter(true)}
         workspace={workspace} onSelectWorkspace={next => {
           if (workspace === 'multi' && next !== 'multi' && multiConfigEdited &&
@@ -782,6 +783,7 @@ function AppContent() {
         {workspace === 'scene' ? (
           <Suspense fallback={<div style={{ padding: 24 }}>加载飞行视景…</div>}>
             <FlightScene slots={instanceSlots} initialSelected={multiSelectedInstance}
+              toolbarHost={sceneToolbarHost}
               onMonitorTargetChange={setSceneMonitorTarget}
               onClose={() => setWorkspace('editor')} />
           </Suspense>

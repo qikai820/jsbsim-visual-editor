@@ -7,6 +7,9 @@ import type { SceneSurfaceTextures } from './sceneSurfaceTextures';
 
 /** Geometry stays local to each object's ground-level editing pivot. */
 export function BuiltinGeometry({ object, maps }: { object: SceneObject; maps: SceneSurfaceTextures }) {
+  if (object.builtin === 'apron') return <mesh rotation={[-Math.PI / 2, 0, 0]}>
+    <planeGeometry args={[40, 44]} /><meshBasicMaterial map={maps.apron} toneMapped={false} />
+  </mesh>;
   if (object.builtin === 'runway') return <mesh rotation={[-Math.PI / 2, 0, 0]}>
     <planeGeometry args={[18, 320]} /><meshBasicMaterial map={maps.runway} toneMapped={false} />
   </mesh>;
