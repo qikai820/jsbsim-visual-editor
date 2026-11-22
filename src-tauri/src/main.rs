@@ -45,6 +45,11 @@ mod tool_transport;
 mod flight_test;
 mod mcp;
 mod px4_files;
+mod px4_sitl;
+mod local_sim;
+mod builtin_sim;
+mod sim_backend;
+mod voice;
 mod px4_metadata;
 
 use serde::{Deserialize, Serialize};
@@ -129,6 +134,7 @@ struct ControlMessage {
 }
 
 fn external_sim_mode() -> bool {
+    if local_sim::active() { return true; }
     /* This application is packaged primarily as the NuttX upper computer.
      * A release/AppImage does not pass through run-tauri.sh, so requiring
      * SIM_EXTERNAL=1 made its HUD consume remote telemetry while the toolbar
@@ -589,7 +595,7 @@ fn sim_start_blocking(
             client.send_load_script(script_name, model_name).map_err(|e| e.to_string())?
         } else if let Some(model_name) = model.as_deref() {
             let directory = model_name.rsplit('/').next().unwrap_or(model_name).trim_end_matches(".xml");
-            let endpoint = if !directory.is_empty() && directory.len() < 64 &&
+            let endpoint = if !local_sim::active() && !directory.is_empty() && directory.len() < 64 &&
                 directory.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-') {
                 let path = format!("aircraft/{directory}/{directory}.xml");
                 match ftp_sync::download_path(&path) {
@@ -849,6 +855,7 @@ fn sim_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         let flight_controller = client.flight_controller_status();
         return Ok(serde_json::json!({
             "external": true,
+            "local": local_sim::active(),
             /* Lifecycle and transport health are independent.  A brief UDP
              * timeout must not turn a running model's Stop button back into
              * Start; the connection chip reports `connected` separately. */
@@ -1432,7 +1439,8 @@ async fn px4_router_control(action:String,simulator:String) -> Result<px4_router
 
 #[tauri::command]
 fn simulator_transport_set(mode: String) -> Result<String, String> {
-    Ok(transport::set_mode(&mode)?.as_str().to_string())
+    transport::set_mode(&mode)?;
+    Ok(transport::mode().as_str().to_string())
 }
 
 #[tauri::command]
@@ -1556,6 +1564,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            local_sim::initialize(app.handle());
             if let Err(error) = mcp::start(app.handle().clone()) {
                 eprintln!("MCP bridge unavailable: {error}");
             }
@@ -1609,6 +1618,17 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            voice::voice_config_get,
+            voice::voice_config_save,
+            voice::voice_probe,
+            voice::voice_record_start,
+            voice::voice_record_cancel,
+            voice::voice_transcribe,
+            voice::voice_interpret,
+            voice::voice_cancel,
+            voice::voice_synthesize,
+            local_sim::local_sim_get,
+            local_sim::local_sim_save,
             mcp::mcp_bridge_status,
             mcp::mcp_claim_request,
             mcp::mcp_complete_request,
@@ -1727,6 +1747,12 @@ fn main() {
             px4_files::px4_log_write,
             px4_files::px4_log_finish,
             px4_files::px4_log_cancel,
+            px4_sitl::px4_sitl_inspect,
+            px4_sitl::px4_sitl_pick,
+            px4_sitl::px4_sitl_preview,
+            px4_sitl::px4_sitl_start,
+            px4_sitl::px4_sitl_status,
+            px4_sitl::px4_sitl_stop,
             px4_files::px4_log_pick,
             px4_files::px4_log_inspect,
             px4_files::px4_parameters_save,
@@ -1759,6 +1785,9 @@ fn main() {
         .expect("error while building tauri application")
         .run(|_, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                voice::shutdown();
+                let _ = px4_sitl::global().stop();
+                local_sim::shutdown();
                 mcp::shutdown();
                 let _=flight_test::stop(None);
                 telemetry_recorder::global().stop();

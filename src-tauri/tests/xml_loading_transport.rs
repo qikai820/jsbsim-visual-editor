@@ -1,3 +1,4 @@
+#[allow(dead_code)] #[path = "../src/sim_backend.rs"] mod sim_backend;
 // Use the production UDP receiver and waiter. Only unrelated hardware/logging
 // services are disabled; all LOAD packets and diagnostic JSON use real sockets.
 #[path = "../src/sim_client.rs"] mod sim_client;

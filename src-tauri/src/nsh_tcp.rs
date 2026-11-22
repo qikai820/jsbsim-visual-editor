@@ -9,8 +9,9 @@ pub fn execute_at(host: Ipv4Addr, command: &str) -> Result<String, String> {
                   else if log_info { 6 } else { 2 };
     let _guard = crate::model_read::ReadControl::default().lock(
         &crate::romfs_network::NSH_LOCK, crate::model_read::CHANNEL_WAIT, "NSH")?;
-    let port = std::env::var("NSH_TELNET_PORT")
-        .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
+    let port = if crate::sim_backend::active() { crate::sim_backend::NSH_PORT } else {
+        std::env::var("NSH_TELNET_PORT").ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23)
+    };
     let address: SocketAddr = format!("{}:{}", host, port).parse()
         .map_err(|_| format!("invalid NSH target {}:{}", host, port))?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))

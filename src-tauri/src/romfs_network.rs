@@ -116,8 +116,9 @@ pub(crate) fn with_host_session<T>(host: Ipv4Addr, operation: impl FnOnce(&mut N
 fn with_host_session_control<T>(host: Ipv4Addr, control: &ReadControl, operation: impl FnOnce(&mut NshSession<'_>) -> Result<T, String>) -> Result<T, String> {
     let _guard = control.lock(&NSH_LOCK, CHANNEL_WAIT, "NSH")?;
     control.check()?;
-    let port = std::env::var("NSH_TELNET_PORT")
-        .ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23);
+    let port = if crate::sim_backend::active() { crate::sim_backend::NSH_PORT } else {
+        std::env::var("NSH_TELNET_PORT").ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(23)
+    };
     let address = SocketAddr::from((host, port));
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .map_err(|error| format!("cannot connect to board ROMFS via NSH: {error}"))?;

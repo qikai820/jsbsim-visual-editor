@@ -16,6 +16,7 @@ import TelemetryRecorder from './TelemetryRecorder';
 import SimulationConfigDialog from './SimulationConfigDialog';
 import { fleetSlotIds, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from '../utils/fleetModelGroups';
 import LocalSettingsDialog from './LocalSettingsDialog';
+import VoiceAssistant from './VoiceAssistant';
 import J23GuideDialog from './J23GuideDialog';
 import NshConsoleDialog from './NshConsoleDialog';
 import Px4ToolboxWindowHost from './Px4ToolboxWindow';
@@ -327,6 +328,13 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [showSimulationConfig, setShowSimulationConfig] = useState(false);
   const [plotJugglerOpening, setPlotJugglerOpening] = useState(false);
   const [showLocalSettings, setShowLocalSettings] = useState(false);
+  const [showVoiceAssistant, setShowVoiceAssistant] = useState(false);
+  const [voiceExecuting,setVoiceExecuting] = useState(false);
+  useEffect(() => {
+    const open = () => setShowVoiceAssistant(true);
+    window.addEventListener('jsbsim-voice-open', open);
+    return () => window.removeEventListener('jsbsim-voice-open', open);
+  }, []);
   const [showJ23Guide, setShowJ23Guide] = useState(false);
   const [toolbarAppearance, setToolbarAppearance] = useState<ToolbarAppearance>(getToolbarAppearance);
   const updateToolbarAppearance = (appearance: ToolbarAppearance) => {
@@ -1225,9 +1233,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               {telemetryRecording ? '🔴' : '🧰'} {isZh ? '工具' : 'Tools'} <span className="file-menu-caret" aria-hidden="true">▾</span>
             </button>
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
+              <button role="menuitem" onClick={() => { setShowVoiceAssistant(true); setShowToolsMenu(false); }}>🎙 {isZh ? '大模型语音操作' : 'AI Voice Control'}</button>
               <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
-              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试' : 'PX4 Toolbox · Parameters / Logs / Messages / NSH / Tests'}</button>
+              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试 / 软件飞控' : 'PX4 Toolbox · Parameters / Logs / Messages / NSH / Tests / SITL'}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
               <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口与网口助手（本机）' : 'Serial & Network Assistant (Local)'}</button>
@@ -1235,7 +1244,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               <button role="menuitem" onClick={() => { setShowJ23Guide(true); setShowToolsMenu(false); }}>📖 {isZh ? '使用说明' : 'User Guide'}</button>
             </div>}
           </div>
-          {workspace === 'editor' && activeInstance === '01' ? <SimMenu loading={loading} onLog={onLog}
+          {workspace === 'editor' && activeInstance === '01' ? <SimMenu loading={loading||voiceExecuting} onLog={onLog}
             onOpenRemoteModel={handleOpenRemoteModel}
             onSyncRemoteModel={handleSyncRemoteModel}
             // aircraft.name is the XML's display name (for example
@@ -1250,6 +1259,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}
         {showUsbFiles && <UsbFileManager onClose={() => setShowUsbFiles(false)} />}
         <div className="toolbar-right">
+          <button aria-label={isZh ? '大模型语音操作' : 'AI Voice Control'} title={isZh ? '语音与文字控制上位机' : 'Voice and text control'} onClick={() => setShowVoiceAssistant(value => !value)}>🎙 {isZh ? '语音' : 'Voice'}</button>
           {mcpStatus?.enabled && <button className="toolbar-mcp" title={`${isZh ? 'MCP 已启用，共用上位机连接' : 'MCP enabled, using desktop connection'}\n${mcpStatus.endpointFile ?? ''}${mcpStatus.audit.length ? '\n' + mcpStatus.audit[mcpStatus.audit.length - 1].tool : ''}`} onClick={() => setShowPx4Toolbox(true)}>MCP</button>}
           {isTauri && <WindowControls zh={isZh}/>}
           <input ref={fileInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} />
@@ -1265,6 +1275,14 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         onSelectInstance={id => workspace === 'multi' ? onSelectMultiInstance?.(id) : handleSelectInstance(id)}
         onClose={() => setShowSimulationConfig(false)} />}
       {showLocalSettings && <LocalSettingsDialog onClose={() => setShowLocalSettings(false)} toolbarAppearance={toolbarAppearance} onToolbarAppearanceChange={updateToolbarAppearance} />}
+      <VoiceAssistant open={showVoiceAssistant} onClose={() => setShowVoiceAssistant(false)} onExecutingChange={setVoiceExecuting} host={{
+        binding: () => ({ instance: activeInstance || '01', selectedModel: librarySimulationModel || remoteModelDirectory || loadedModelDirectory || '', busy: loading || !!syncReview || !!pullReview || syncInFlight.current }),
+        selectModel: model => handleOpenRemoteModel(model),
+        syncModel: model => model === (librarySimulationModel || remoteModelDirectory || loadedModelDirectory) ? handleSyncRemoteModel(model) : Promise.resolve(false),
+        openToolbox: () => setShowPx4Toolbox(true),
+        showScene: () => onSelectWorkspace ? onSelectWorkspace('scene') : onShow3D?.(),
+        showLogs: () => onShowLogCenter?.(),
+      }}/>
       {showJ23Guide && <J23GuideDialog onClose={() => setShowJ23Guide(false)} />}
       {showModelPull && <ModelPullDialog initialModel={hasLoadedModel ? syncModel : instanceSlots[activeInstance] || remoteModelDirectory}
         onPull={handlePullModel} onClose={() => setShowModelPull(false)} />}

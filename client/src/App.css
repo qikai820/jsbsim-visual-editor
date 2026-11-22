@@ -153,6 +153,14 @@ html, body, #root {
 .local-settings-dialog header button { border: 0; background: transparent; font-size: 20px; color: #718391; }
 .local-settings-dialog section { min-height: 0; overflow-y: auto; padding: 20px 16px; }
 .local-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.local-simulation-settings { padding-bottom: 16px; margin-bottom: 18px; border-bottom: 1px solid #cdd9e1; }
+.local-simulation-settings details { margin-top: 12px; font-size: 12px; }
+.local-simulation-settings fieldset { border: 0; padding: 0; margin: 0 0 10px; min-width: 0; }
+.local-simulation-settings .local-settings-path { margin-top: 10px; }
+.local-simulation-settings p, .local-simulation-settings small { font-size: 11px; overflow-wrap: anywhere; }
+.local-simulation-settings [role="alert"] { color: #c0392b; }
+.local-simulation-settings pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.local-simulation-save { margin-top: 12px; padding: 6px 10px; cursor: pointer; }
 .local-settings-row > div { display: flex; flex-direction: column; gap: 4px; }
 .local-settings-row select { min-width: 150px; height: 34px; padding: 0 10px; border: 1px solid #cdd9e1; border-radius: 7px; background: #f8fafb; }
 .local-settings-color, .local-settings-opacity { display: flex; align-items: center; gap: 8px; width: 150px; min-width: 150px; height: 34px; padding: 0 8px; border: 1px solid #cdd9e1; border-radius: 7px; background: #f8fafb; color: #52667a; font-size: 12px; }
@@ -2862,3 +2870,5 @@ body :is(.local-settings-dialog, .xml-modal, .expr-editor, .wizard-modal,
 .runtime-tuning-panel label { display:flex; align-items:center; gap:5px; white-space:nowrap; }
 .runtime-tuning-panel span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .runtime-tuning-panel.error { border-color:#f59e0b; color:#92400e; background:#fffbeb; }
+
+.local-simulation-preset{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:14px;margin:12px 0;border:1px solid var(--border,#dce5ee);border-radius:8px;background:var(--bg-primary,#f5f8fc)}.local-simulation-preset>div{flex:1;min-width:220px}.local-simulation-preset b,.local-simulation-preset small{display:block}.local-simulation-preset small,.local-simulation-preset-note{color:var(--text-secondary,#687a8f);font-size:12px;line-height:1.7;margin-top:5px}.local-simulation-preset>small{width:100%}.local-simulation-preset button{padding:8px 12px;border:0;border-radius:6px;background:#2866d8;color:white;cursor:pointer}.local-simulation-preset button:disabled{opacity:.5;cursor:default}.local-simulation-settings .local-settings-path select{border:1px solid var(--border,#dce5ee);padding:8px;border-radius:5px;background:var(--bg-secondary,#fff);color:inherit}

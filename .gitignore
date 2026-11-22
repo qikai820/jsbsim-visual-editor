@@ -13,3 +13,7 @@ __pycache__/
 *.py[cod]
 test-*.mjs
 test-*.png
+
+# Generated desktop simulation payload
+src-tauri/resources/builtin-simulation/*
+!src-tauri/resources/builtin-simulation/README.md

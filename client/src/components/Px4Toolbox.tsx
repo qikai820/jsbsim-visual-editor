@@ -14,6 +14,7 @@ import Px4RouterSettings from './Px4RouterSettings';
 import Px4ParameterEditor from './Px4ParameterEditor';
 import Px4FlightTest from './Px4FlightTest';
 import Px4Messages from './Px4Messages';
+import Px4Sitl from './Px4Sitl';
 import { sessionIsActive, useFlightTestStore } from '../flight-test/session';
 import { usePx4Router } from '../px4/router';
 import './Px4Toolbox.css';
@@ -46,7 +47,8 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
   if (!testRunning&&!sourceSwitching) sourceLease.current = nextSourceIdentity;
   const sourceIdentity = sourceLease.current;
   const [sourceState, setSourceState] = useState('等待仿真机数据');
-  const [tab, setTab] = useState<'parameters'|'logs'|'messages'|'nsh'|'forwarding'|'testing'>('parameters');
+  const [tab, setTab] = useState<'parameters'|'logs'|'messages'|'nsh'|'forwarding'|'testing'|'sitl'>('parameters');
+  const [sitlOpened, setSitlOpened] = useState(false);
   const [px4Messages] = useState(() => new Px4MessageBuffer());
   const [testFocus, setTestFocus] = useState(false), [connectionOpen, setConnectionOpen] = useState(false);
   useEffect(() => { if (testingRequest) setTab('testing'); }, [testingRequest]);
@@ -257,13 +259,13 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
   return <div className={'px4-toolbox-overlay'+(nativeWindow?' px4-native-window':'')} hidden={!visible} role="dialog" aria-modal="false" aria-label="PX4 工具箱" onKeyDown={e=>e.stopPropagation()}>
     <section className={'px4-toolbox'+(tab==='testing'?' px4-testing':'')+(tab==='testing'&&testFocus?' px4-test-focus':'')}>
       <header className="px4-toolbox-head" onPointerDown={onWindowDrag} onDoubleClick={event=>{if(!(event.target as HTMLElement).closest('button,input,select'))onWindowMaximize?.();}}><div><h2>PX4 工具箱</h2><small>实例 {instance}{link?.target.system?' · SYS '+link.target.system:''} · {alive?'PX4 在线':'等待 PX4'}{link?.hilEnabled?' · HIL':''}</small></div><div className="px4-window-actions"><button type="button" aria-expanded={connectionOpen} onClick={()=>setConnectionOpen(v=>!v)}>连接与仿真</button><div className="px4-title-controls">{windowControls||<button type="button" aria-label="关闭 PX4 工具箱" title="隐藏工具箱，测试继续运行" onClick={onClose}>×</button>}</div></div></header>
-      <div className="px4-connectbar" hidden={tab==='testing'&&!connectionOpen}><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select disabled={!!busy} aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
-      <div className="px4-simulationbar" aria-label="飞控仿真模式" hidden={tab==='testing'&&!connectionOpen}>
+      <div className="px4-connectbar" hidden={tab==='sitl'||tab==='testing'&&!connectionOpen}><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select disabled={!!busy} aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
+      <div className="px4-simulationbar" aria-label="飞控仿真模式" hidden={tab==='sitl'||tab==='testing'&&!connectionOpen}>
         <div><b>{!simulationStateKnown?'飞控模式待确认':link?.hilEnabled?'仿真模式 · HIL':'正常模式'}</b><small id="px4-simulation-hint" aria-live="polite">{simulationUnavailable || '切换模式后自动重启飞控'}</small></div>
         <div><button type="button" className="px4-primary" disabled={!!simulationUnavailable} aria-describedby="px4-simulation-hint" aria-busy={busy==='simulation'} title={simulationUnavailable || '切换模式并重启飞控'} onClick={()=>{const current=linkRef.current;if(typeof current?.hilEnabled==='boolean')switchSimulation(!current.hilEnabled);}}>{simulationButtonLabel}</button><button type="button" aria-label="重启飞控" disabled={!!controllerUnavailable} aria-describedby="px4-simulation-hint" aria-busy={busy==='reboot'} title={controllerUnavailable || '重启当前连接的飞控'} onClick={restartFlightController}>{busy==='reboot'?'正在重启…':'重启飞控'}</button></div>
       </div>
-      {!source.bidirectional&&<div className="px4-notice">当前仿真机转发为单向，无法请求参数、日志或发送 NSH 输入。</div>}
-      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','messages','nsh','testing','forwarding'] as const).map(t=><button disabled={!!busy&&t==='forwarding'} key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>setTab(t)}>{({parameters:'参数',logs:'日志',messages:'PX4 打印',nsh:'NSH 控制台',testing:'仿真测试',forwarding:'转发设置'})[t]}</button>)}</nav>
+      {tab!=='sitl'&&!source.bidirectional&&<div className="px4-notice">当前仿真机转发为单向，无法请求参数、日志或发送 NSH 输入。</div>}
+      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','messages','nsh','testing','sitl','forwarding'] as const).map(t=><button disabled={!!busy&&t==='forwarding'} key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>{setTab(t);if(t==='sitl')setSitlOpened(true);}}>{({parameters:'参数',logs:'日志',messages:'PX4 打印',nsh:'NSH 控制台',testing:'仿真测试',sitl:'软件飞控',forwarding:'转发设置'})[t]}</button>)}</nav>
       {error && <div className="px4-notice error" role="alert">{error}<button aria-label="关闭错误提示" onClick={()=>setError('')}>×</button></div>}
       {message && <div className="px4-notice" role="status">{message}<button aria-label="关闭状态提示" onClick={()=>setMessage('')}>×</button></div>}
       <section role="tabpanel" id="px4-panel-parameters" aria-labelledby="px4-tab-parameters" hidden={tab!=='parameters'} className="px4-panel">
@@ -313,7 +315,8 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
       <section role="tabpanel" id="px4-panel-nsh" aria-labelledby="px4-tab-nsh" hidden={tab!=='nsh'} className="px4-panel px4-nsh-panel"><div className="px4-nsh-heading"><div><b>NuttX NSH 控制台</b><small>仿真机转发 · PX4 {link?.target.system?'SYS '+link.target.system+' / COMP '+link.target.component:'等待识别'} · MAVLink Shell</small></div><small>{controllerRestarting?'飞控操作进行中，终端输入暂不可用':shell?.active&&alive?'交互会话已就绪':'等待仿真机终端数据'}</small></div><NshTerminal channel={shell||EMPTY_CHANNEL} connected={!!shell?.active&&alive&&!busy} historyKey={`px4-nsh-history-${link?.target.system??0}-${link?.target.component??0}`}/></section>
       <section role="tabpanel" id="px4-panel-testing" aria-labelledby="px4-tab-testing" hidden={tab!=='testing'} className="px4-panel ft-panel"><Px4FlightTest link={link||null} instance={Number(instance)} bidirectional={source.bidirectional} disabled={!!operationBusy} beforeRun={beforeTestRun} onShowScene={onShowScene} onFocusChange={setTestFocus}/></section>
       <section role="tabpanel" id="px4-panel-forwarding" aria-labelledby="px4-tab-forwarding" hidden={tab!=='forwarding'} className="px4-panel"><Px4RouterSettings router={router} disabled={!!busy}/></section>
-      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='messages'?'飞控实时打印 · MAVLink STATUSTEXT':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':tab==='testing'?'后台执行 · JSBSim XML · 仿真机转发':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
+      <section role="tabpanel" id="px4-panel-sitl" aria-labelledby="px4-tab-sitl" hidden={tab!=='sitl'} className="px4-panel">{sitlOpened&&<Px4Sitl disabled={!!busy}/>}</section>
+      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='sitl'?'本机 PX4 · 独立运行目录':tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='messages'?'飞控实时打印 · MAVLink STATUSTEXT':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':tab==='testing'?'后台执行 · JSBSim XML · 仿真机转发':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
     </section>
   </div>;
 }

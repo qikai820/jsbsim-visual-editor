@@ -1,3 +1,4 @@
+#[allow(dead_code)] #[path = "../src/sim_backend.rs"] mod sim_backend;
 #[allow(dead_code)] #[path = "../src/model_read.rs"] mod model_read;
 #[allow(dead_code)] #[path = "../src/network_files.rs"] mod network_files;
 #[allow(dead_code)] #[path = "../src/romfs_network.rs"] mod romfs_network;

@@ -10,7 +10,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "package:appimage": "tauri build --bundles appimage"
+    "package:appimage": "tauri build --bundles appimage",
+    "prepare:simulation": "python3 scripts/package_builtin_simulation.py",
+    "test:voice": "bash scripts/test-voice.sh"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",

@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {uiBrowser} from './support/ui-browser.mjs';
+const setup=`localStorage.setItem('jsbsim-language','zh-CN');window.calls=[];window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:(command,args)=>window.native(command,args)};window.change=(element,value)=>{Object.getOwnPropertyDescriptor(element instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype,'value').set.call(element,value);element.dispatchEvent(new Event(element instanceof HTMLSelectElement?'change':'input',{bubbles:true}));};`;
+const source=`import React from 'react';import{createRoot}from'react-dom/client';import Settings from './src/components/LocalSimulationSettings';import './src/App.css';
+window.statusValue={config:{enabled:false,bundled:false,projectDirectory:'/project/jsbsim_realtime',buildDirectory:'/project/build',hilHost:'127.0.0.1',hilPort:14561},activeConfig:null,active:false,restartRequired:false,running:false,ready:false,pid:null,exitCode:null,error:null,logs:[],builtin:{available:true,name:"F450",version:"test",error:null}};
+window.native=async(command,args)=>{window.calls.push({command,args});if(command==='local_sim_get')return structuredClone(window.statusValue);if(command==='local_sim_save'){if(window.failSave)throw Error('构建目录不可用');window.statusValue.config=args.config;window.statusValue.restartRequired=true;return structuredClone(window.statusValue);}throw Error(command);};
+const active=value=>window.active=value;let root=createRoot(document.getElementById('root'));const render=()=>root.render(<div className="local-settings-dialog"><section><Settings onActiveChange={active}/></section></div>);render();window.remount=()=>{root.unmount();root=createRoot(document.getElementById('root'));render();};`;
+const ui=await uiBrowser(source,{setup,port:5195});const{ev,until,click}=ui;
+const save=`document.querySelector('.local-simulation-save')`,toggle=`document.querySelector('[aria-label="启用电脑端模型仿真"]')`;
+try{
+ await until(`${toggle}&&!${toggle}.disabled`);
+ assert.equal(await ev(`${toggle}.checked`),false);assert.equal(await ev(`${save}.disabled`),true);
+ await click(toggle);await until(`document.querySelector('details').open`);
+ await ev(`window.change(document.querySelector('[aria-label="PC build directory"]'),'/my/build')`);
+ await until(`window.calls.filter(c=>c.command==='local_sim_get').length>=2`);
+ assert.equal(await ev(`document.querySelector('[aria-label="PC build directory"]').value`),'/my/build','polling must preserve edits');
+ await ev(`window.failSave=true`);await click(save);await until(`document.querySelector('[role="alert"]')?.textContent.includes('构建目录不可用')`);
+ assert.equal(await ev(`window.statusValue.config.enabled`),false,'failed save must not enable the backend');
+ await ev(`window.failSave=false`);await click(save);await until(`document.querySelector('[role="status"]').textContent.includes('重新打开')`);
+ assert.equal(await ev(`window.statusValue.config.buildDirectory`),'/my/build');
+ await ev(`window.remount()`);await until(`${toggle}?.checked`);assert.equal(await ev(`window.active`),false,'saving does not switch the running session');
+ await ev(`window.statusValue.active=true;window.statusValue.ready=true;window.statusValue.running=true;window.statusValue.restartRequired=false;window.statusValue.logs=['ready']`);
+ await until(`document.querySelector('[role="status"]').textContent.includes('已就绪')`);
+ assert.equal(await ev(`window.active`),true);
+ const preset=`document.querySelector('[aria-label="启用内置仿真"]')`;
+ await until(`!${preset}.disabled`);await click(preset);
+ await until(`window.statusValue.config.bundled&&window.statusValue.config.enabled`);
+ assert.equal(await ev(`window.statusValue.config.buildDirectory`),'/my/build','built-in preset preserves custom paths');
+ assert.equal(await ev(`document.querySelector('[aria-label="PC build directory"]')`),null,'default preset hides path setup');
+ await ev(`window.change(document.querySelector('[aria-label="本机仿真运行方式"]'),'custom')`);
+ await until(`document.querySelector('[aria-label="PC build directory"]')?.value==='/my/build'`);
+ assert.equal(await ev(`window.statusValue.config.bundled`),true,'editing runtime source does not change the saved session before Save');
+ assert.equal(ui.errors.length,0);
+ console.log('Local simulation UI PASS: defaults, edits during polling, save failure, persistence, restart notice, readiness, one-click built-in preset and preserved custom settings');
+}finally{await ui.close();}

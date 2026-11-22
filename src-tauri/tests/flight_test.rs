@@ -34,6 +34,9 @@ mod scene_telemetry {
 mod flight_test;
 #[path = "../src/mcp.rs"]
 mod mcp;
+mod local_sim {
+    pub fn mcp_status() -> serde_json::Value { serde_json::json!({"active":false,"bundled":false,"ready":false}) }
+}
 
 fn fixture(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1470,4 +1473,15 @@ fn manual_attitude_excitation_stops_on_diverging_rate_before_next_command() {
     let q = [35_f64.to_radians().cos(), 35_f64.to_radians().sin(), 0., 0.];
     angle_feedback(&mut e, 1., q, [0.; 3]);
     assert!(e.tick(0.).unwrap_err().contains("手动姿态激励异常"));
+}
+
+#[test]
+fn f450_joint_hover_profile_parses_with_production_engine() {
+    let source=include_str!("../../examples/flight-tests/f450-hover/hover.xml");
+    let script=flight_test::xml::parse(source).unwrap();
+    assert!(script.name.contains("F450"));
+    assert_eq!(script.end,180.0);
+    assert!(script.events.iter().any(|event|event.name.contains("::HOVER_BEGIN")));
+    assert!(script.events.iter().any(|event|event.name.contains("::HOVER_END")));
+    assert!(source.contains("<use aircraft=\"F450_PX4\" initialize=\"current-instance\""));
 }

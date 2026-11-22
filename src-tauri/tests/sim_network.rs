@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[allow(dead_code)] #[path = "../src/sim_backend.rs"] mod sim_backend;
 #[path = "../src/model_read.rs"] mod model_read;
 
 // Exercise the production parser without USB hardware or unrelated XML

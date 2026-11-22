@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import LocalSimulationSettings from './LocalSimulationSettings';
 import { type Language, useLanguage } from '../i18n';
 import type { ToolbarAppearance } from '../utils/toolbarAppearance';
 import { MAX_PERFORMANCE_PERIOD_SECONDS, MIN_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod, savePerformancePeriod } from '../utils/performanceSettings';
@@ -25,8 +26,9 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
   const [transportMode, setTransportMode] = useState<SimulatorTransportMode>(() => getSimulatorTransportMode());
   const [transportError, setTransportError] = useState('');
   const [networkTarget, setNetworkTarget] = useState<string | null>(null);
+  const [localActive, setLocalActive] = useState(false);
   useEffect(() => {
-    if (transportMode === 'usb') return;
+    if (localActive || transportMode === 'usb') return;
     let active = true;
     const refresh = () => { void getSimulatorNetworkTarget()
       .then(target => { if (active) setNetworkTarget(target); })
@@ -34,7 +36,7 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
     refresh();
     const timer = window.setInterval(refresh, 3000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [transportMode]);
+  }, [transportMode, localActive]);
   const [timeThreshold, setTimeThreshold] = useState(() => Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
   const [performancePeriod, setPerformancePeriod] = useState(readPerformancePeriod);
   const [logDirectory, setLogDirectory] = useState(() => localStorage.getItem('jsbsim-log-download-directory') || '~/Downloads/JSBSim-Logs');
@@ -74,6 +76,11 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
     <div className="local-settings-dialog" role="dialog" aria-label={isZh ? '本地配置' : 'Local Settings'}>
       <header><div><b>⚙ {isZh ? '本地配置' : 'Local Settings'}</b><span>{isZh ? '仅保存在当前上位机' : 'Stored on this computer only'}</span></div><button onClick={onClose}>×</button></header>
       <section>
+        <LocalSimulationSettings onActiveChange={setLocalActive}/>
+        <div className="local-settings-row">
+          <div><b>{isZh ? '大模型语音操作' : 'AI Voice Control'}</b><small>{isZh ? '配置本地大模型、麦克风识别和结果播报' : 'Configure language model, speech recognition and spoken results'}</small></div>
+          <button onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('jsbsim-voice-open', { detail: 'settings' })); }}>{isZh ? '配置语音' : 'Voice settings'}</button>
+        </div>
         <div className="local-settings-row">
           <div><b>{isZh ? '界面语言' : 'Interface Language'}</b><small>{isZh ? '切换后立即生效，重启后保持' : 'Applies immediately and persists after restart'}</small></div>
           <select value={language} onChange={event => setLanguage(event.target.value as Language)}>
@@ -107,8 +114,8 @@ export default function LocalSettingsDialog({ onClose, toolbarAppearance, onTool
           </label>
         </div>
         <div className="local-settings-row">
-          <div><b>{isZh ? '仿真机通讯' : 'Simulator communication'}</b><small>{isZh ? '网络使用 UDP/FTP；自动模式在 USB 异常时继续使用网络' : 'Network uses UDP/FTP; Auto keeps network fallback available'}</small>{transportMode !== 'usb' && <small>{networkTarget ? (isZh ? `已发现仿真机 IP：${networkTarget}` : `Discovered simulator IP: ${networkTarget}`) : (isZh ? '正在自动发现网口仿真机…' : 'Discovering network simulator…')}</small>}{transportError && <small>{transportError}</small>}</div>
-          <select value={transportMode} onChange={event => void saveTransportMode(event.target.value as SimulatorTransportMode)}>
+          <div><b>{isZh ? '仿真机通讯' : 'Simulator communication'}</b><small>{isZh ? '网络使用 UDP/FTP；自动模式在 USB 异常时继续使用网络' : 'Network uses UDP/FTP; Auto keeps network fallback available'}</small>{localActive ? <small>{isZh ? '已固定连接本机模型服务' : 'Connected to local model service'}</small> : transportMode !== 'usb' && <small>{networkTarget ? (isZh ? `已发现仿真机 IP：${networkTarget}` : `Discovered simulator IP: ${networkTarget}`) : (isZh ? '正在自动发现网口仿真机…' : 'Discovering network simulator…')}</small>}{transportError && <small>{transportError}</small>}</div>
+          <select disabled={localActive} value={localActive ? 'network' : transportMode} onChange={event => void saveTransportMode(event.target.value as SimulatorTransportMode)}>
             <option value="auto">{isZh ? '自动' : 'Auto'}</option>
             <option value="network">{isZh ? '网络' : 'Network'}</option>
             <option value="usb">USB</option>

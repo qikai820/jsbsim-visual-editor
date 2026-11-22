@@ -1,6 +1,6 @@
 # PX4 工具箱
 
-从「工具 → PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试」打开。工具箱自动接收**仿真机已有的 MAVLink 转发数据**，没有独立连接按钮，也不在电脑上另开飞控 USB 串口。
+从「工具 → PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试 / 软件飞控」打开。工具箱自动接收**仿真机已有的 MAVLink 转发数据**，没有独立连接按钮，也不在电脑上另开飞控 USB 串口。
 
 桌面端使用系统独立窗口，主界面没有遮罩，可继续编辑模型或观察视景。使用工具箱标题栏移动窗口、拖动窗口边缘缩放，也可移到另一台显示器；位置、大小和最大化状态保存在本机。显示器移除后，下次打开会回到可见区域。关闭工具箱只隐藏窗口，保留连接、脚本和后台测试；再次打开复用原窗口。关闭主程序会退出整个应用并清理后台测试。
 
@@ -59,6 +59,44 @@ GPS 备份用于处理当前 PX4 启动脚本在 HIL 下把 `GPS_1_CONFIG` 设�
 
 此按钮切换 PX4 的启动模式，不更换机型、控制器或仿真模型。固件需要包含 `pwm_out_sim` 等 HIL 所需模块；切换成功表示重启后的 HIL 状态和配置一致，仿真传感器与执行器闭环仍取决于模型及链路配置。
 
+## 软件飞控
+
+在 **软件飞控** 页选择本机已经编译的 `px4_sitl_default` 目录。默认路径为
+`/home/qikai820/src/PX4-Autopilot/build/px4_sitl_default`。支持手动输入、系统文件夹选择和重新检测；
+检查 `bin/px4`、执行权限、`bin/px4-alias.sh`、`etc/init.d-posix/rcS`，并从该构建的
+`etc/init.d-posix/airframes` 读取机型编号、模型名及说明。目录不完整时保留检测结果并禁用启动。
+
+| 模式 | 用途 | 配置 |
+| --- | --- | --- |
+| JSBSim（本机 / 仿真机）· UDP HIL | 对接电脑上的 JSBSim 或 NuttX/JSBSim 仿真机，默认模式 | 机型默认 `10016_none_iris`；同机 PX4 监听 14561，模型接收 14560；外部仿真机可两端使用 14560；实时倍率 1 |
+| 外部仿真器 · SITL TCP | 仅运行 PX4，连接独立启动的仿真器 | 对方 TCP 端口 `4560 + 实例编号`；地址留空使用本机；不启动 Gazebo/JSBSim |
+| PX4 内置动力学 · SIH | 本机独立运行 PX4 自带的动力学 | 选择 `sihsim_` 机型，默认 `10040_sihsim_quadx` |
+
+可选择实例 0～9、仿真倍率 0.1～10、起始经纬度及海拔。UDP 地址留空使用本机 `127.0.0.1`。
+启用电脑端模型服务时，空地址自动采用本次生效的本机 HIL 配置；否则采用已经发现的仿真机，
+未发现仿真机时填入本机地址及 14561/14560 端口。已填写的地址保持不变，也可点击“使用本机模型连接”。
+允许手动修改；PX4 和模型端口分别配置，同机运行不得相同，实例编号不会自动修改这两个端口。
+起始位置通过 `PX4_HOME_*` 传递，外部模型传感器数据决定实际位置。
+飞控机型配置控制器和电机布局，JSBSim 模型（例如 `F450_PX4`）仍在仿真机中选择。
+
+页面显示实际参数构成的启动命令、环境变量、独立工作目录，以及最近 1500 条标准输出/错误输出。
+运行状态每秒刷新，按钮在启动和停止之间切换。打开页面后先检测已有 PX4，按实际进程、
+构建路径/实例或 HIL 套接字所有者识别；已有运行实例时不重复启动，并恢复可读取的运行配置。
+其他入口启动的 PX4 会明确标示，历史 stdout/stderr 不可读取；可手动停止，退出上位机时保留它。
+单纯的端口占用不会被视为 PX4 运行。本机模型服务的就绪状态也持续刷新。
+启动前重新校验目录、机型和参数；UDP 监听端口占用时拒绝启动。运行后锁定配置，禁止重复启动，
+显示 PID；进程退出后显示退出码并允许修改重启。“运行中”仅表示进程存活，传感器、估计器和
+控制闭环须通过日志与飞控心跳验证。启动功能不更换工具箱现有的仿真机 MAVLink 转发数据入口；
+SIH/TCP 的数据连接需另外配置。
+
+软件飞控在应用数据目录下按构建路径、模式、机型和实例使用独立工作目录，保存自己的参数和日志。
+不改写所选 PX4 构建目录。生成的 `launcher.rcS` 复用该构建的启动流程，UDP HIL 在传感器启动前
+开启 `SYS_HITL` 和 MAVLink UDP，跳过外部仿真器启动；TCP/SIH 则关闭 `SYS_HITL` 并使用原有仿真入口。
+不识别的 rcS 结构会明确拒绝启动。各 PX4 构建是否包含对应模块以及 UDP HIL 的实时调度支持仍需实机核对。
+
+同一上位机一次管理一个软件飞控进程。关闭工具箱或切换页签后继续运行，重新打开恢复后台状态；
+退出上位机时停止其拥有的进程及同组子进程，超时强制清理。配置保存在本机，下一次打开恢复。
+
 ## 参数
 
 获取和修改 PX4 参数，支持完整列表、缺失索引重试、全局搜索、收藏、固件类别/分组、前缀分组及本机自定义分组。选中参数后，在详情区输入新值或选择枚举，点击“写入飞控”；使用默认值只填充输入框。写入采用 PARAM_SET，收到目标参数的 PARAM_VALUE 后，再通过 PARAM_REQUEST_READ 按名称独立回读；值一致才提示成功并更新列表。超时重试，拒绝、断开或回读不符会显示明确结果，未确认时须重新读取核实。此操作不会自动重启飞控。
@@ -109,16 +147,23 @@ Linux 桌面的 HTTP(S) 元数据下载使用 `curl`，失败时保留具体地�
 
 ## 本地验证
 
+软件飞控完整测试入口：`./scripts/test-px4-sitl.sh`，需要允许本机 UDP/TCP/Unix 套接字绑定及 Chrome。
+当前环境验证结果与未完成项见 [软件飞控测试记录](px4-sitl-test-20261122.md)。
+
 ```bash
 node tests/px4-protocol.mjs
 node tests/px4-messages.mjs
 node tests/px4-simulation.mjs
 node tests/px4-simulator-source.mjs
+node --experimental-websocket tests/px4-sitl-ui.mjs
 node --experimental-websocket tests/px4-toolbox-ui.mjs
 node tests/flight-test-compiler.mjs
 node tests/flight-test-native.mjs
 node --experimental-websocket tests/flight-test-ui.mjs
 cargo test --offline --manifest-path src-tauri/Cargo.toml --test flight_test
+cargo test --offline --manifest-path src-tauri/Cargo.toml --test px4_sitl
+# 允许本机 UDP 绑定时，额外运行端口占用用例
+cargo test --offline --manifest-path src-tauri/Cargo.toml --test px4_sitl -- --ignored
 cargo test --offline --manifest-path src-tauri/Cargo.toml --test px4_files --test serial_assistant
 npx tsc --noEmit
 npm run build

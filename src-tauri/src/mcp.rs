@@ -165,7 +165,7 @@ async fn dispatch(app: tauri::AppHandle, name: &str, args: Value) -> Result<Valu
             arguments(&args, &[])?;
             Ok(
                 json!({"connection":crate::flight_test::connection_snapshot(),"test":crate::flight_test::status(),
-                "scene":crate::scene_telemetry::snapshots(),"bridge":mcp_bridge_status()}),
+                "scene":crate::scene_telemetry::snapshots(),"localSimulation":crate::local_sim::mcp_status(),"bridge":mcp_bridge_status()}),
             )
         }
         "upper_list_scripts" => {

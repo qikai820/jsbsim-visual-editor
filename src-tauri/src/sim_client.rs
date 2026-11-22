@@ -414,6 +414,7 @@ impl SimClient {
     }
 
     pub fn set_control_host(&self, host: std::net::Ipv4Addr) {
+        if crate::sim_backend::active() { return; }
         if let Ok(mut configured) = self.configured_ctrl_addr.lock() {
             let address = SocketAddr::new(host.into(), configured.port());
             *configured = address;
@@ -422,7 +423,7 @@ impl SimClient {
     }
 
     pub fn send_monitor_packet(&self, packet: &[u8]) -> std::io::Result<()> {
-        if matches!(std::env::var("SIM_EXTERNAL").ok().as_deref(), Some("0" | "false" | "no" | "FALSE" | "NO")) {
+        if !crate::sim_backend::active() && matches!(std::env::var("SIM_EXTERNAL").ok().as_deref(), Some("0" | "false" | "no" | "FALSE" | "NO")) {
             return self.send_socket.send_to(packet, "127.0.0.1:5803").map(|_| ());
         }
         self.send_to_control_addresses(packet)
@@ -483,10 +484,10 @@ impl SimClient {
     /// * `listen_port` – UDP port to bind for incoming telemetry (default 5801).
     ///   Control frames are sent back to `127.0.0.1:5802`.
     pub fn new(listen_port: u16) -> Self {
-        let ctrl_port = std::env::var("SIM_UDP_CTRL_PORT")
+        let ctrl_port = if crate::sim_backend::active() { crate::sim_backend::CONTROL_PORT } else { std::env::var("SIM_UDP_CTRL_PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
-            .unwrap_or(DEFAULT_CTRL_PORT);
+            .unwrap_or(DEFAULT_CTRL_PORT) };
         let ctrl_host = crate::transport::network_host()
             .map(|host| host.to_string())
             .unwrap_or_else(|| DEFAULT_CTRL_HOST.to_string());
@@ -551,6 +552,7 @@ impl SimClient {
                     loop {
                         match sock.recv_from(&mut buf) {
                             Ok((n, peer)) => {
+                                if !crate::sim_backend::accepts_telemetry(peer) { continue; }
                                 if !peer.ip().is_loopback() &&
                                     !crate::transport::allows_network()
                                 {
@@ -788,7 +790,7 @@ impl SimClient {
                     let mut buf = [0u8; 128];
                     let mut last_neighbor_probe = Instant::now() - Duration::from_secs(5);
                     loop {
-                        if !crate::transport::allows_network() {
+                        if crate::sim_backend::active() || !crate::transport::allows_network() {
                             std::thread::sleep(Duration::from_secs(1));
                             continue;
                         }

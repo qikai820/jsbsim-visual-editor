@@ -1,0 +1,729 @@
+<?xml version="1.0"?>
+<!-- flight-test-workspace:eyJ2ZXJzaW9uIjoxLCJuYW1lIjoiRjQ1MCDogZTlkIjmtYvor5Ugwrcg6LW36aOeNW0gLyDmgqzlgZwzMHMgLyDpmY3okL0iLCJhaXJjcmFmdCI6IkY0NTBfUFg0IiwiaW5pdGlhbGl6ZSI6ImN1cnJlbnQtaW5zdGFuY2UiLCJkdXJhdGlvbiI6MTgwLCJyYXRlSHoiOjUwLCJ0aHJvdHRsZSI6MCwiY2xvY2siOiJyZWFsdGltZSIsIm9uRmluaXNoIjoibGFuZCIsIm9uQWJvcnQiOiJsYW5kIiwiYmxvY2tzIjpbeyJpZCI6ImJncm91bmRfY2hlY2siLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6ImxhbmRlZCIsIm9wIjoiZXEiLCJ2YWx1ZSI6MSwidGltZW91dCI6NX19LHsiaWQiOiJibm9ybWFsX2lucHV0IiwidHlwZSI6ImlucHV0X21vZGUiLCJwIjp7ImlucHV0Ijoibm9ybWFsIn19LHsiaWQiOiJibmV1dHJhbCIsInR5cGUiOiJuZXV0cmFsIiwicCI6e319LHsiaWQiOiJibG93X3Rocm90dGxlIiwidHlwZSI6InRocm90dGxlIiwicCI6eyJ2YWx1ZSI6MH19LHsiaWQiOiJicG9zaXRpb25fbW9kZSIsInR5cGUiOiJtb2RlIiwicCI6eyJtb2RlIjoiUE9TQ1RMIiwidGltZW91dCI6MTB9fSx7ImlkIjoiYmFybSIsInR5cGUiOiJhcm0iLCJwIjp7InRpbWVvdXQiOjEwfX0seyJpZCI6ImJ0YWtlb2ZmIiwidHlwZSI6InRha2VvZmYiLCJwIjp7ImFsdGl0dWRlIjo1LCJ0aW1lb3V0Ijo0NX19LHsiaWQiOiJiY2VudGVyX3Rocm90dGxlIiwidHlwZSI6InRocm90dGxlIiwicCI6eyJ2YWx1ZSI6NTB9fSx7ImlkIjoiYmhvbGRfbW9kZSIsInR5cGUiOiJtb2RlIiwicCI6eyJtb2RlIjoiUE9TQ1RMIiwidGltZW91dCI6MTB9fSx7ImlkIjoiYnNldHRsZSIsInR5cGUiOiJ3YWl0IiwicCI6eyJkdXJhdGlvbiI6NX19LHsiaWQiOiJiaG92ZXJfYmVnaW4iLCJ0eXBlIjoibWFyayIsInAiOnsidGV4dCI6IkhPVkVSX0JFR0lOIn19LHsiaWQiOiJiaG92ZXIiLCJ0eXBlIjoid2FpdCIsInAiOnsiZHVyYXRpb24iOjMwfX0seyJpZCI6ImJob3Zlcl9lbmQiLCJ0eXBlIjoibWFyayIsInAiOnsidGV4dCI6IkhPVkVSX0VORCJ9fSx7ImlkIjoiYmxhbmQiLCJ0eXBlIjoibGFuZCIsInAiOnsidGltZW91dCI6NjB9fSx7ImlkIjoiYmxhbmRlZF9jaGVjayIsInR5cGUiOiJhc3NlcnQiLCJwIjp7ImZpZWxkIjoibGFuZGVkIiwib3AiOiJlcSIsInZhbHVlIjoxLCJ0aW1lb3V0Ijo1fX0seyJpZCI6ImJkaXNhcm0iLCJ0eXBlIjoiZGlzYXJtIiwicCI6eyJ0aW1lb3V0IjoxMH19LHsiaWQiOiJidW5hcm1lZF9jaGVjayIsInR5cGUiOiJhc3NlcnQiLCJwIjp7ImZpZWxkIjoiYXJtZWQiLCJvcCI6ImVxIiwidmFsdWUiOjAsInRpbWVvdXQiOjN9fV19 -->
+<runscript name="F450 联合测试 · 起飞5m / 悬停30s / 降落">
+  <use aircraft="F450_PX4" initialize="current-instance"/>
+  <run start="0" end="180" dt="0.01">
+    <property value="0">test/runtime/ready</property>
+    <property value="0">test/runtime/complete</property>
+    <property value="0">test/runtime/failed</property>
+    <property value="0">test/rc/roll-norm</property>
+    <property value="0">test/rc/pitch-norm</property>
+    <property value="0">test/rc/yaw-norm</property>
+    <property value="0">test/rc/throttle-norm</property>
+    <property value="1">test/rc/enabled</property>
+    <property value="0">test/flow/sequence_1/done</property>
+    <property value="0">test/flow/sequence_1/cancelled</property>
+    <property value="0">test/flow/bground_check_2/started</property>
+    <property value="0">test/flow/bground_check_2/done</property>
+    <property value="0">test/flow/bground_check_2/cancelled</property>
+    <property value="0">test/flow/bground_check_2/deadline</property>
+    <property value="0">test/flow/bnormal_input_3/started</property>
+    <property value="0">test/flow/bnormal_input_3/done</property>
+    <property value="0">test/flow/bnormal_input_3/cancelled</property>
+    <property value="0">test/flow/bnormal_input_3/deadline</property>
+    <property value="0">test/rc/input-kind</property>
+    <property value="0">test/flow/bneutral_4/started</property>
+    <property value="0">test/flow/bneutral_4/done</property>
+    <property value="0">test/flow/bneutral_4/cancelled</property>
+    <property value="0">test/flow/bneutral_4/deadline</property>
+    <property value="7">test/input/bneutral_4/mask</property>
+    <property value="0">test/input/bneutral_4/roll-norm</property>
+    <property value="0">test/input/bneutral_4/pitch-norm</property>
+    <property value="0">test/input/bneutral_4/yaw-norm</property>
+    <property value="0">test/input/bneutral_4/throttle-norm</property>
+    <property value="0">test/input/bneutral_4/enabled</property>
+    <property value="0">test/flow/blow_throttle_5/started</property>
+    <property value="0">test/flow/blow_throttle_5/done</property>
+    <property value="0">test/flow/blow_throttle_5/cancelled</property>
+    <property value="0">test/flow/blow_throttle_5/deadline</property>
+    <property value="0">test/flow/bposition_mode_6/started</property>
+    <property value="0">test/flow/bposition_mode_6/done</property>
+    <property value="0">test/flow/bposition_mode_6/cancelled</property>
+    <property value="0">test/flow/bposition_mode_6/deadline</property>
+    <property value="3">test/command/bposition_mode_6/kind</property>
+    <property value="3">test/command/bposition_mode_6/argument</property>
+    <property value="0">test/command/bposition_mode_6/status</property>
+    <property value="0">test/command/bposition_mode_6/request</property>
+    <property value="0">test/flow/barm_7/started</property>
+    <property value="0">test/flow/barm_7/done</property>
+    <property value="0">test/flow/barm_7/cancelled</property>
+    <property value="0">test/flow/barm_7/deadline</property>
+    <property value="1">test/command/barm_7/kind</property>
+    <property value="0">test/command/barm_7/argument</property>
+    <property value="0">test/command/barm_7/status</property>
+    <property value="0">test/command/barm_7/request</property>
+    <property value="0">test/flow/btakeoff_8/started</property>
+    <property value="0">test/flow/btakeoff_8/done</property>
+    <property value="0">test/flow/btakeoff_8/cancelled</property>
+    <property value="0">test/flow/btakeoff_8/deadline</property>
+    <property value="4">test/command/btakeoff_8/kind</property>
+    <property value="5">test/command/btakeoff_8/argument</property>
+    <property value="0">test/command/btakeoff_8/status</property>
+    <property value="0">test/command/btakeoff_8/request</property>
+    <property value="0">test/flow/bcenter_throttle_9/started</property>
+    <property value="0">test/flow/bcenter_throttle_9/done</property>
+    <property value="0">test/flow/bcenter_throttle_9/cancelled</property>
+    <property value="0">test/flow/bcenter_throttle_9/deadline</property>
+    <property value="0">test/flow/bhold_mode_10/started</property>
+    <property value="0">test/flow/bhold_mode_10/done</property>
+    <property value="0">test/flow/bhold_mode_10/cancelled</property>
+    <property value="0">test/flow/bhold_mode_10/deadline</property>
+    <property value="3">test/command/bhold_mode_10/kind</property>
+    <property value="3">test/command/bhold_mode_10/argument</property>
+    <property value="0">test/command/bhold_mode_10/status</property>
+    <property value="0">test/command/bhold_mode_10/request</property>
+    <property value="0">test/flow/bsettle_11/started</property>
+    <property value="0">test/flow/bsettle_11/done</property>
+    <property value="0">test/flow/bsettle_11/cancelled</property>
+    <property value="0">test/flow/bsettle_11/deadline</property>
+    <property value="0">test/flow/bhover_begin_12/started</property>
+    <property value="0">test/flow/bhover_begin_12/done</property>
+    <property value="0">test/flow/bhover_begin_12/cancelled</property>
+    <property value="0">test/flow/bhover_begin_12/deadline</property>
+    <property value="0">test/flow/bhover_13/started</property>
+    <property value="0">test/flow/bhover_13/done</property>
+    <property value="0">test/flow/bhover_13/cancelled</property>
+    <property value="0">test/flow/bhover_13/deadline</property>
+    <property value="0">test/flow/bhover_end_14/started</property>
+    <property value="0">test/flow/bhover_end_14/done</property>
+    <property value="0">test/flow/bhover_end_14/cancelled</property>
+    <property value="0">test/flow/bhover_end_14/deadline</property>
+    <property value="0">test/flow/bland_15/started</property>
+    <property value="0">test/flow/bland_15/done</property>
+    <property value="0">test/flow/bland_15/cancelled</property>
+    <property value="0">test/flow/bland_15/deadline</property>
+    <property value="5">test/command/bland_15/kind</property>
+    <property value="0">test/command/bland_15/argument</property>
+    <property value="0">test/command/bland_15/status</property>
+    <property value="0">test/command/bland_15/request</property>
+    <property value="0">test/flow/blanded_check_16/started</property>
+    <property value="0">test/flow/blanded_check_16/done</property>
+    <property value="0">test/flow/blanded_check_16/cancelled</property>
+    <property value="0">test/flow/blanded_check_16/deadline</property>
+    <property value="0">test/flow/bdisarm_17/started</property>
+    <property value="0">test/flow/bdisarm_17/done</property>
+    <property value="0">test/flow/bdisarm_17/cancelled</property>
+    <property value="0">test/flow/bdisarm_17/deadline</property>
+    <property value="2">test/command/bdisarm_17/kind</property>
+    <property value="0">test/command/bdisarm_17/argument</property>
+    <property value="0">test/command/bdisarm_17/status</property>
+    <property value="0">test/command/bdisarm_17/request</property>
+    <property value="0">test/flow/bunarmed_check_18/started</property>
+    <property value="0">test/flow/bunarmed_check_18/done</property>
+    <property value="0">test/flow/bunarmed_check_18/cancelled</property>
+    <property value="0">test/flow/bunarmed_check_18/deadline</property>
+    <event name="bground_check::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_check_2/cancelled eq 0
+</condition>test/runtime/ready eq 1
+test/flow/bground_check_2/started eq 0
+</condition>
+      <set name="test/flow/bground_check_2/started" value="1"/>
+      <set name="test/flow/bground_check_2/deadline"><function><sum><property>simulation/sim-time-sec</property><value>5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bground_check::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_check_2/cancelled eq 0
+</condition>test/flow/bground_check_2/started eq 1
+test/flow/bground_check_2/done eq 0
+</condition>test/fc/landed eq 1
+</condition>
+      <set name="test/flow/bground_check_2/done" value="1"/>
+    </event>
+    <event name="bground_check::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_check_2/cancelled eq 0
+</condition>test/flow/bground_check_2/started eq 1
+test/flow/bground_check_2/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bground_check_2/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bnormal_input::普通主杆">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bnormal_input_3/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bground_check_2/done eq 1
+</condition>test/flow/bnormal_input_3/started eq 0
+</condition>
+      <set name="test/flow/bnormal_input_3/started" value="1"/>
+      <set name="test/rc/input-kind" value="1"/>
+      <set name="test/flow/bnormal_input_3/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bneutral::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bneutral_4/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bnormal_input_3/done eq 1
+</condition>test/flow/bneutral_4/started eq 0
+</condition>
+      <set name="test/flow/bneutral_4/started" value="1"/>
+      <set name="test/input/bneutral_4/enabled" value="1"/>
+      <set name="test/flow/bneutral_4/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.02</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bneutral::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bneutral_4/cancelled eq 0
+</condition>test/flow/bneutral_4/started eq 1
+test/flow/bneutral_4/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bneutral_4/deadline
+</condition>
+      <set name="test/input/bneutral_4/enabled" value="0"/>
+      <set name="test/flow/bneutral_4/done" value="1"/>
+    </event>
+    <event name="blow_throttle::基准油门">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/blow_throttle_5/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bneutral_4/done eq 1
+</condition>test/flow/blow_throttle_5/started eq 0
+</condition>
+      <set name="test/flow/blow_throttle_5/started" value="1"/>
+      <set name="test/rc/throttle-norm" value="0"/>
+      <set name="test/flow/blow_throttle_5/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposition_mode::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposition_mode_6/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/blow_throttle_5/done eq 1
+</condition>test/flow/bposition_mode_6/started eq 0
+</condition>
+      <set name="test/flow/bposition_mode_6/started" value="1"/>
+      <set name="test/command/bposition_mode_6/request" value="1"/>
+      <set name="test/flow/bposition_mode_6/deadline"><function><sum><property>simulation/sim-time-sec</property><value>10</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposition_mode::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposition_mode_6/cancelled eq 0
+</condition>test/flow/bposition_mode_6/started eq 1
+test/flow/bposition_mode_6/done eq 0
+</condition>test/command/bposition_mode_6/status eq 1
+</condition>
+      <set name="test/command/bposition_mode_6/request" value="0"/>
+      <set name="test/flow/bposition_mode_6/done" value="1"/>
+    </event>
+    <event name="bposition_mode::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposition_mode_6/cancelled eq 0
+</condition>test/flow/bposition_mode_6/started eq 1
+test/flow/bposition_mode_6/done eq 0
+</condition>test/command/bposition_mode_6/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposition_mode::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposition_mode_6/cancelled eq 0
+</condition>test/flow/bposition_mode_6/started eq 1
+test/flow/bposition_mode_6/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposition_mode_6/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="barm::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/barm_7/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposition_mode_6/done eq 1
+</condition>test/flow/barm_7/started eq 0
+</condition>
+      <set name="test/flow/barm_7/started" value="1"/>
+      <set name="test/command/barm_7/request" value="1"/>
+      <set name="test/flow/barm_7/deadline"><function><sum><property>simulation/sim-time-sec</property><value>10</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="barm::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/barm_7/cancelled eq 0
+</condition>test/flow/barm_7/started eq 1
+test/flow/barm_7/done eq 0
+</condition>test/command/barm_7/status eq 1
+</condition>
+      <set name="test/command/barm_7/request" value="0"/>
+      <set name="test/flow/barm_7/done" value="1"/>
+    </event>
+    <event name="barm::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/barm_7/cancelled eq 0
+</condition>test/flow/barm_7/started eq 1
+test/flow/barm_7/done eq 0
+</condition>test/command/barm_7/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="barm::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/barm_7/cancelled eq 0
+</condition>test/flow/barm_7/started eq 1
+test/flow/barm_7/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/barm_7/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="btakeoff::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/btakeoff_8/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/barm_7/done eq 1
+</condition>test/flow/btakeoff_8/started eq 0
+</condition>
+      <set name="test/flow/btakeoff_8/started" value="1"/>
+      <set name="test/command/btakeoff_8/request" value="1"/>
+      <set name="test/flow/btakeoff_8/deadline"><function><sum><property>simulation/sim-time-sec</property><value>45</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="btakeoff::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/btakeoff_8/cancelled eq 0
+</condition>test/flow/btakeoff_8/started eq 1
+test/flow/btakeoff_8/done eq 0
+</condition>test/command/btakeoff_8/status eq 1
+</condition>
+      <set name="test/command/btakeoff_8/request" value="0"/>
+      <set name="test/flow/btakeoff_8/done" value="1"/>
+    </event>
+    <event name="btakeoff::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/btakeoff_8/cancelled eq 0
+</condition>test/flow/btakeoff_8/started eq 1
+test/flow/btakeoff_8/done eq 0
+</condition>test/command/btakeoff_8/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="btakeoff::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/btakeoff_8/cancelled eq 0
+</condition>test/flow/btakeoff_8/started eq 1
+test/flow/btakeoff_8/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/btakeoff_8/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bcenter_throttle::基准油门">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcenter_throttle_9/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/btakeoff_8/done eq 1
+</condition>test/flow/bcenter_throttle_9/started eq 0
+</condition>
+      <set name="test/flow/bcenter_throttle_9/started" value="1"/>
+      <set name="test/rc/throttle-norm" value="0.5"/>
+      <set name="test/flow/bcenter_throttle_9/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bhold_mode::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhold_mode_10/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bcenter_throttle_9/done eq 1
+</condition>test/flow/bhold_mode_10/started eq 0
+</condition>
+      <set name="test/flow/bhold_mode_10/started" value="1"/>
+      <set name="test/command/bhold_mode_10/request" value="1"/>
+      <set name="test/flow/bhold_mode_10/deadline"><function><sum><property>simulation/sim-time-sec</property><value>10</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bhold_mode::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhold_mode_10/cancelled eq 0
+</condition>test/flow/bhold_mode_10/started eq 1
+test/flow/bhold_mode_10/done eq 0
+</condition>test/command/bhold_mode_10/status eq 1
+</condition>
+      <set name="test/command/bhold_mode_10/request" value="0"/>
+      <set name="test/flow/bhold_mode_10/done" value="1"/>
+    </event>
+    <event name="bhold_mode::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhold_mode_10/cancelled eq 0
+</condition>test/flow/bhold_mode_10/started eq 1
+test/flow/bhold_mode_10/done eq 0
+</condition>test/command/bhold_mode_10/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bhold_mode::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhold_mode_10/cancelled eq 0
+</condition>test/flow/bhold_mode_10/started eq 1
+test/flow/bhold_mode_10/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bhold_mode_10/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bsettle::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bsettle_11/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bhold_mode_10/done eq 1
+</condition>test/flow/bsettle_11/started eq 0
+</condition>
+      <set name="test/flow/bsettle_11/started" value="1"/>
+      <set name="test/flow/bsettle_11/deadline"><function><sum><property>simulation/sim-time-sec</property><value>5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bsettle::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bsettle_11/cancelled eq 0
+</condition>test/flow/bsettle_11/started eq 1
+test/flow/bsettle_11/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bsettle_11/deadline
+</condition>
+      <set name="test/flow/bsettle_11/done" value="1"/>
+    </event>
+    <event name="bhover_begin::HOVER_BEGIN">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhover_begin_12/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bsettle_11/done eq 1
+</condition>test/flow/bhover_begin_12/started eq 0
+</condition>
+      <set name="test/flow/bhover_begin_12/started" value="1"/>
+      <set name="test/flow/bhover_begin_12/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bhover::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhover_13/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bhover_begin_12/done eq 1
+</condition>test/flow/bhover_13/started eq 0
+</condition>
+      <set name="test/flow/bhover_13/started" value="1"/>
+      <set name="test/flow/bhover_13/deadline"><function><sum><property>simulation/sim-time-sec</property><value>30</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bhover::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhover_13/cancelled eq 0
+</condition>test/flow/bhover_13/started eq 1
+test/flow/bhover_13/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bhover_13/deadline
+</condition>
+      <set name="test/flow/bhover_13/done" value="1"/>
+    </event>
+    <event name="bhover_end::HOVER_END">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bhover_end_14/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bhover_13/done eq 1
+</condition>test/flow/bhover_end_14/started eq 0
+</condition>
+      <set name="test/flow/bhover_end_14/started" value="1"/>
+      <set name="test/flow/bhover_end_14/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bland::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bland_15/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bhover_end_14/done eq 1
+</condition>test/flow/bland_15/started eq 0
+</condition>
+      <set name="test/flow/bland_15/started" value="1"/>
+      <set name="test/command/bland_15/request" value="1"/>
+      <set name="test/flow/bland_15/deadline"><function><sum><property>simulation/sim-time-sec</property><value>60</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bland::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bland_15/cancelled eq 0
+</condition>test/flow/bland_15/started eq 1
+test/flow/bland_15/done eq 0
+</condition>test/command/bland_15/status eq 1
+</condition>
+      <set name="test/command/bland_15/request" value="0"/>
+      <set name="test/flow/bland_15/done" value="1"/>
+    </event>
+    <event name="bland::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bland_15/cancelled eq 0
+</condition>test/flow/bland_15/started eq 1
+test/flow/bland_15/done eq 0
+</condition>test/command/bland_15/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bland::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bland_15/cancelled eq 0
+</condition>test/flow/bland_15/started eq 1
+test/flow/bland_15/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bland_15/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="blanded_check::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/blanded_check_16/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bland_15/done eq 1
+</condition>test/flow/blanded_check_16/started eq 0
+</condition>
+      <set name="test/flow/blanded_check_16/started" value="1"/>
+      <set name="test/flow/blanded_check_16/deadline"><function><sum><property>simulation/sim-time-sec</property><value>5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="blanded_check::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/blanded_check_16/cancelled eq 0
+</condition>test/flow/blanded_check_16/started eq 1
+test/flow/blanded_check_16/done eq 0
+</condition>test/fc/landed eq 1
+</condition>
+      <set name="test/flow/blanded_check_16/done" value="1"/>
+    </event>
+    <event name="blanded_check::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/blanded_check_16/cancelled eq 0
+</condition>test/flow/blanded_check_16/started eq 1
+test/flow/blanded_check_16/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/blanded_check_16/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bdisarm::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bdisarm_17/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/blanded_check_16/done eq 1
+</condition>test/flow/bdisarm_17/started eq 0
+</condition>
+      <set name="test/flow/bdisarm_17/started" value="1"/>
+      <set name="test/command/bdisarm_17/request" value="1"/>
+      <set name="test/flow/bdisarm_17/deadline"><function><sum><property>simulation/sim-time-sec</property><value>10</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bdisarm::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bdisarm_17/cancelled eq 0
+</condition>test/flow/bdisarm_17/started eq 1
+test/flow/bdisarm_17/done eq 0
+</condition>test/command/bdisarm_17/status eq 1
+</condition>
+      <set name="test/command/bdisarm_17/request" value="0"/>
+      <set name="test/flow/bdisarm_17/done" value="1"/>
+    </event>
+    <event name="bdisarm::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bdisarm_17/cancelled eq 0
+</condition>test/flow/bdisarm_17/started eq 1
+test/flow/bdisarm_17/done eq 0
+</condition>test/command/bdisarm_17/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bdisarm::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bdisarm_17/cancelled eq 0
+</condition>test/flow/bdisarm_17/started eq 1
+test/flow/bdisarm_17/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bdisarm_17/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bunarmed_check::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bunarmed_check_18/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bdisarm_17/done eq 1
+</condition>test/flow/bunarmed_check_18/started eq 0
+</condition>
+      <set name="test/flow/bunarmed_check_18/started" value="1"/>
+      <set name="test/flow/bunarmed_check_18/deadline"><function><sum><property>simulation/sim-time-sec</property><value>3</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bunarmed_check::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bunarmed_check_18/cancelled eq 0
+</condition>test/flow/bunarmed_check_18/started eq 1
+test/flow/bunarmed_check_18/done eq 0
+</condition>test/fc/armed eq 0
+</condition>
+      <set name="test/flow/bunarmed_check_18/done" value="1"/>
+    </event>
+    <event name="bunarmed_check::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bunarmed_check_18/cancelled eq 0
+</condition>test/flow/bunarmed_check_18/started eq 1
+test/flow/bunarmed_check_18/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bunarmed_check_18/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_1::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+<condition logic="AND">test/runtime/ready eq 1
+test/flow/bunarmed_check_18/done eq 1
+</condition>test/flow/sequence_1/done eq 0
+</condition>
+      <set name="test/flow/sequence_1/done" value="1"/>
+    </event>
+    <event name="test::complete">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/done eq 1
+</condition>
+      <set name="test/runtime/complete" value="1"/>
+      <notify></notify>
+    </event>
+  </run>
+</runscript>

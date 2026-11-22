@@ -7,6 +7,7 @@ import {
   simResume,
   simRestart,
   simGetStatus,
+  getLocalSimulator,
   simListTests,
   simListModels,
   type FlightControllerStatus,
@@ -17,6 +18,7 @@ import {
 } from '../utils/tauriApi';
 import ScriptEditorDialog, { type ScriptEditorValue } from './ScriptEditorDialog';
 import { useSimSocket } from '../sim/useSimSocket';
+import { useFlowStore } from '../store/flowStore';
 import { validateXmlSource, showXmlDiagnostic } from '../utils/xmlDiagnostics';
 import { MAX_PERFORMANCE_PERIOD_SECONDS, readPerformancePeriod } from '../utils/performanceSettings';
 
@@ -337,6 +339,9 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   const [submenu, setSubmenu] = useState<Submenu>(null);
   const [running, setRunning] = useState(false);
   const [external, setExternal] = useState(false);
+  const [localRuntime, setLocalRuntime] = useState(false);
+  const [builtinSession, setBuiltinSession] = useState(false);
+  const builtinSelected = useRef(false), builtinCanvasLoaded = useRef(false);
   const [connected, setConnected] = useState(false);
   const [cpuLoad, setCpuLoad] = useState<number | null>(null);
   const [cpuCores, setCpuCores] = useState<number[]>([]);
@@ -410,14 +415,14 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   ])));
 
   useEffect(() => {
-    if (statusOnly) return;
+    if (statusOnly || builtinSession) return;
     if (selectedTest || selectedModel || preparedTarget.script || preparedTarget.model) {
       saveSimulationTarget(
         selectedTest || preparedTarget.script,
         selectedModel || preparedTarget.model,
       );
     }
-  }, [statusOnly, selectedTest, selectedModel, preparedTarget]);
+  }, [statusOnly, builtinSession, selectedTest, selectedModel, preparedTarget]);
 
   useEffect(() => {
     const updatePeriod = () => setPerformancePeriod(readPerformancePeriod());
@@ -447,7 +452,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
   }, [onLog]);
 
   useEffect(() => {
-    if (statusOnly) return;
+    if (statusOnly || builtinSession) return;
     const path = savedTargetRef.current.script;
     if (!path) return;
     let cancelled = false;
@@ -464,7 +469,42 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
     return () => { cancelled = true; };
     // Restore once at startup; parent log callback identity is not stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [builtinSession]);
+
+  useEffect(() => {
+    if (statusOnly) return;
+    let disposed = false, polling = false;
+    const detect = async () => {
+      if (polling) return; polling = true;
+      try {
+        const state = await getLocalSimulator();
+        if (disposed || !state?.active || !state.activeConfig?.bundled) return;
+        setBuiltinSession(true);
+        if (!builtinSelected.current) {
+          builtinSelected.current = true;
+          setSelectedTest('F450_PX4_lan.xml'); setSelectedModel('F450_PX4');
+          setPreparedTarget({ script: 'F450_PX4_lan.xml', model: 'F450_PX4' });
+          setScriptEditor({ name: 'F450_PX4_lan.xml', aircraft: 'F450_PX4', initialize: 'initGrnd', start: '0', end: '3600', dt: '0.004', events: [] });
+        }
+        if (state.ready && !builtinCanvasLoaded.current) {
+          builtinCanvasLoaded.current = true;
+          const script = await ftpDownloadScript('F450_PX4_lan.xml');
+          if (disposed) return;
+          setScriptEditor(parseScriptEditorValue('F450_PX4_lan.xml', script.xml));
+          scriptSourceRef.current = { path: 'scripts/F450_PX4_lan.xml', xml: script.xml };
+          // A fresh canvas can follow the preset. Existing user work is retained.
+          if (!useFlowStore.getState().nodes.length && onOpenRemoteModel) {
+            await onOpenRemoteModel('F450_PX4');
+          }
+        }
+      } catch (error) { if (!disposed) appendLog(`内置模型界面准备：${String(error)}`); }
+      finally { polling = false; }
+    };
+    void detect(); const timer = setInterval(() => void detect(), 1500);
+    return () => { disposed = true; clearInterval(timer); };
+    // Bind only to the owning menu; toolbar callbacks change every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusOnly]);
 
   const loadLists = useCallback(async () => {
     try {
@@ -486,6 +526,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
     try {
       const status = await simGetStatus();
       setExternal(!!status.external);
+      setLocalRuntime(!!status.local);
       setConnected(!!status.connected);
       setCpuLoad(typeof status.cpu === 'number' ? status.cpu : null);
       const cores = Array.isArray(status.cpuCores)
@@ -1538,7 +1579,7 @@ export default function SimMenu({ statusOnly = false, loading: parentLoading = f
 
           {external && (
             <div className="sim-menu-external-hint">
-              JSBSim 由 px4-jsbsim-bridge 管理
+              {localRuntime ? 'JSBSim 由上位机本机模型服务管理' : 'JSBSim 由 px4-jsbsim-bridge 管理'}
             </div>
           )}
 

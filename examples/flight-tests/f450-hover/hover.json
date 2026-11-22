@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "name": "F450 联合测试 · 起飞5m / 悬停30s / 降落",
+  "aircraft": "F450_PX4",
+  "initialize": "current-instance",
+  "duration": 180,
+  "rateHz": 50,
+  "throttle": 0,
+  "clock": "realtime",
+  "onFinish": "land",
+  "onAbort": "land",
+  "blocks": [
+    {
+      "id": "bground_check",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bnormal_input",
+      "type": "input_mode",
+      "p": {
+        "input": "normal"
+      }
+    },
+    {
+      "id": "bneutral",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "blow_throttle",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bposition_mode",
+      "type": "mode",
+      "p": {
+        "mode": "POSCTL",
+        "timeout": 10
+      }
+    },
+    {
+      "id": "barm",
+      "type": "arm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "btakeoff",
+      "type": "takeoff",
+      "p": {
+        "altitude": 5,
+        "timeout": 45
+      }
+    },
+    {
+      "id": "bcenter_throttle",
+      "type": "throttle",
+      "p": {
+        "value": 50
+      }
+    },
+    {
+      "id": "bhold_mode",
+      "type": "mode",
+      "p": {
+        "mode": "POSCTL",
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bsettle",
+      "type": "wait",
+      "p": {
+        "duration": 5
+      }
+    },
+    {
+      "id": "bhover_begin",
+      "type": "mark",
+      "p": {
+        "text": "HOVER_BEGIN"
+      }
+    },
+    {
+      "id": "bhover",
+      "type": "wait",
+      "p": {
+        "duration": 30
+      }
+    },
+    {
+      "id": "bhover_end",
+      "type": "mark",
+      "p": {
+        "text": "HOVER_END"
+      }
+    },
+    {
+      "id": "bland",
+      "type": "land",
+      "p": {
+        "timeout": 60
+      }
+    },
+    {
+      "id": "blanded_check",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bdisarm",
+      "type": "disarm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bunarmed_check",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 3
+      }
+    }
+  ]
+}

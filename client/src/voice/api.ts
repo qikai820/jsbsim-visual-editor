@@ -1,0 +1,12 @@
+import { invoke } from '@tauri-apps/api/core';
+import type { VoiceConfig, VoiceContext, VoicePlan } from './model';
+export type VoiceConfiguration = { config: VoiceConfig; recordingId?: number | null; capabilities: { recorders: string[]; platform: string } };
+export const voiceGetConfig = () => invoke<VoiceConfiguration>('voice_config_get');
+export const voiceSaveConfig = (config: VoiceConfig) => invoke<VoiceConfig>('voice_config_save',{config});
+export const voiceRecordStart = () => invoke<{ id:number; recorder:string; maxSeconds:number }>('voice_record_start');
+export const voiceRecordCancel = (id:number) => invoke('voice_record_cancel',{id});
+export const voiceTranscribe = (id:number,requestId:string) => invoke<string>('voice_transcribe',{id,requestId});
+export const voiceInterpret = (text:string,context:VoiceContext,requestId:string) => invoke<VoicePlan>('voice_interpret',{text,context,requestId});
+export const voiceCancel = (requestId:string) => invoke('voice_cancel',{requestId});
+export const voiceProbe = (config:VoiceConfig,requestId:string) => invoke<{llm:{ok:boolean;models:string[];message:string};asr:{ok:boolean;message:string}}>('voice_probe',{config,requestId});
+export const voiceSynthesize = (text:string,requestId:string) => invoke<{mime:string;data:string}>('voice_synthesize',{text,requestId});

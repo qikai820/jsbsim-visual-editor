@@ -87,11 +87,11 @@ pub struct NshTarget {
 #[tauri::command]
 pub async fn tool_simulator_nsh_target() -> Result<Option<NshTarget>, String> {
     crate::run_blocking(|| {
-        let port = std::env::var("NSH_TELNET_PORT")
+        let port = if crate::sim_backend::active() { crate::sim_backend::NSH_PORT } else { std::env::var("NSH_TELNET_PORT")
             .ok()
             .and_then(|p| p.parse::<u16>().ok())
             .filter(|p| *p > 0)
-            .unwrap_or(23);
+            .unwrap_or(23) };
         Ok(crate::transport::network_host().map(|host| NshTarget {
             host: host.to_string(),
             port,

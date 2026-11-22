@@ -12,6 +12,7 @@ const PLOTJUGGLER_RATE_KEY = 'jsbsim-plotjuggler-rate-hz-v2';
 const LEGACY_PLOTJUGGLER_RATE_KEY = 'jsbsim-plotjuggler-rate-hz';
 
 export type SimulatorTransportMode = 'auto' | 'network' | 'usb';
+let runtimeTransportMode: SimulatorTransportMode | undefined;
 
 // Writing to the NuttX SD card is opt-in. Until the user enables it in the
 // local settings the editor treats the simulator model data as read-only.
@@ -24,6 +25,7 @@ export function setRemoteUploadEnabled(enabled: boolean): void {
 }
 
 export function getSimulatorTransportMode(): SimulatorTransportMode {
+  if (runtimeTransportMode) return runtimeTransportMode;
   const value = localStorage.getItem(SIMULATOR_TRANSPORT_KEY);
   return value === 'network' || value === 'usb' ? value : 'auto';
 }
@@ -49,7 +51,8 @@ async function call(command: string, args: Record<string, any> = {}): Promise<an
 }
 
 export async function setSimulatorTransportMode(mode: SimulatorTransportMode): Promise<void> {
-  await call('simulator_transport_set', { mode });
+  const effective = await call('simulator_transport_set', { mode });
+  if (effective === 'auto' || effective === 'network' || effective === 'usb') runtimeTransportMode = effective;
   localStorage.setItem(SIMULATOR_TRANSPORT_KEY, mode);
 }
 
@@ -59,10 +62,23 @@ export async function getSimulatorNetworkTarget(): Promise<string | null> {
 
 export async function initializeSimulatorTransport(): Promise<void> {
   if (!isTauri) return;
-  await call('simulator_transport_set', { mode: getSimulatorTransportMode() });
+  const effective = await call('simulator_transport_set', { mode: getSimulatorTransportMode() });
+  if (effective === 'auto' || effective === 'network' || effective === 'usb') runtimeTransportMode = effective;
+  window.dispatchEvent(new Event('jsbsim-local-settings-changed'));
 }
 
 // ── Typed API functions ─────────────────────────────────────────────────────
+
+export interface LocalSimulatorConfig {
+  enabled: boolean; bundled: boolean; projectDirectory: string; buildDirectory: string; hilHost: string; hilPort: number;
+}
+export interface LocalSimulatorStatus {
+  config: LocalSimulatorConfig; activeConfig?: LocalSimulatorConfig | null; active: boolean; restartRequired: boolean; running: boolean; ready: boolean;
+  pid: number | null; exitCode: number | null; error: string | null; logs: string[];
+  builtin?: { available: boolean; name: string; version: string | null; error: string | null } | null; px4Running?: boolean | null;
+}
+export async function getLocalSimulator(): Promise<LocalSimulatorStatus> { return call('local_sim_get'); }
+export async function saveLocalSimulator(config: LocalSimulatorConfig): Promise<LocalSimulatorStatus> { return call('local_sim_save', { config }); }
 
 export interface PlotJugglerStatus {
   running: boolean;
@@ -385,7 +401,7 @@ export interface McapStatus {
   recycledBytes?: number;
 }
 
-export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; temperatures?: { cpuC: number | null; ssdC: number | null } | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null; mcap?: McapStatus | null }> {
+export async function simGetStatus(): Promise<{ running: boolean; paused?: boolean; stopped?: boolean; state?: string; script?: string; model?: string; external?: boolean; local?: boolean; connected?: boolean; packets?: number; taskAlive?: boolean; cpu?: number; cpuCores?: number[]; healthAgeMs?: number | null; temperatures?: { cpuC: number | null; ssdC: number | null } | null; memory?: { total: number; used: number; free: number; percent: number }; network?: { name: string; rxBytes: number; txBytes: number }[]; fdmRunMs?: number; fdmWindow?: FdmWindowStats; simulationDt?: number; flightController?: FlightControllerStatus | null; mcap?: McapStatus | null }> {
   return call('sim_status');
 }
 

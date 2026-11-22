@@ -97,6 +97,7 @@ pub struct LogListing {
 }
 
 fn endpoint() -> Result<String, String> {
+    if crate::sim_backend::active() { return Ok(format!("ftp://127.0.0.1:{}", crate::sim_backend::FTP_PORT)); }
     // The running Tauri dev process can retain an old launcher environment
     // after a Rust hot reload. A board verified by discovery or USB readback
     // must take precedence over that stale FTP URL.
@@ -475,6 +476,7 @@ fn list_network_ftp_relative(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn log_ftp_host() -> Result<std::net::Ipv4Addr, String> {
+    if crate::sim_backend::active() { return Ok(std::net::Ipv4Addr::LOCALHOST); }
     let url = endpoint()?;
     url.strip_prefix("ftp://").and_then(|host| host.parse().ok())
         .ok_or_else(|| "无法通过控制台检查此 FTP 地址的日志服务".into())

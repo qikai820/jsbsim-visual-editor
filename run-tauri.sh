@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -Ee
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -26,6 +26,32 @@ export NUTTX_FTP_PASSWORD="${NUTTX_FTP_PASSWORD:-abc123}"
 
 cd "${SCRIPT_DIR}"
 
+# Keep launch failures visible when the desktop terminal would otherwise close.
+# This directory is checkout-local and ignored by Git.
+mkdir -p "${SCRIPT_DIR}/.toolchains/logs"
+LAUNCH_LOG="${SCRIPT_DIR}/.toolchains/logs/desktop-launch.log"
+exec > >(tee "${LAUNCH_LOG}") 2>&1
+launch_failed() {
+  local status=$?
+  trap - ERR
+  echo
+  echo "上位机启动失败（退出码 ${status}）。日志：${LAUNCH_LOG}"
+  if [[ -t 0 ]]; then
+    read -r -p "按回车关闭此窗口…" _ || true
+  fi
+  exit "${status}"
+}
+trap launch_failed ERR
+
+# A pull can add frontend packages without updating this checkout's node_modules.
+# Repair those dependencies before Vite starts, so its missing-import page does
+# not leave the desktop window blank or make startup fail.
+if ! npm ls --depth=0 --silent >/dev/null 2>&1; then
+  echo "正在补齐上位机依赖，首次更新后可能需要稍等…"
+  npm install --no-audit --no-fund --prefer-offline
+  npm ls --depth=0 --silent >/dev/null
+fi
+
 # Closing the native window can leave Vite running. Starting a second Vite
 # then fails because strictPort is enabled, taking Tauri down with it. Reuse
 # only a listener owned by this checkout's Vite; never kill an unrelated app
@@ -47,7 +73,8 @@ if command -v ss >/dev/null && command -v curl >/dev/null; then
         if curl --noproxy '*' --fail --silent --max-time 2 \
           "${DEV_URL%/}/@vite/client" >/dev/null; then
           echo "复用当前项目的页面服务（端口 ${DEV_PORT}），正在打开上位机…"
-          exec npx tauri dev --config '{"build":{"beforeDevCommand":""}}' "$@"
+          npx tauri dev --config '{"build":{"beforeDevCommand":""}}' "$@"
+          exit 0
         fi
         break
       fi
@@ -55,4 +82,4 @@ if command -v ss >/dev/null && command -v curl >/dev/null; then
   fi
 fi
 
-exec npx tauri dev "$@"
+npx tauri dev "$@"
