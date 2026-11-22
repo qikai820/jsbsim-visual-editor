@@ -5,8 +5,9 @@ import { useSignalMonitorStore } from '../../store/signalMonitorStore';
 import { compassAttitude, MAX_VALUE_COLUMNS, MAX_VALUE_ROWS, newSceneValue, resizeSceneValues, SCENE_VALUE_SOURCES,
   sceneCustomPath, sceneUnitOptions, sceneValueReading, type SceneDisplay, type SceneValue, type SceneValueLayout } from '../../sim/sceneInstruments';
 
-export function SceneIcon({ name }: { name: 'plane' | 'layers' | 'gauge' | 'chart' | 'settings' | 'close' | 'pin' | 'focus' | 'map' | 'camera' | 'chevron' }) {
+export function SceneIcon({ name }: { name: 'plane' | 'layers' | 'gauge' | 'chart' | 'settings' | 'close' | 'pin' | 'focus' | 'map' | 'camera' | 'chevron' | 'test' }) {
   const paths = {
+    test: <path d="M9 3h6M10 3v6L4 19a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2L14 9V3M7 15h10" />,
     plane: <path d="m12 3 2 7 7 4v2l-7-2v5l2 2-4-1-4 1 2-2v-5l-7 2v-2l7-4z" />,
     layers: <><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5M3 16l9 5 9-5" /></>,
     gauge: <><path d="M4 18a9 9 0 1 1 16 0M12 12l5-5" /><circle cx="12" cy="12" r="2" /></>,

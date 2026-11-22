@@ -1,14 +1,15 @@
 import type { ScenePose } from './flightSceneState';
 import { isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
+import { isXcd20, XCD20_ROTORS } from './sceneXcd20';
 
 export const isVoliro = (model: string) => /voliro/i.test(model);
-export const isQuadrotor = (model: string) => /f450|quad|multi|h7|morph/i.test(model);
-export const rotorCount = (model: string) => isVoliro(model) ? 5 : isMorphQuad(model) ? 8 : isQuadrotor(model) ? 4 : 1;
+export const isQuadrotor = (model: string) => isXcd20(model) || /f450|quad|multi|h7|morph/i.test(model);
+export const rotorCount = (model: string) => isVoliro(model) ? 5 : isMorphQuad(model) || isXcd20(model) ? 8 : isQuadrotor(model) ? 4 : 1;
 export const rotorRpmKey = (model: string, index: number) => isVoliro(model)
   ? `fcs/voliro_t/rpm[${index}]` : `propulsion/engine[${index}]/propeller-rpm`;
 export const rotorLabel = (model: string, index: number) => isVoliro(model)
   ? [`M1 · 右上`, `M2 · 右下`, `M3 · 左上`, `M4 · 左下`, `M5 · 尾桨`][index]
-  : isMorphQuad(model) ? `M${index + 1} · ${MORPHQUAD_ARMS[Math.floor(index / 2)].label}${index % 2 ? '下' : '上'}` : `M${index + 1}`;
+  : isXcd20(model) ? `M${index + 1} · ${XCD20_ROTORS[index]?.label ?? ''}` : isMorphQuad(model) ? `M${index + 1} · ${MORPHQUAD_ARMS[Math.floor(index / 2)].label}${index % 2 ? '下' : '上'}` : `M${index + 1}`;
 
 // Existing model's 23 V single-prop bench CSV: M6208 KV310 / 22 x 7.8.
 // jsbsim_realtime/data/aviation/aircraft/voliro_t/data/m6208_310kv_6s_22x7.8_bench.csv
@@ -48,7 +49,7 @@ export function rotorReading(pose: ScenePose, index: number, now = performance.n
   }
   // Front motor order and reaction-torque signs match voliro_t.xml.
   const sense = voliro ? [1, -1, -1, 1, 1][index] : pose.rpmSense?.[index]
-    ?? (isMorphQuad(pose.model) ? MORPHQUAD_ARMS[Math.floor(index / 2)].senses[index % 2] : 1);
+    ?? (isXcd20(pose.model) ? XCD20_ROTORS[index]?.sense ?? 1 : isMorphQuad(pose.model) ? MORPHQUAD_ARMS[Math.floor(index / 2)].senses[index % 2] : 1);
   const active = pose.state === 'running' && sampleAt != null && now - sampleAt < 2000;
   const omega = value == null ? source === 'visual' ? (motor ?? 0) * 50 : 0 : value * (Math.PI / 30);
   return { rpm: value, sampleAt, source, angularVelocity: active ? omega * sense : 0,

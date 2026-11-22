@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  worker: { format: 'es' },
+  worker: { format: 'iife' },
   root: 'client',
   // Tauri expects a fixed port for the dev server
   server: {

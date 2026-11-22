@@ -1,0 +1,8 @@
+.native-window-controls{position:relative;display:flex;align-items:center;gap:5px;flex-shrink:0;-webkit-app-region:no-drag}
+.native-window-controls *{-webkit-app-region:no-drag}
+.native-window-controls button{display:grid;place-items:center;width:32px;min-width:32px;height:28px;min-height:28px;padding:0;border:1px solid var(--border,#dde5ec);border-radius:5px;background:var(--bg-secondary,#f5f8fa);color:var(--text-secondary,#637585);cursor:pointer}
+.native-window-controls button svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.35;stroke-linecap:round;stroke-linejoin:round}
+.native-window-controls .window-close:hover{background:#e85c62;color:#fff;border-color:#e85c62}
+.native-window-controls button:disabled{opacity:.5}
+.native-window-controls .window-control-error{position:absolute;right:0;top:calc(100% + 8px);z-index:90;width:320px;max-width:80vw;padding:12px;border:1px solid var(--border,#dde5ec);border-radius:7px;background:var(--bg-secondary,#fff);color:var(--text-primary,#25344a);white-space:normal;overflow-wrap:anywhere;font:12px/1.5 sans-serif;box-shadow:0 6px 24px #14233133}
+.native-window-controls .window-control-error button{display:block;width:auto;margin-top:8px;padding:3px 8px}

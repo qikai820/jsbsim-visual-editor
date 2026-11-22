@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 export type RouterConfig = { device:string; baud:number; host:string; qgc_port:number; toolbox_port:number };
-export type RouterSnapshot = { simulator:string; state:'running'|'stopped'|'starting'|'stopping'; config:RouterConfig; active_config:RouterConfig;
+export type RouterSnapshot = { simulator:string; state:'running'|'stopped'|'starting'|'stopping'; source?:'usb'|'udp'|'none'|null; config:RouterConfig; active_config:RouterConfig;
   routes:Array<{name:string;rx_bytes:number;tx_bytes:number;errors:number;last_error:number}> };
 export const DEFAULT_ROUTER_CONFIG:RouterConfig = {device:'/dev/ttyACM0',baud:921600,host:'192.168.3.109',qgc_port:14550,toolbox_port:14553};
 export function validateRouterConfig(c:RouterConfig):string {

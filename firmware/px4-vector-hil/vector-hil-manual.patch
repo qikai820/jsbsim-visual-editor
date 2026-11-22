@@ -1,0 +1,182 @@
+--- /dev/null
++++ b/src/lib/vector_control/VectorHilManual.hpp
+@@ -0,0 +1,35 @@
++#pragma once
++#include <lib/matrix/matrix/math.hpp>
++#include <cmath>
++
++namespace vector_control {
++// Explicit HIL-only interface; production RC and non-HIL flight retain their mapping.
++inline bool hilManualInterface(bool enabled, bool hil, bool reference, int airframe)
++{
++    return enabled && hil && reference && airframe == 16;
++}
++inline bool hilManualSample(bool interface, int source, bool valid, bool armed, bool airborne)
++{
++    return interface && source >= 2 && source <= 7 && valid && armed && airborne;
++}
++inline float hilManualAngle(float normalized, float limit_degrees)
++{
++    if (!std::isfinite(normalized)) { return 0.f; }
++    const float demand = normalized < -1.f ? -1.f : normalized > 1.f ? 1.f : normalized;
++    const float degrees = demand * 120.f;
++    const float bounded = degrees < -limit_degrees ? -limit_degrees : degrees > limit_degrees ? limit_degrees : degrees;
++    return bounded * 0.017453292519943295f;
++}
++inline matrix::Quatf hilManualAttitude(float roll, float pitch, float heading, float limit_degrees)
++{
++    return matrix::Quatf(matrix::Eulerf(0.f,0.f,heading))
++        * matrix::Quatf(matrix::Eulerf(hilManualAngle(roll,limit_degrees),0.f,0.f))
++        * matrix::Quatf(matrix::Eulerf(0.f,hilManualAngle(pitch,limit_degrees),0.f));
++}
++inline matrix::Vector3f hilManualThrust(const matrix::Quatf &q, float collective)
++{
++    // Full-vector vehicle: manual throttle controls NED vertical force while
++    // AUX controls attitude. Motor allocation and feedback stay in vector_*.
++    return matrix::Dcmf(q).transpose() * matrix::Vector3f(0.f,0.f,-collective);
++}
++}
+--- a/src/modules/vector_pos_control/vector_geometry_params.c
++++ b/src/modules/vector_pos_control/vector_geometry_params.c
+@@ -215,3 +215,16 @@
+  * @group Vector Position Control
+  */
+ PARAM_DEFINE_FLOAT(VEC_POS_AW, 1.0f);
++
++/**
++ * MorphQuad HIL manual attitude test interface
++ *
++ * Only active with vehicle_status HIL_STATE_ON, CA_AIRFRAME=16 and VEC_REF_EN.
++ * MAVLink MANUAL_CONTROL AUX1/AUX2 request roll/pitch: +/-1 maps to +/-120 deg.
++ * Manual/Stabilized and Altitude are bounded to +/-45 deg; Position to +/-120.
++ * Manual throttle controls vertical NED force for the full-vector vehicle.
++ * No effect on non-HIL flight. Disabled by default.
++ * @boolean
++ * @group Vector Position Control
++ */
++PARAM_DEFINE_INT32(VEC_HIL_TEST, 0);
+--- a/src/modules/vector_att_control/vector_att_control.hpp
++++ b/src/modules/vector_att_control/vector_att_control.hpp
+@@ -120,6 +120,8 @@
+ 	uORB::Publication<vehicle_attitude_setpoint_s>  _vehicle_attitude_setpoint_pub;
+ 	uORB::Publication<vector_rate_reference_s> _vector_rate_reference_pub{ORB_ID(vector_rate_reference)};
+ 	vector_attitude_reference_s _vector_reference{};
++	bool _hil_test_enabled{false};
++	bool _hil_state{false};
+ 	bool _reference_enabled{false}; // latched at startup (VT_CTRL_MODE / VEC_REF_EN require reboot)
+ 
+ 	manual_control_setpoint_s       _manual_control_setpoint {};    /**< manual control setpoint */
+--- a/src/modules/vector_att_control/vector_att_control_main.cpp
++++ b/src/modules/vector_att_control/vector_att_control_main.cpp
+@@ -53,6 +53,7 @@
+ #include "VectorAttitude/VectorAttitudeMath.hpp"
+ #include <lib/vector_control/VectorReferenceValidity.hpp>
+ #include <lib/vector_control/VectorGeometry.hpp>
++#include <lib/vector_control/VectorHilManual.hpp>
+ 
+ using namespace matrix;
+ 
+@@ -99,6 +100,10 @@
+ void
+ VectorAttitudeControl::parameters_updated()
+ {
++	int32_t hil_test = 0;
++	const param_t hil_handle = param_find("VEC_HIL_TEST");
++	if (hil_handle != PARAM_INVALID) { param_get(hil_handle, &hil_test); }
++	_hil_test_enabled = hil_test == 1;
+ 	// Store some of the parameters in a more convenient way & precompute often-used values
+ 	_attitude_control.setProportionalGain(Vector3f(_param_mc_roll_p.get(), _param_mc_pitch_p.get(), _param_mc_yaw_p.get()),
+ 					      1.f);
+@@ -211,9 +216,19 @@
+ 	// Align the desired tilt with the yaw setpoint
+ 	Quatf q_sp = q_sp_yaw * q_sp_rp;
+ 
++	const bool hil_manual = vector_control::hilManualSample(
++        vector_control::hilManualInterface(_hil_test_enabled, _hil_state, _reference_enabled, _param_vector_airframe.get()),
++        _manual_control_setpoint.data_source, _manual_control_setpoint.valid && hrt_elapsed_time(&_manual_control_setpoint.timestamp) < 500_ms,
++        _vehicle_control_mode.flag_armed, !_landed);
++    if (hil_manual) {
++        q_sp = vector_control::hilManualAttitude(_manual_control_setpoint.aux1, _manual_control_setpoint.aux2, yaw_setpoint, 45.f);
++    }
+ 	q_sp.copyTo(attitude_setpoint.q_d);
+ 
+ 	attitude_setpoint.thrust_body[2] = -throttle_curve(_manual_control_setpoint.throttle);
++    if (hil_manual) {
++        vector_control::hilManualThrust(q, throttle_curve(_manual_control_setpoint.throttle)).copyTo(attitude_setpoint.thrust_body);
++    }
+ 
+ 	attitude_setpoint.timestamp = hrt_absolute_time();
+ 	_vehicle_attitude_setpoint_pub.publish(attitude_setpoint);
+@@ -274,6 +289,7 @@
+ 			vehicle_status_s vehicle_status;
+ 
+ 			if (_vehicle_status_sub.copy(&vehicle_status)) {
++				_hil_state = vehicle_status.hil_state == vehicle_status_s::HIL_STATE_ON;
+ 				_vehicle_type_rotary_wing = (vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROTARY_WING);
+ 				_vtol = vehicle_status.is_vtol;
+ 				_vtol_in_transition_mode = vehicle_status.in_transition_mode;
+--- a/src/modules/vector_pos_control/VectorPositionControl.hpp
++++ b/src/modules/vector_pos_control/VectorPositionControl.hpp
+@@ -154,6 +154,7 @@
+ 	vehicle_angular_velocity_s _vehicle_angular_velocity{};
+ 	control_allocator_status_s _control_allocator_status{};
+ 	float _voliro_pitch_setpoint{0.f};
++	bool _hil_test_enabled{false};
+ 	bool _reference_enabled{false};
+ 	vector_control::AttitudeReference _attitude_reference;
+ 	matrix::Vector3f _reference_shortfall{};
+--- a/src/modules/vector_pos_control/VectorPositionControl.cpp
++++ b/src/modules/vector_pos_control/VectorPositionControl.cpp
+@@ -34,6 +34,7 @@
+ #include "VectorPositionControl.hpp"
+ #include "VectorAttitudeSwitches.hpp"
+ #include <lib/vector_control/VectorGeometry.hpp>
++#include <lib/vector_control/VectorHilManual.hpp>
+ 
+ #include <float.h>
+ #include <geo/geo.h>
+@@ -248,6 +249,10 @@
+ 
+ 		// update parameters from storage
+ 		ModuleParams::updateParams();
++        int32_t hil_test = 0;
++        const param_t hil_handle = param_find("VEC_HIL_TEST");
++        if (hil_handle != PARAM_INVALID) { param_get(hil_handle, &hil_test); }
++        _hil_test_enabled = hil_test == 1;
+ 
+ 		float sample_freq_hz = 1.f / _sample_interval_s.mean();
+ 
+@@ -1163,19 +1168,25 @@
+ 
+ 			const bool spatial = vector_control::capabilities(_param_vector_airframe.get()).independentRoll();
+ 
++            const bool hil_interface = vector_control::hilManualInterface(_hil_test_enabled,
++                _vehicle_status.hil_state == vehicle_status_s::HIL_STATE_ON, _reference_enabled, _param_vector_airframe.get());
++            const bool hil_altitude = hil_interface && _vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_ALTCTL;
++            const bool hil_input_valid = vector_control::hilManualSample(hil_interface, manual.data_source, manual_fresh,
++                _vehicle_control_mode.flag_armed, !_vehicle_land_detected.landed && !_vehicle_land_detected.ground_contact)
++                && (manual_position || hil_altitude);
+ 			if (spatial && _reference_enabled) {
+ 				// Same reference model and atomic feedforward chain as the plane
+ 				// vehicle, with both attitude axes free and no lateral-force projection.
+-				const bool allowed = control_update_success && (manual_position || user_hold)
++				const bool allowed = control_update_success && (manual_position || user_hold || hil_altitude)
+ 						     && !_vehicle_status.failsafe && _vehicle_control_mode.flag_armed
+ 						     && !_vehicle_land_detected.landed && !_vehicle_land_detected.ground_contact;
+-				const bool input_valid = allowed && _param_vector_aux_att.get() && rc_input_valid
+-							 && switches_valid && vector_enabled && !level_requested;
+-				const float limit = vector_control::spatialAttitudeLimit(_param_spatial_limit.get());
+-				const float roll_target = input_valid && _param_rc_map_aux1.get() > 0 && PX4_ISFINITE(manual.aux1)
+-							 ? math::constrain(manual.aux1, -1.f, 1.f) * limit : 0.f;
+-				const float independent_pitch = input_valid && _param_rc_map_aux2.get() > 0 && PX4_ISFINITE(manual.aux2)
+-							       ? math::constrain(manual.aux2, -1.f, 1.f) * limit : 0.f;
++				const bool input_valid = hil_input_valid || (allowed && _param_vector_aux_att.get() && rc_input_valid
++                             && switches_valid && vector_enabled && !level_requested);
++				const float limit = hil_interface ? math::radians(hil_altitude ? 45.f : 120.f) : vector_control::spatialAttitudeLimit(_param_spatial_limit.get());
++				const float roll_target = input_valid && (hil_input_valid || _param_rc_map_aux1.get() > 0) && PX4_ISFINITE(manual.aux1)
++							 ? (hil_input_valid ? vector_control::hilManualAngle(manual.aux1, hil_altitude ? 45.f : 120.f) : math::constrain(manual.aux1, -1.f, 1.f) * limit) : 0.f;
++				const float independent_pitch = input_valid && (hil_input_valid || _param_rc_map_aux2.get() > 0) && PX4_ISFINITE(manual.aux2)
++							       ? (hil_input_valid ? vector_control::hilManualAngle(manual.aux2, hil_altitude ? 45.f : 120.f) : math::constrain(manual.aux2, -1.f, 1.f) * limit) : 0.f;
+ 				vector_control::AttitudeReference::Settings settings;
+ 				settings.force_space = vector_control::capabilities(_param_vector_airframe.get()).force_space;
+ 				settings.bank_limit = settings.pitch_limit = limit;

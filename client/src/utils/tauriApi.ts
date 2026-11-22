@@ -1,6 +1,7 @@
 /** Tauri desktop IPC adapter. The standalone HTTP/web edition is removed. */
 import { validateXmlSource } from './xmlDiagnostics';
 import { compareXmlContent, parseXmlSemantics } from './xmlContentEqual';
+import { tryStoreLocalText } from './browserCache';
 
 // Detect Tauri runtime
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -89,14 +90,16 @@ export function getPlotJugglerRate(): number {
   const previous = Number(localStorage.getItem(LEGACY_PLOTJUGGLER_RATE_KEY));
   return Number.isInteger(previous) && previous > 0 && previous <= 200 ? previous : 50;
 }
-export async function setPlotJugglerRate(rateHz: number): Promise<PlotJugglerStatus> {
+export async function setPlotJugglerRate(rateHz: number): Promise<PlotJugglerStatus & { preferenceSaved: boolean }> {
   if (!Number.isInteger(rateHz) || rateHz < 0 || rateHz > 200) {
     throw new Error('PlotJuggler 发送频率须为 0～200 Hz 的整数。');
   }
   const status = await call('plotjuggler_set_rate', { rateHz });
-  localStorage.setItem(PLOTJUGGLER_RATE_KEY, String(rateHz));
-  localStorage.removeItem(LEGACY_PLOTJUGGLER_RATE_KEY);
-  return status;
+  const preferenceSaved = tryStoreLocalText(PLOTJUGGLER_RATE_KEY, String(rateHz));
+  if (preferenceSaved) {
+    try { localStorage.removeItem(LEGACY_PLOTJUGGLER_RATE_KEY); } catch { /* The applied rate remains valid. */ }
+  }
+  return { ...status, preferenceSaved };
 }
 
 // Local serial/network assistant; separate from simulator transport.

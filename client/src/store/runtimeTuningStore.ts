@@ -22,6 +22,9 @@ export function submitRuntimeEdits(edits: RuntimeEdit[], modelNames = projectMod
     useRuntimeTuningStore.setState({ message: '修改已保留；运行端未就绪，未实时应用', error: true }); return;
   }
   if (!modelNames.includes(snapshot.model)) { useRuntimeTuningStore.setState({ message: `当前运行 ${snapshot.model}，与编辑模型不匹配，未实时应用`, error: true }); return; }
+  if (edits.some(edit => edit.key.startsWith('_tuning/wind/')) && (snapshot.tuning.wind || 0) < 1) {
+    useRuntimeTuningStore.setState({ message: '当前运行端尚不支持波形风场，请更新仿真机固件；修改已保留', error: true }); return;
+  }
   if (edits.some(edit => edit.key.startsWith('_tuning/inertia/')) && !snapshot.tuning.inertia) {
     useRuntimeTuningStore.setState({ message: '当前运行端尚不支持惯量实时更新，请更新仿真机固件；修改已保留', error: true }); return;
   }
@@ -33,8 +36,13 @@ export function submitRuntimeEdits(edits: RuntimeEdit[], modelNames = projectMod
     useRuntimeTuningStore.setState({ busy: true, message: '正在应用并回读…', error: false });
     try {
       // Keep limit pairs in the same atomic transaction. Do not split a group.
-      if (edits.length > 12) throw new Error('一次修改超过 12 个参数，请分组提交');
-      const actual = await runtimeApply(instance, snapshot, edits);
+      const wind = edits.filter(edit => edit.key.startsWith('_tuning/wind/'));
+      const other = edits.filter(edit => !edit.key.startsWith('_tuning/wind/'));
+      if (wind.length && wind.length !== 14) throw new Error('风场参数必须完整提交 14 项');
+      if (other.length > 12) throw new Error('一次修改超过 12 个参数，请分组提交');
+      let actual = snapshot;
+      if (wind.length) actual = await runtimeApply(instance, actual, wind);
+      if (other.length) actual = await runtimeApply(instance, actual, other);
       useRuntimeTuningStore.setState(state => ({ snapshot: actual, applied: state.applied + edits.length,
         message: `${instance.toString().padStart(2, '0')} 已应用 ${edits.length} 项 · t=${actual.timestamp.toFixed(3)} s；保存后下次启动保留`, error: false }));
     } catch (error) { useRuntimeTuningStore.setState({ message: String(error), error: true }); }

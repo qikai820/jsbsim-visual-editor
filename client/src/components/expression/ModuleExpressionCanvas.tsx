@@ -112,6 +112,11 @@ function signalRoutingError(edges: Edge[]) {
   return blocked ? `${blocked} 条连线空间不足，请移动相邻组件或调整手动折点；也可点击自动布局。` : '';
 }
 
+function signalRoutingFailure(error: unknown) {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `连线整理未完成，已保留全部连接。${reason ? `原因：${reason}。` : ''}可点击自动布局重试。`;
+}
+
 function InitialPropertyValue({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState('');
@@ -776,7 +781,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       const placementKey = signalRoutingKey(placed.nodes, placed.edges);
       activeLayoutKey.current = placementKey;
       let routedEdges = placed.edges;
-      let routingFailed = false;
+      let routingFailure = '';
       if (isSignal) {
         try {
           routedEdges = await routeSignalGraph(placed.nodes, placed.edges, instance.getInternalNode, controller.signal);
@@ -784,7 +789,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
           if (controller.signal.aborted) return;
           // ELK already produced a complete layout. Keep it on screen even
           // if optional path refinement fails or times out.
-          routingFailed = true;
+          routingFailure = signalRoutingFailure(error);
           console.warn('[signal routing]', error);
         }
       }
@@ -796,7 +801,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       });
       edgesRef.current = currentEdges;
       lastRoutedKey.current = signalRoutingKey(nodesRef.current, currentEdges);
-      if (isSignal) setLayoutError(routingFailed ? '连线整理未完成，已显示全部连接，可点击自动布局重试。' : signalRoutingError(currentEdges));
+      if (isSignal) setLayoutError(routingFailure || signalRoutingError(currentEdges));
       setEdges(currentEdges);
       persistLayout();
     } catch (error) {
@@ -849,7 +854,7 @@ export default function ModuleExpressionCanvas(props: ModuleExpressionCanvasProp
       } catch (error) {
         if (controller.signal.aborted) return;
         console.error('[signal routing]', error);
-        if (!cancelled) setLayoutError('连线整理失败，请点击自动布局重试。');
+        if (!cancelled && latestRoutingKey.current === routingKey) setLayoutError(signalRoutingFailure(error));
       } finally {
         if (!cancelled) setRoutingBusy(false);
       }

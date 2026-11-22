@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 export async function uiBrowser(source,{port=5192,width=1360,height=900,setup=''}={}){
- const root=process.cwd(),work=await mkdtemp('/tmp/px4-ui-'),name='.px4-ui-'+process.pid;
+ const root=process.cwd(),work=await mkdtemp('/tmp/px4-ui-'),name='.'+work.split('/').pop();
  const entry=root+'/client/'+name+'.html',module=root+'/client/'+name+'.tsx';
  let vite,chrome,ws;
  const close=async()=>{ws?.close();vite?.kill('SIGTERM');chrome?.kill('SIGTERM');await Promise.all([rm(entry,{force:true}),rm(module,{force:true})]);await new Promise(r=>setTimeout(r,200));await rm(work,{recursive:true,force:true,maxRetries:4,retryDelay:100});};

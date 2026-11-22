@@ -1,4 +1,5 @@
 import type { Edge, InternalNode, Node } from '@xyflow/react';
+import SignalGraphWorker from './signalGraph.worker?worker';
 
 export interface SignalWorkerRequest {
   nodes: Node[];
@@ -17,7 +18,14 @@ export function solveSignalGraph(
   return new Promise((resolve, reject) => {
     const aborted = () => new DOMException('Signal graph job cancelled', 'AbortError');
     if (options.signal?.aborted) { reject(aborted()); return; }
-    const worker = new Worker(new URL('./signalGraph.worker.ts', import.meta.url), { type: 'module' });
+    // Vite selects a module worker in dev and a self-contained classic worker
+    // in production. Desktop WebViews need not load a chain of worker modules.
+    let worker: Worker;
+    try { worker = new SignalGraphWorker(); }
+    catch (error) {
+      reject(new Error(`无法启动连线计算线程：${error instanceof Error ? error.message : String(error)}`));
+      return;
+    }
     const dispose = () => {
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', cancel);
@@ -25,15 +33,18 @@ export function solveSignalGraph(
     };
     const fail = (error: Error) => { dispose(); reject(error); };
     const cancel = () => fail(aborted());
-    const timer = setTimeout(() => fail(new Error('Signal graph solver timed out')), 60000);
+    const timer = setTimeout(() => fail(new Error('连线计算超时（60 秒）')), 60000);
     options.signal?.addEventListener('abort', cancel, { once: true });
     worker.onmessage = ({ data }: MessageEvent<{ result?: SignalWorkerResult; error?: string }>) => {
       dispose();
       if (data.result) resolve(data.result);
       else reject(new Error(data.error || 'Signal graph solver failed'));
     };
-    worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || 'Signal graph worker failed')); };
-    worker.onmessageerror = () => fail(new Error('Invalid signal graph worker result'));
+    worker.onerror = event => {
+      event.preventDefault();
+      fail(new Error(`连线计算线程加载或执行失败${event.message ? `：${event.message}` : ''}`));
+    };
+    worker.onmessageerror = () => fail(new Error('无法读取连线计算线程的结果'));
     try {
       // Send geometry only. Node data and edge labels may contain React values
       // or functions, and copying entire expression trees is unnecessary.

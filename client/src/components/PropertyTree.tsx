@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Telemetry } from '../sim/useSimSocket';
 import { formatValueWithUnit, type UnitSystem } from '../utils/unitConversion';
+import { cacheLocalText, tryStoreLocalText } from '../utils/browserCache';
 
 interface PropertyTreeProps {
   telemetry: Telemetry | null;
@@ -136,7 +137,7 @@ function TreeNodeView({
                 else {
                   onPin(node.path);
                   const saved = readStringList('jsbsim-global-variables');
-                  if (!saved.includes(node.path)) localStorage.setItem('jsbsim-global-variables', JSON.stringify([...saved, node.path]));
+                  if (!saved.includes(node.path)) tryStoreLocalText('jsbsim-global-variables', JSON.stringify([...saved, node.path]));
                 }
               }}
               className={`ptree-pin${isPinned ? ' is-pinned' : ''}`}
@@ -179,7 +180,7 @@ export default function PropertyTree({ telemetry, pinnedPaths, onPin, onUnpin, u
     };
     collect(tree);
     if (paths.length) {
-      localStorage.setItem('jsbsim-available-variables', JSON.stringify(paths));
+      cacheLocalText('jsbsim-available-variables', JSON.stringify(paths));
       window.dispatchEvent(new CustomEvent('jsbsim-variables-updated', { detail: paths }));
     }
   }, [tree]);

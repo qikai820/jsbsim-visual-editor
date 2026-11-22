@@ -1,7 +1,7 @@
 //! Local serial/network debug tool, independent of simulator transport.
 #[path = "assistant_network.rs"]
 mod network;
-pub use network::NetworkConfig;
+pub use network::{NetworkConfig, NetworkMode};
 use network::{NetworkRead, NetworkTransport, PacketMeta};
 use serde::{Deserialize, Serialize};
 use serialport::{DataBits, FlowControl, Parity, SerialPortType, StopBits};
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -104,7 +104,7 @@ impl PortConfig {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SerialEvent {
     Data { session_id: u64, direction: String, time_ms: u64, elapsed_us: u64, bytes: Vec<u8>, #[serde(flatten)] meta: PacketMeta },
@@ -116,7 +116,7 @@ pub enum SerialEvent {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
-    session_id: u64,
+    pub session_id: u64,
     path: String,
 }
 
@@ -168,11 +168,21 @@ impl DebugTransport {
 enum WorkerCommand {
     PinPeer(std::net::SocketAddr, mpsc::Sender<Result<(), String>>),
     Write(Vec<u8>, mpsc::Sender<Result<usize, String>>),
+    DatagramWriter(mpsc::Sender<Result<DatagramWriter,String>>),
     StartRecord(String, mpsc::Sender<Result<(), String>>),
     StopRecord(mpsc::Sender<Result<(), String>>),
     SetDtr(bool, mpsc::Sender<Result<(), String>>),
     SetRts(bool, mpsc::Sender<Result<(), String>>),
     Stop,
+}
+
+struct DatagramEndpoint { socket: std::net::UdpSocket, target: std::net::SocketAddr }
+/// A write-only lease on the pinned UDP endpoint. The receiving worker owns
+/// the socket: cached control writers must not keep a closed port occupied.
+/// Control scheduling must not wait behind the debug worker's blocking reads.
+pub struct DatagramWriter { endpoint: Weak<DatagramEndpoint> }
+impl DatagramWriter {
+    pub fn write(&self,bytes:&[u8])->Result<usize,String>{if bytes.is_empty()||bytes.len()>65507{return Err("UDP 控制帧长度无效".into());}let endpoint=self.endpoint.upgrade().ok_or("UDP 转发会话已关闭或目标已变化")?;let sent=endpoint.socket.send_to(bytes,endpoint.target).map_err(|e|format!("控制帧发送失败：{e}"))?;if sent!=bytes.len(){return Err("UDP 控制帧发送不完整".into());}Ok(sent)}
 }
 
 struct Session {
@@ -214,15 +224,16 @@ fn worker(
     let mut recording: Option<BufWriter<File>> = None;
     let mut last_record_flush = Instant::now();
     let mut buffer = [0u8; 65536];
+    let mut datagram_endpoint: Option<Arc<DatagramEndpoint>> = None;
     port.endpoint(session_id, &on_event);
     let mut running = true;
     while running {
         while let Ok(command) = receiver.try_recv() {
             match command {
-                WorkerCommand::PinPeer(address, reply) => { let _ = reply.send(match &mut port {
+                WorkerCommand::PinPeer(address, reply) => { let result = match &mut port {
                     DebugTransport::Network(network) => network.pin_peer(address),
                     _ => Err("仅 UDP 通道支持固定回复目标".into()),
-                }); }
+                }; if result.is_ok() && datagram_endpoint.as_ref().is_some_and(|endpoint| endpoint.target != address) { datagram_endpoint = None; } let _ = reply.send(result); }
                 WorkerCommand::Write(bytes, reply) => {
                     let result = port.write(&bytes);
                     if let Ok(meta) = &result {
@@ -238,6 +249,11 @@ fn worker(
                     }
                     let _ = reply.send(result.map(|_| bytes.len()));
                 }
+                WorkerCommand::DatagramWriter(reply)=>{let result=(|| {
+                    let DebugTransport::Network(NetworkTransport::Udp{socket,target:Some(target),..})=&port else {return Err("持续控制需要已固定目标的 UDP 仿真转发通道".into());};
+                    if datagram_endpoint.is_none() {datagram_endpoint=Some(Arc::new(DatagramEndpoint{socket:socket.try_clone().map_err(|e|e.to_string())?,target:*target}));}
+                    Ok(DatagramWriter{endpoint:Arc::downgrade(datagram_endpoint.as_ref().unwrap())})
+                })();let _=reply.send(result);}
                 WorkerCommand::StartRecord(path, reply) => {
                     if recording.is_some() {
                         let _ = reply.send(Err("记录已在进行中".into()));
@@ -378,6 +394,8 @@ impl SerialManager {
         self.request(id, |reply| WorkerCommand::Write(bytes, reply))
     }
 
+    pub fn datagram_writer(&self,id:u64)->Result<DatagramWriter,String>{self.request(id,WorkerCommand::DatagramWriter)}
+
     pub fn pin_peer(&self, id: u64, address: std::net::SocketAddr) -> Result<(), String> {
         self.request(id, |reply| WorkerCommand::PinPeer(address, reply))
     }
@@ -403,6 +421,17 @@ impl SerialManager {
         let mut guard = self.session.lock().map_err(|error| error.to_string())?;
         let session = guard.take().ok_or("串口会话已关闭")?;
         if session.id != id { *guard = Some(session); return Err("串口会话已变化".into()); }
+        let _ = session.sender.send(WorkerCommand::Stop);
+        drop(guard);
+        session.handle.join().map_err(|_| "串口线程异常退出".to_string())
+    }
+
+    /// Reclaim only the observed old session; a delayed reconnect must never
+    /// close a newer session that acquired this manager in the meantime.
+    pub fn close_if_current(&self, id: u64) -> Result<(), String> {
+        let mut guard = self.session.lock().map_err(|error| error.to_string())?;
+        if guard.as_ref().map(|session| session.id) != Some(id) { return Ok(()); }
+        let session = guard.take().unwrap();
         let _ = session.sender.send(WorkerCommand::Stop);
         drop(guard);
         session.handle.join().map_err(|_| "串口线程异常退出".to_string())
@@ -494,6 +523,8 @@ pub async fn export(window: tauri::WebviewWindow, kind: String, bytes: Vec<u8>) 
         "binary" => ("serial-data.bin", "*.bin", "bin"),
         "csv" => ("serial-frames.csv", "*.csv", "csv"),
         "json" => ("serial-frames.json", "*.json", "json"),
+        "flight-test" => ("flight-test.xml", "*.xml", "xml"),
+        "flight-test-report" => ("flight-test-report.json", "*.json", "json"),
         _ => return Err("导出格式无效".into()),
     };
     if bytes.len() > 32 * 1024 * 1024 { return Err("当前窗口数据过大，请使用原始记录文件".into()); }
@@ -503,7 +534,8 @@ pub async fn export(window: tauri::WebviewWindow, kind: String, bytes: Vec<u8>) 
         gtk::glib::MainContext::default().spawn_local(async move {
             let result = async {
                 let parent = parent.gtk_window().map_err(|error| error.to_string())?;
-                let dialog = gtk::FileChooserNative::new(Some("导出调试数据"), Some(&parent), gtk::FileChooserAction::Save,
+                let title=if kind.starts_with("flight-test"){"保存仿真测试文件"}else{"导出调试数据"};
+                let dialog = gtk::FileChooserNative::new(Some(title), Some(&parent), gtk::FileChooserAction::Save,
                     Some("保存"), Some("取消"));
                 dialog.set_modal(true);
                 dialog.set_do_overwrite_confirmation(true);
@@ -803,6 +835,81 @@ mod tests {
         let manager=SerialManager::new();let(channel,events)=event_channel();let info=manager.open_network(network_config(NetworkMode::Udp),channel).unwrap();let address=next_event(&events,"endpoint")["localAddr"].as_str().unwrap().to_string();
         let chosen=UdpSocket::bind("127.0.0.1:0").unwrap();chosen.set_read_timeout(Some(Duration::from_secs(1))).unwrap();let other=UdpSocket::bind("127.0.0.1:0").unwrap();
         manager.pin_peer(info.session_id,chosen.local_addr().unwrap()).unwrap();other.send_to(b"other",&address).unwrap();next_event(&events,"data");manager.write(info.session_id,b"chosen".to_vec()).unwrap();let mut buffer=[0;16];let(n,_)=chosen.recv_from(&mut buffer).unwrap();assert_eq!(&buffer[..n],b"chosen");manager.close(info.session_id).unwrap();
+    }
+
+    #[test]
+    fn cached_udp_writers_do_not_hold_port_after_close_or_shutdown() {
+        let manager = SerialManager::new();
+        let (channel, events) = event_channel();
+        let mut config = network_config(NetworkMode::Udp);
+        let info = manager.open_network(config.clone(), channel).unwrap();
+        let address: std::net::SocketAddr = next_event(&events, "endpoint")["localAddr"].as_str().unwrap().parse().unwrap();
+        config.local_port = address.port();
+        let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        manager.pin_peer(info.session_id, peer.local_addr().unwrap()).unwrap();
+        let old_writer = manager.datagram_writer(info.session_id).unwrap();
+        let another_cached_writer = manager.datagram_writer(info.session_id).unwrap();
+        old_writer.write(b"before").unwrap();
+        let mut buffer = [0; 16];
+        assert_eq!(peer.recv_from(&mut buffer).unwrap().0, 6);
+        manager.close(info.session_id).unwrap();
+        assert!(old_writer.write(b"stale").is_err());
+        assert!(another_cached_writer.write(b"stale").is_err());
+        // Keep both cached handles alive while reopening the exact same port.
+        let (channel, events) = event_channel();
+        let reopened = manager.open_network(config, channel).unwrap();
+        assert_eq!(next_event(&events, "endpoint")["localAddr"], address.to_string());
+        manager.pin_peer(reopened.session_id, peer.local_addr().unwrap()).unwrap();
+        let new_writer = manager.datagram_writer(reopened.session_id).unwrap();
+        new_writer.write(b"after").unwrap();
+        assert_eq!(peer.recv_from(&mut buffer).unwrap().0, 5);
+        assert!(old_writer.write(b"stale").is_err());
+        manager.shutdown();
+        assert!(new_writer.write(b"stale").is_err());
+        UdpSocket::bind(address).expect("shutdown releases the port despite cached writers");
+    }
+
+    #[test]
+    fn changing_udp_peer_revokes_cached_writer() {
+        let manager = SerialManager::new();
+        let (channel, _events) = event_channel();
+        let info = manager.open_network(network_config(NetworkMode::Udp), channel).unwrap();
+        let first = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let second = UdpSocket::bind("127.0.0.1:0").unwrap();
+        second.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        manager.pin_peer(info.session_id, first.local_addr().unwrap()).unwrap();
+        let stale = manager.datagram_writer(info.session_id).unwrap();
+        manager.pin_peer(info.session_id, second.local_addr().unwrap()).unwrap();
+        assert!(stale.write(b"stale").is_err());
+        manager.datagram_writer(info.session_id).unwrap().write(b"current").unwrap();
+        let mut buffer = [0; 16];
+        assert_eq!(second.recv_from(&mut buffer).unwrap().0, 7);
+        manager.close(info.session_id).unwrap();
+    }
+
+    #[test]
+    fn stale_session_cleanup_never_closes_a_new_owner() {
+        let manager = SerialManager::new();
+        let (channel, events) = event_channel();
+        let first = manager.open_network(network_config(NetworkMode::Udp), channel).unwrap();
+        let address: std::net::SocketAddr = next_event(&events, "endpoint")["localAddr"].as_str().unwrap().parse().unwrap();
+        let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        manager.pin_peer(first.session_id, peer.local_addr().unwrap()).unwrap();
+        let old_writer = manager.datagram_writer(first.session_id).unwrap();
+        manager.close_if_current(first.session_id).unwrap();
+        assert!(old_writer.write(b"stale").is_err());
+        let mut config = network_config(NetworkMode::Udp); config.local_port = address.port();
+        let (channel, _events) = event_channel();
+        let current = manager.open_network(config, channel).unwrap();
+        manager.close_if_current(first.session_id).unwrap();
+        manager.pin_peer(current.session_id, peer.local_addr().unwrap()).unwrap();
+        manager.datagram_writer(current.session_id).unwrap().write(b"current").unwrap();
+        let mut buffer = [0; 16];
+        assert_eq!(peer.recv_from(&mut buffer).unwrap().0, 7);
+        manager.close_if_current(current.session_id).unwrap();
+        manager.close_if_current(current.session_id).unwrap();
     }
 
 }

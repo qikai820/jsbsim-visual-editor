@@ -1,3 +1,8 @@
+import WindProfileEditor from './WindProfileEditor';
+import { profileFromEnvironment, windProfileEdits } from '../sim/windProfile';
+import { environmentFromProject, environmentEdits } from '../sim/runtimeParameters';
+import { withoutAutomaticRuntimeTuning } from '../sim/runtimeTuningOrigin';
+import { useRuntimeTuningStore, refreshRuntimeSnapshot, submitRuntimeEdits } from '../store/runtimeTuningStore';
 import { displayNumber } from '../utils/displayNumber';
 import { useEffect, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
@@ -82,6 +87,7 @@ function getUnitStr(p: any, fallback: string): string {
 }
 
 export default function PropertyPanel() {
+  const windTuning = useRuntimeTuningStore();
   const { nodes, edges, onConnect, selectedNodeId, updateNodeParams, removeNode, setSelectedNode, setFocusedNodeId, editingSubFileId } = useFlowStore();
   const [sysEditingExpr, setSysEditingExpr] = useState<{ chIdx: number; itemIdx: number } | null>(null);
   const [editingCompProp, setEditingCompProp] = useState<{ chIdx: number; itemIdx: number; field: string } | null>(null);
@@ -567,8 +573,21 @@ export default function PropertyPanel() {
         />
       </div>
       <div className="prop-divider" />
+      {node.data.componentType === 'environment' && <WindProfileEditor
+        value={profileFromEnvironment(environmentFromProject({ nodes: [node] }) || {})}
+        onChange={profile => {
+          withoutAutomaticRuntimeTuning(() => updateNodeParams(node.id, { wind_profile: profile }));
+          useRuntimeTuningStore.setState({ message: '风场修改已保留，点击“应用风场”生效', error: false });
+        }}
+        onApply={profile => { void refreshRuntimeSnapshot().then(() => {
+          const edits = windProfileEdits(profile);
+          if (!profile.active) edits.push(...environmentEdits(environmentFromProject({ nodes: [node] }) || {}).filter(edit => edit.key.startsWith('atmosphere/wind-')));
+          submitRuntimeEdits(edits);
+        }).catch(error => useRuntimeTuningStore.setState({ message: String(error), error: true })); }}
+        busy={windTuning.busy} message={windTuning.message === '等待运行端' ? undefined : windTuning.message} error={windTuning.error} />}
       {Object.entries(def.params)
         .filter(([key]) => {
+          if (node.data.componentType === 'environment' && node.data.params.wind_profile?.active && ['wind_north_fps', 'wind_east_fps', 'wind_down_fps'].includes(key)) return false;
           const selectedType = node.data.params?.type;
           const hilInput = node.data.componentType === 'input' && selectedType === 'HIL_ACTUATOR_CONTROLS';
           const hilOutput = node.data.componentType === 'output' && (selectedType === 'HIL_SENSOR' || selectedType === 'HIL_GPS');

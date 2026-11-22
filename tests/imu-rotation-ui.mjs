@@ -9,6 +9,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const modelName = process.env.IMU_ROTATION_MODEL || 'voliro_t';
+assert.ok(['voliro_t', 'MorphQuad'].includes(modelName));
+const modelRoot = process.env.IMU_ROTATION_MODEL_ROOT || path.resolve(root, '../jsbsim_realtime/data/aviation');
 const work = await mkdtemp(path.join(tmpdir(), 'imu-rotation-ui-'));
 const name = `.imu-rotation-${process.pid}`;
 const entry = path.join(root, 'client', `${name}.html`);
@@ -30,14 +33,16 @@ try {
     if (value.error) throw Error(value.error);
     return value;
   };
-  const sensorPath = 'aircraft/voliro_t/SensorImuPX4.xml';
-  const wmmPath = 'aircraft/voliro_t/VoliroTMagWmm.xml';
-  const sensor = await readFile(path.resolve(root, '../jsbsim_realtime/data/aviation', sensorPath), 'utf8');
-  const wmm = await readFile(path.resolve(root, '../jsbsim_realtime/data/aviation', wmmPath), 'utf8');
-  const graph = backend('load_model', { model: 'voliro_t', documents: {
-    'aircraft/voliro_t/voliro_t.xml': '<fdm_config name="voliro_t"><system file="SensorImuPX4"/><system file="VoliroTMagWmm"/></fdm_config>',
-    [sensorPath]: sensor, [wmmPath]: wmm,
-  } });
+  const sensorPath = `aircraft/${modelName}/SensorImuPX4.xml`;
+  const wmmPath = modelName === 'voliro_t' ? `aircraft/${modelName}/VoliroTMagWmm.xml` : null;
+  const sensor = await readFile(path.join(modelRoot, sensorPath), 'utf8');
+  const wmm = wmmPath ? await readFile(path.join(modelRoot, wmmPath), 'utf8') : null;
+  const documents = {
+    [`aircraft/${modelName}/${modelName}.xml`]: `<fdm_config name="${modelName}"><system file="SensorImuPX4"/>${wmmPath ? '<system file="VoliroTMagWmm"/>' : ''}</fdm_config>`,
+    [sensorPath]: sensor,
+  };
+  if (wmmPath) documents[wmmPath] = wmm;
+  const graph = backend('load_model', { model: modelName, documents });
   server = createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('Access-Control-Allow-Headers', 'content-type');
@@ -58,7 +63,7 @@ import{prepareModelXml}from'./src/utils/modelXmlSync';import{projectParameterCha
 const baseline=${JSON.stringify(graph)};useFlowStore.getState().loadProject(structuredClone(baseline));
 const backend=async(command,args)=>{const r=await fetch(${JSON.stringify(endpoint)},{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command,args})});const v=await r.json();if(v.error)throw Error(v.error);return v;};
 const generators={generateXml:async data=>(await backend('generate_xml',{data})).xml,generateSubfile:async(type,name,params)=>(await backend('generate_subfile',{req:{type,name,params}})).xml};
-window.__prepare=()=>prepareModelXml(useFlowStore.getState(),baseline,'voliro_t',generators);
+window.__prepare=()=>prepareModelXml(useFlowStore.getState(),baseline,${JSON.stringify(modelName)},generators);
 window.__edits=()=>projectParameterChanges(baseline,useFlowStore.getState());window.__changes=0;
 window.__roundtrips=baseline.nodes.filter(n=>n.data.componentType==='system').map(node=>{const p=node.data.params;const before=systemCanvasChannels(JSON.parse(p.channels||'[]'),JSON.parse(p.topLevelItems||'[]'));const g=buildSignalGraph(before,[],{layout:false});return {before,after:graphToChannels(g.nodes,g.edges,before)};});
 function Harness(){const nodes=useFlowStore(s=>s.nodes),node=nodes.find(n=>n.data.params.name==='Sensor - IMU');const p=node.data.params;
@@ -99,17 +104,19 @@ createRoot(document.getElementById('root')).render(<Harness/>);`);
   assert.equal(edits.length, 1); assert.equal(edits[0].value, 24); assert.match(edits[0].key, /^_tuning\/value\/n/);
   const saved = await evaluate('window.__prepare()');
   assert.deepEqual(saved.filter(doc => doc.dirty).map(doc => doc.path), [sensorPath]);
-  assert.equal(saved.find(doc => doc.path === sensorPath).content, sensor.replace('<function><value>0</value></function>', '<function><value>24</value></function>'), 'one constant edit preserves all other source bytes');
-  assert.equal(saved.find(doc => doc.path === wmmPath).content, wmm);
+  const expectedSensor = sensor.replace(/(<fcs_function name="sensor\/imu\/rotation">\s*<function><value>)[^<]*(<\/value><\/function>)/,
+    (_, before, after) => `${before}24${after}`);
+  assert.equal(saved.find(doc => doc.path === sensorPath).content, expectedSensor, 'one constant edit preserves all other source bytes');
+  if (wmmPath) assert.equal(saved.find(doc => doc.path === wmmPath).content, wmm);
   if (process.env.IMU_ROTATION_SCREENSHOT) {
     await evaluate(`window.__rf.setViewport({x:120,y:150,zoom:1})`);
     await new Promise(resolve => setTimeout(resolve, 300));
     const screenshot = await send('Page.captureScreenshot', { format: 'png' });
     await writeFile(process.env.IMU_ROTATION_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
   }
-  console.log('PASS: real IMU/WMM import, graph roundtrip, visible constant edit, one runtime parameter, exact XML save');
+  console.log(`PASS ${modelName}: real IMU import${wmmPath ? '/WMM' : ''}, graph roundtrip, visible constant edit, one runtime parameter, exact XML save`);
 } finally {
-  if (socket?.readyState === WebSocket.OPEN) socket.close();
+  if (socket && socket.readyState === WebSocket.OPEN) socket.close();
   chrome?.kill('SIGTERM'); vite?.kill('SIGTERM');
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   await Promise.all([rm(entry, { force: true }), rm(module, { force: true })]);

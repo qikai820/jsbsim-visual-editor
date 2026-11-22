@@ -1,3 +1,4 @@
+import { automaticRuntimeTuningSuppressed } from '../sim/runtimeTuningOrigin';
 import { useEffect, useMemo, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
 import { useRuntimeTuningStore, refreshRuntimeSnapshot, submitRuntimeEdits } from '../store/runtimeTuningStore';
@@ -30,6 +31,7 @@ export default function RuntimeTuningPanel() {
     // Numeric controls commit on Enter / blur. Coalesce paired field commits.
     let pending: ReturnType<typeof setTimeout> | undefined, baseline: any;
     const stop = useFlowStore.subscribe((next, previous) => {
+      if (automaticRuntimeTuningSuppressed()) return;
       if (next.nodes === previous.nodes || next.xmlEditBaseline !== previous.xmlEditBaseline || next.aircraft !== previous.aircraft) return;
       const edits = projectParameterChanges(previous, next, runningProject || previous);
       if (!edits.length) {

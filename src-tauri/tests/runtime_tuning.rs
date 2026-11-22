@@ -59,3 +59,24 @@ fn expanded_parameters_require_capability_and_report_atomic_rejection() {
     let error=apply(28,session,"live",&edits,|bytes|{let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(2,request,"invalid_parameter"));Ok(())}).unwrap_err();
     assert!(error.contains("整组"));
 }
+
+#[test]
+fn wind_uses_a_complete_transaction_and_requires_runtime_capability() {
+    let session="0123456789abcd27";
+    let edits:Vec<_>=(0..14).map(|n|Edit{key:format!("_tuning/wind/field-{n}"),value:n as f64}).collect();
+    let bytes=packet(27,19,session,&edits).unwrap();
+    assert_eq!(&bytes[..8],b"VWIN\x1b\x0e\0\0");
+    assert!(packet(27,19,session,&edits[..13]).is_err());
+    let mut mixed=edits.clone();mixed[0].key="atmosphere/wind-east-fps".into();
+    assert!(packet(27,19,session,&mixed).is_err());
+    let frame=|cap:u32,request:u32|json!({"instance_id":"27","model":"live","state":"paused","timestamp":7.5,
+      "monitor":{"tuning":{"version":1,"wind":cap,"session":session,"request":request,"status":"applied","values":edits.iter().map(|e|e.value).collect::<Vec<_>>()}}});
+    ingest(&frame(0,0));
+    assert!(apply(27,session,"live",&edits,|_|panic!("must not send to old firmware")).unwrap_err().contains("更新仿真机固件"));
+    ingest(&frame(1,0));
+    let actual=apply(27,session,"live",&edits,|bytes|{
+      assert_eq!(&bytes[..4],b"VWIN");
+      let request=u32::from_le_bytes(bytes[8..12].try_into().unwrap());ingest(&frame(1,request));Ok(())
+    }).unwrap();
+    assert_eq!(actual["timestamp"],7.5);
+}

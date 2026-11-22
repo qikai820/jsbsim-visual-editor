@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Px4Connection } from '../px4/connection';
 import { metadataLabel, parseMetadata, type MetadataCatalog } from '../px4/metadata';
 import { downloadLog, loadVehicleMetadata, readLogs, readParameters, writeParameter, type LogEntry, type Parameter, type UlogSummary } from '../px4/services';
 import { Px4Shell, type TerminalChannel } from '../px4/shell';
+import { Px4Messages as Px4MessageBuffer } from '../px4/messages';
+import { rebootFlightController, switchSimulationMode } from '../px4/simulation';
 import { selectSimulatorPx4Source, simulatorPx4AttachError, simulatorPx4Sources } from '../px4/simulatorSource';
 import { useFlowStore } from '../store/flowStore';
 import { useSignalMonitorStore } from '../store/signalMonitorStore';
 import NshTerminal from './NshTerminal';
 import Px4RouterSettings from './Px4RouterSettings';
 import Px4ParameterEditor from './Px4ParameterEditor';
+import Px4FlightTest from './Px4FlightTest';
+import Px4Messages from './Px4Messages';
+import { sessionIsActive, useFlightTestStore } from '../flight-test/session';
 import { usePx4Router } from '../px4/router';
 import './Px4Toolbox.css';
 
@@ -22,22 +27,41 @@ const logTime = (n: number) => n ? new Date(n*1000).toLocaleString('zh-CN', { ho
 const valueText = (p: Parameter) => p.type === 9 ? String(Number(p.value.toPrecision(7))) : String(p.value);
 const typeText: Record<number,string> = { 1:'UINT8',2:'INT8',3:'UINT16',4:'INT16',5:'UINT32',6:'INT32',9:'FLOAT' };
 
-export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
-  const nodes = useFlowStore(s => s.nodes), instance = useSignalMonitorStore(s => s.instance);
+export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativeWindow = false, windowControls, onWindowDrag, onWindowMaximize }: { onClose: () => void; visible?: boolean; onShowScene?: () => void; nativeWindow?: boolean; windowControls?:ReactNode; onWindowDrag?:(event:PointerEvent<HTMLElement>)=>void; onWindowMaximize?:()=>void }) {
+  const nodes = useFlowStore(s => s.nodes), selectedInstance = useSignalMonitorStore(s => s.instance);
+  const sourceSwitching = useFlightTestStore(s=>s.rcSourceSwitching);
+  const testRunning = useFlightTestStore(sessionIsActive), runInstance = useFlightTestStore(s => s.runInstance);
+  const testingRequest = useFlightTestStore(s => s.toolboxTestingRequest);
+  const instance = (testRunning||sourceSwitching) && runInstance !== null ? String(runInstance).padStart(2, '0') : selectedInstance;
   const router = usePx4Router();
   const routeConfig = router.snapshot?.state==='running' ? router.snapshot.active_config : router.snapshot?.config;
   const sources = useMemo(() => simulatorPx4Sources(nodes, routeConfig, router.snapshot?.state !== 'stopped'), [nodes,JSON.stringify(routeConfig),router.snapshot?.state]);
   const [sourceKey, setSourceKey] = useState('');
   const source = selectSimulatorPx4Source(sources, sourceKey);
   const routerReady=!!router.snapshot||!!router.error;
-  const sourceIdentity = JSON.stringify([routerReady,router.snapshot?.simulator,source.service ? 'service' : instance,source]);
+  const nextSourceIdentity = JSON.stringify([routerReady,router.snapshot?.simulator,source.service ? 'service' : instance,source]);
+  const sourceLease = useRef(nextSourceIdentity);
+  // Selecting another aircraft only changes the view during a run. Rebuilding
+  // this transport would close the native runner's pinned session.
+  if (!testRunning&&!sourceSwitching) sourceLease.current = nextSourceIdentity;
+  const sourceIdentity = sourceLease.current;
   const [sourceState, setSourceState] = useState('等待仿真机数据');
-  const [tab, setTab] = useState<'parameters'|'logs'|'nsh'|'forwarding'>('parameters');
+  const [tab, setTab] = useState<'parameters'|'logs'|'messages'|'nsh'|'forwarding'|'testing'>('parameters');
+  const [px4Messages] = useState(() => new Px4MessageBuffer());
+  const [testFocus, setTestFocus] = useState(false), [connectionOpen, setConnectionOpen] = useState(false);
+  useEffect(() => { if (testingRequest) setTab('testing'); }, [testingRequest]);
   const [error, setError] = useState(''), [message, setMessage] = useState('');
   const [, refresh] = useState(0);
   const mounted = useRef(true), linkRef = useRef<Px4Connection | null>(null), shellRef = useRef<Px4Shell | null>(null);
   const metadataAbort = useRef<AbortController>(), operation = useRef<AbortController>();
-  const [busy, setBusy] = useState(''), [metadataBusy, setMetadataBusy] = useState(false), [metadataError, setMetadataError] = useState('');
+  const beforeTestRun = useCallback(async () => {
+    if (operation.current && !operation.current.signal.aborted) throw Error('其他飞控操作进行中');
+    metadataAbort.current?.abort(); await shellRef.current?.close();
+  }, []);
+  const rebootOperation = useRef(false);
+  const [controllerProgress, setControllerProgress] = useState('');
+  const [operationBusy, setBusy] = useState(''), [metadataBusy, setMetadataBusy] = useState(false), [metadataError, setMetadataError] = useState('');
+  const busy=testRunning?'flight-test':sourceSwitching?'rc-source':operationBusy;
   const [catalog, setCatalog] = useState<MetadataCatalog>(), bundled = useRef<MetadataCatalog>();
   const [parameters, setParameters] = useState<Parameter[]>([]), [expected, setExpected] = useState<number | null>(null), [parameterComplete, setParameterComplete] = useState(false);
   const [mode, setMode] = useState<'metadata'|'prefix'|'custom'>('metadata'), [group, setGroup] = useState('all'), [search, setSearch] = useState(''), [filter, setFilter] = useState('all'), [page, setPage] = useState(0), [selectedParam, setSelectedParam] = useState('');
@@ -52,6 +76,18 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
   const [downloadProgress, setDownloadProgress] = useState<{ id: number; received: number; total: number; index: number; count: number }>();
   const summaryGeneration = useRef(0);
   const link = linkRef.current, shell = shellRef.current, alive = link?.alive || false;
+  const simulationStateKnown = alive && typeof link?.hilEnabled === 'boolean' && typeof link?.armed === 'boolean';
+  const controllerRestarting = busy === 'simulation' || busy === 'reboot';
+  const controllerUnavailable = controllerRestarting ? controllerProgress || '正在重启飞控…'
+    : !source.enabled ? '转发服务未启动，请在“转发设置”中启动服务'
+    : !alive ? '等待飞控心跳，请检查飞控连接与转发服务'
+    : !source.bidirectional ? '当前转发链路为单向，无法发送切换指令'
+    : typeof link?.armed !== 'boolean' ? '正在读取飞控解锁状态…'
+    : link?.armed ? '飞控已解锁，请先上锁后操作'
+    : busy ? '其他飞控操作进行中，请等待完成或取消后操作'
+    : '';
+  const simulationUnavailable = controllerUnavailable || (!simulationStateKnown ? '正在读取飞控模式和解锁状态…' : '');
+  const simulationButtonLabel = busy === 'simulation' ? '正在切换…' : !simulationStateKnown ? '等待飞控状态' : link?.hilEnabled ? '退出仿真' : '进入仿真';
   useEffect(() => {
     mounted.current = true; const abort = new AbortController();
     void fetch('/px4/PX4ParameterFactMetaData.json', { signal: abort.signal }).then(r => { if (!r.ok) throw Error('内置参数库读取失败'); return r.text(); }).then(text => {
@@ -72,21 +108,27 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
     finally { if (mounted.current && metadataAbort.current === abort) setMetadataBusy(false); }
   };
   useEffect(() => {
-    let disposed = false, opening = false, owned: Px4Connection | null = null;
+    let disposed = false, opening = false, owned: Px4Connection | null = null, unsubscribeMessages: (() => void) | undefined;
+    px4Messages.clear();
     operation.current?.abort(); metadataAbort.current?.abort(); setParameters([]); setExpected(null); setParameterComplete(false); setLogs([]); setLogExpected(null); setSelectedLog(''); setSummary(undefined); setCatalog(bundled.current);
     const attach = async () => {
       if (disposed || opening || !routerReady) return;
-      if (owned?.connected && (!owned.lastHeartbeat || Date.now()-owned.lastHeartbeat<5000)) return;
+      // Fast Refresh can preserve a connection created before heartbeat state was added.
+      // Recreate incompatible instances instead of leaving the mode action disabled forever.
+      const compatible = owned instanceof Px4Connection && (!owned.lastHeartbeat || typeof owned.heartbeatMode === 'number');
+      if (owned?.connected && compatible && (!owned.lastHeartbeat || Date.now()-owned.lastHeartbeat<5000)) return;
       if (!source.enabled) { setSourceState('仿真机 MAVLink 转发已关闭'); return; }
       if (!Number.isInteger(source.port) || source.port<1 || source.port>65535) { setSourceState('MAVLink 转发端口无效'); return; }
       opening = true;
       try {
+        unsubscribeMessages?.(); px4Messages.resetAssembly();
         await owned?.close();
-        if (owned) { operation.current?.abort(); metadataAbort.current?.abort(); setParameters([]);setExpected(null);setParameterComplete(false);setLogs([]);setLogExpected(null);setSelectedLogs([]);setCatalog(bundled.current); }
+        if (owned) { if (!rebootOperation.current) operation.current?.abort(); metadataAbort.current?.abort(); setParameters([]);setExpected(null);setParameterComplete(false);setLogs([]);setLogExpected(null);setSelectedLogs([]);setCatalog(bundled.current); }
         const host = await invoke<string|null>('simulator_network_target_get').catch(()=>null);
         if (disposed) return;
         const connection = new Px4Connection({system:0,component:0},host||undefined), terminal = new Px4Shell(connection); let initialized = false;
         owned = connection; linkRef.current = connection; shellRef.current = terminal;
+        unsubscribeMessages = connection.subscribe(frame => px4Messages.receive(frame));
         connection.onChange = () => {
           if (disposed || !mounted.current) return; refresh(v=>v+1);
           if (connection.lastHeartbeat && !initialized) {
@@ -94,7 +136,7 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
             if (source.bidirectional) { void connection.requestMessage(148).catch(e=>{if(!disposed)setError(String(e));}); void loadMetadata(connection); }
           }
         };
-        connection.onError = terminal.onError = e=>{if(!disposed&&mounted.current)setError(e);};
+        connection.onError = terminal.onError = e=>{if(!disposed&&mounted.current&&!rebootOperation.current)setError(e);};
         terminal.onChange = ()=>{if(!disposed&&mounted.current)refresh(v=>v+1);};
         setSourceState('自动接收仿真机转发数据');
         await connection.open({network:{mode:'udp',host:'',port:source.port,localHost:'0.0.0.0',localPort:source.port}});
@@ -104,16 +146,42 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
       finally { opening=false; }
     };
     void attach(); const timer=setInterval(()=>void attach(),2500);
-    return ()=>{disposed=true;clearInterval(timer);operation.current?.abort();metadataAbort.current?.abort();const terminal=shellRef.current;void (async()=>{await terminal?.close();await owned?.close();})().catch(()=>{});if(linkRef.current===owned){linkRef.current=null;shellRef.current=null;}};
-  }, [sourceIdentity]);
+    return ()=>{disposed=true;clearInterval(timer);unsubscribeMessages?.();px4Messages.resetAssembly();operation.current?.abort();metadataAbort.current?.abort();const terminal=shellRef.current;void terminal?.close(false).catch(()=>{});void owned?.close().catch(()=>{});if(linkRef.current===owned){linkRef.current=null;shellRef.current=null;}};
+  }, [sourceIdentity, Px4Connection, Px4Shell, px4Messages]);
   useEffect(()=>{
-    if(tab==='nsh'&&alive&&source.bidirectional&&shell&&!shell.active)void shell.open().catch(e=>{if(mounted.current)setError(String(e));});
-  },[tab,alive,shell,source.bidirectional]);
+    if(visible&&tab==='nsh'&&alive&&source.bidirectional&&shell&&!shell.active&&!testRunning&&!sourceSwitching)void shell.open().catch(e=>{if(mounted.current)setError(String(e));});
+  },[visible,tab,alive,shell,source.bidirectional,testRunning,sourceSwitching]);
   const run = async (kind: string, task: (signal: AbortSignal) => Promise<void>) => {
+    if (sessionIsActive(useFlightTestStore.getState())) return;
     if (operation.current && !operation.current.signal.aborted) return;
     const abort = new AbortController(); operation.current = abort; setBusy(kind); setError(''); setMessage('');
     try { await task(abort.signal); } catch (e) { if (mounted.current) { if (abort.signal.aborted) setMessage('操作已取消'); else setError(String(e)); } }
     finally { if (operation.current === abort) { operation.current = undefined; if (mounted.current) setBusy(''); } }
+  };
+  const switchSimulation = (enabled: boolean) => {
+    if (!source.bidirectional || !linkRef.current?.alive || (operation.current && !operation.current.signal.aborted)) return;
+    rebootOperation.current = true;
+    void run('simulation', async signal => {
+      try {
+        const result = await switchSimulationMode({ enabled, getLink: () => linkRef.current, getShell: () => shellRef.current, signal, storage: localStorage,
+          progress: value => { if (mounted.current && !signal.aborted) setControllerProgress(value); },
+          parameter: confirmed => { if (mounted.current && !signal.aborted) setParameters(values => values.map(p => p.name === confirmed.name ? confirmed : p)); },
+        });
+        if (mounted.current && !signal.aborted) setMessage(result);
+      } finally { rebootOperation.current = false; if (mounted.current) setControllerProgress(''); }
+    });
+  };
+  const restartFlightController = () => {
+    if (busy || !source.bidirectional || !linkRef.current?.alive || (operation.current && !operation.current.signal.aborted)) return;
+    rebootOperation.current = true;
+    void run('reboot', async signal => {
+      try {
+        const result = await rebootFlightController({ getLink: () => linkRef.current, signal,
+          progress: value => { if (mounted.current && !signal.aborted) setControllerProgress(value); },
+        });
+        if (mounted.current && !signal.aborted) setMessage(result);
+      } finally { rebootOperation.current = false; if (mounted.current) setControllerProgress(''); }
+    });
   };
   const readAll = () => { const current = linkRef.current; if (!current?.alive) return; setParameterComplete(false); setParameters([]); setExpected(null);
     void run('parameters', async signal => { await readParameters(current, (p,n) => { if (mounted.current && !signal.aborted && linkRef.current===current) { setParameters(p); setExpected(n); } }, signal); if (mounted.current && !signal.aborted && linkRef.current===current) { setParameterComplete(true); setMessage('参数读取完成'); } }); };
@@ -186,12 +254,16 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
   const visibleRemote = logs.filter(l => (`${l.id} ${logTime(l.time)}`).includes(logSearch.trim()));
   const visibleLocal = library.filter(l => l.source===logSource && l.name.toLowerCase().includes(logSearch.toLowerCase()));
   const selectedRemote = selectedLog.startsWith('remote:') ? logs.find(l => l.id===Number(selectedLog.slice(7))) : undefined;
-  return <div className="px4-toolbox-overlay" role="dialog" aria-modal="true" aria-label="PX4 工具箱">
-    <section className="px4-toolbox">
-      <header className="px4-toolbox-head"><div><h2>PX4 工具箱</h2><small>参数 · 日志 · NSH 控制台 · 转发设置</small></div><button type="button" aria-label="关闭 PX4 工具箱" onClick={onClose}>×</button></header>
-      <div className="px4-connectbar"><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
+  return <div className={'px4-toolbox-overlay'+(nativeWindow?' px4-native-window':'')} hidden={!visible} role="dialog" aria-modal="false" aria-label="PX4 工具箱" onKeyDown={e=>e.stopPropagation()}>
+    <section className={'px4-toolbox'+(tab==='testing'?' px4-testing':'')+(tab==='testing'&&testFocus?' px4-test-focus':'')}>
+      <header className="px4-toolbox-head" onPointerDown={onWindowDrag} onDoubleClick={event=>{if(!(event.target as HTMLElement).closest('button,input,select'))onWindowMaximize?.();}}><div><h2>PX4 工具箱</h2><small>实例 {instance}{link?.target.system?' · SYS '+link.target.system:''} · {alive?'PX4 在线':'等待 PX4'}{link?.hilEnabled?' · HIL':''}</small></div><div className="px4-window-actions"><button type="button" aria-expanded={connectionOpen} onClick={()=>setConnectionOpen(v=>!v)}>连接与仿真</button><div className="px4-title-controls">{windowControls||<button type="button" aria-label="关闭 PX4 工具箱" title="隐藏工具箱，测试继续运行" onClick={onClose}>×</button>}</div></div></header>
+      <div className="px4-connectbar" hidden={tab==='testing'&&!connectionOpen}><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select disabled={!!busy} aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
+      <div className="px4-simulationbar" aria-label="飞控仿真模式" hidden={tab==='testing'&&!connectionOpen}>
+        <div><b>{!simulationStateKnown?'飞控模式待确认':link?.hilEnabled?'仿真模式 · HIL':'正常模式'}</b><small id="px4-simulation-hint" aria-live="polite">{simulationUnavailable || '切换模式后自动重启飞控'}</small></div>
+        <div><button type="button" className="px4-primary" disabled={!!simulationUnavailable} aria-describedby="px4-simulation-hint" aria-busy={busy==='simulation'} title={simulationUnavailable || '切换模式并重启飞控'} onClick={()=>{const current=linkRef.current;if(typeof current?.hilEnabled==='boolean')switchSimulation(!current.hilEnabled);}}>{simulationButtonLabel}</button><button type="button" aria-label="重启飞控" disabled={!!controllerUnavailable} aria-describedby="px4-simulation-hint" aria-busy={busy==='reboot'} title={controllerUnavailable || '重启当前连接的飞控'} onClick={restartFlightController}>{busy==='reboot'?'正在重启…':'重启飞控'}</button></div>
+      </div>
       {!source.bidirectional&&<div className="px4-notice">当前仿真机转发为单向，无法请求参数、日志或发送 NSH 输入。</div>}
-      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','nsh','forwarding'] as const).map(t=><button key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>setTab(t)}>{({parameters:'参数',logs:'日志',nsh:'NSH 控制台',forwarding:'转发设置'})[t]}</button>)}</nav>
+      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','messages','nsh','testing','forwarding'] as const).map(t=><button disabled={!!busy&&t==='forwarding'} key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>setTab(t)}>{({parameters:'参数',logs:'日志',messages:'PX4 打印',nsh:'NSH 控制台',testing:'仿真测试',forwarding:'转发设置'})[t]}</button>)}</nav>
       {error && <div className="px4-notice error" role="alert">{error}<button aria-label="关闭错误提示" onClick={()=>setError('')}>×</button></div>}
       {message && <div className="px4-notice" role="status">{message}<button aria-label="关闭状态提示" onClick={()=>setMessage('')}>×</button></div>}
       <section role="tabpanel" id="px4-panel-parameters" aria-labelledby="px4-tab-parameters" hidden={tab!=='parameters'} className="px4-panel">
@@ -237,9 +309,11 @@ export default function Px4Toolbox({ onClose }: { onClose: () => void }) {
           </>:selectedRemote?<><code className="px4-detail-name">日志 #{selectedRemote.id}</code><dl><dt>记录时间</dt><dd>{logTime(selectedRemote.time)}</dd><dt>文件大小</dt><dd>{bytes(selectedRemote.size)}</dd><dt>状态</dt><dd>尚未下载</dd></dl><button className="px4-primary" disabled={!alive||!source.bidirectional||!!busy} onClick={()=>download([selectedRemote.id])}>下载此日志</button><p className="px4-muted">下载后可查看概览、主题和日志内参数快照。</p></>:<div className="px4-empty">选择日志查看详情</div>}</aside>
         </div>
       </section>
-      <section role="tabpanel" id="px4-panel-nsh" aria-labelledby="px4-tab-nsh" hidden={tab!=='nsh'} className="px4-panel px4-nsh-panel"><div className="px4-nsh-heading"><div><b>NuttX NSH 控制台</b><small>仿真机转发 · PX4 {link?.target.system?'SYS '+link.target.system+' / COMP '+link.target.component:'等待识别'} · MAVLink Shell</small></div><small>{shell?.active&&alive?'交互会话已就绪':'等待仿真机终端数据'}</small></div><NshTerminal channel={shell||EMPTY_CHANNEL} connected={!!shell?.active&&alive} historyKey={`px4-nsh-history-${link?.target.system??0}-${link?.target.component??0}`}/></section>
-      <section role="tabpanel" id="px4-panel-forwarding" aria-labelledby="px4-tab-forwarding" hidden={tab!=='forwarding'} className="px4-panel"><Px4RouterSettings router={router}/></section>
-      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
+      <section role="tabpanel" id="px4-panel-messages" aria-labelledby="px4-tab-messages" hidden={tab!=='messages'} className="px4-panel"><Px4Messages messages={px4Messages} online={alive} visible={visible&&tab==='messages'}/></section>
+      <section role="tabpanel" id="px4-panel-nsh" aria-labelledby="px4-tab-nsh" hidden={tab!=='nsh'} className="px4-panel px4-nsh-panel"><div className="px4-nsh-heading"><div><b>NuttX NSH 控制台</b><small>仿真机转发 · PX4 {link?.target.system?'SYS '+link.target.system+' / COMP '+link.target.component:'等待识别'} · MAVLink Shell</small></div><small>{controllerRestarting?'飞控操作进行中，终端输入暂不可用':shell?.active&&alive?'交互会话已就绪':'等待仿真机终端数据'}</small></div><NshTerminal channel={shell||EMPTY_CHANNEL} connected={!!shell?.active&&alive&&!busy} historyKey={`px4-nsh-history-${link?.target.system??0}-${link?.target.component??0}`}/></section>
+      <section role="tabpanel" id="px4-panel-testing" aria-labelledby="px4-tab-testing" hidden={tab!=='testing'} className="px4-panel ft-panel"><Px4FlightTest link={link||null} instance={Number(instance)} bidirectional={source.bidirectional} disabled={!!operationBusy} beforeRun={beforeTestRun} onShowScene={onShowScene} onFocusChange={setTestFocus}/></section>
+      <section role="tabpanel" id="px4-panel-forwarding" aria-labelledby="px4-tab-forwarding" hidden={tab!=='forwarding'} className="px4-panel"><Px4RouterSettings router={router} disabled={!!busy}/></section>
+      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='messages'?'飞控实时打印 · MAVLink STATUSTEXT':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':tab==='testing'?'后台执行 · JSBSim XML · 仿真机转发':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
     </section>
   </div>;
 }

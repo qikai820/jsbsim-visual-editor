@@ -1,3 +1,4 @@
+import { windProfileEdits, windProfileError, type WindProfile } from './windProfile';
 import type { ExprNode } from '../types';
 import { getChildren } from '../utils/expressionConverter';
 import { expressionMonitorKey, monitorHash } from './monitorIdentity';
@@ -76,16 +77,19 @@ export const expressionShape = (expression: any) => JSON.stringify(expression, (
   }
   return value;
 });
-export function environmentFromProject(project: { nodes: any[] }): Record<string, number> | null {
+export type EnvironmentConfig = Record<string, any> & { windProfile?: WindProfile };
+export function environmentFromProject(project: { nodes: any[] }): EnvironmentConfig | null {
   const node = project.nodes.find(node => node.data.componentType === 'environment');
   if (!node) return null;
-  return Object.fromEntries(environmentFields.flatMap(([field, configKey, , unit]) => {
+  const result: EnvironmentConfig = Object.fromEntries(environmentFields.flatMap(([field, configKey, , unit]) => {
     const raw = node.data.params[field], value = numeric(raw?.value ?? raw);
     return value === undefined ? [] : [[configKey, raw?.unit && unit ? convertUnit(value, raw.unit, unit) : value]];
   }));
+  if (node.data.params.wind_profile) result.windProfile = structuredClone(node.data.params.wind_profile);
+  return result;
 }
-export const environmentEdits = (environment: Record<string, number>): RuntimeEdit[] => environmentFields.flatMap(([, field, key]) =>
-  Number.isFinite(environment[field]) ? [{ key, value: environment[field] }] : []);
+export const environmentEdits = (environment: EnvironmentConfig): RuntimeEdit[] => environmentFields.flatMap(([, field, key]) =>
+  Number.isFinite(environment[field]) && !(environment.windProfile?.active && field.startsWith('wind')) ? [{ key, value: environment[field] }] : []);
 function canonical(value: any): any {
   if (Array.isArray(value)) return value.map(canonical);
   if (!value || typeof value !== 'object') return value;
@@ -312,7 +316,10 @@ function groups(project: Project): Map<string, Group> {
 }
 /** A group containing structural edits is never mapped onto a running expression. */
 export function projectRuntimeParameters(project: Project): RuntimeEdit[] {
-  return [...new Map([...groups(project).values()].flatMap(group=>group.edits).map(edit=>[edit.key,edit])).values()];
+  const all = [...groups(project).values()].flatMap(group=>group.edits);
+  for (const node of project.nodes) if (node.data.componentType === 'environment' && node.data.params.wind_profile)
+    all.push(...windProfileEdits(node.data.params.wind_profile));
+  return [...new Map(all.map(edit=>[edit.key,edit])).values()];
 }
 export function projectParameterChanges(before: Project, after: Project, running: Project = before): RuntimeEdit[] {
   const old = groups(before), next = groups(after), original = groups(running), result: RuntimeEdit[] = [];
@@ -332,6 +339,16 @@ export function projectParameterChanges(before: Project, after: Project, running
         const minKey = componentParameterKey(itemName, 'clip-min'), maxKey = componentParameterKey(itemName, 'clip-max');
         if (changed.some(edit => edit.key === minKey || edit.key === maxKey)) result.push(...group.edits.filter(edit => edit.key === minKey || edit.key === maxKey));
       }
+    }
+  }
+  for (const node of after.nodes) {
+    if (node.data.componentType !== 'environment') continue;
+    const previous = before.nodes.find(item => item.id === node.id);
+    const profile = node.data.params.wind_profile;
+    if (previous && profile && !windProfileError(profile) && (JSON.stringify(profile) !== JSON.stringify(previous.data.params.wind_profile) ||
+        !profile.active && ['wind_north_fps', 'wind_east_fps', 'wind_down_fps'].some(key => JSON.stringify(node.data.params[key]) !== JSON.stringify(previous.data.params[key])))) {
+      result.push(...windProfileEdits(profile));
+      if (!profile.active) result.push(...environmentEdits(environmentFromProject({ nodes: [node] }) || {}).filter(edit => edit.key.startsWith('atmosphere/wind-')));
     }
   }
   return [...new Map(result.map(edit => [edit.key, edit])).values()];

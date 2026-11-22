@@ -17,7 +17,7 @@ try {
     assert.ok(isMorphQuad(name)); assert.equal(rotorCount(name), 8);
   }
   assert.equal(isMorphQuad('quadrotor_x'), false);
-  assert.deepEqual(MORPHQUAD_ARMS.map(({ x, z }) => [x, z]), [[.225, -.225], [-.225, -.225], [-.225, .225], [.225, .225]]);
+  assert.deepEqual(MORPHQUAD_ARMS.map(({ x, z }) => [x, z]), [[.203, -.190], [-.203, -.190], [-.203, .190], [.203, .190]]);
   assert.equal(MORPHQUAD_ROTOR_RADIUS * 2, .1524);
   assert.equal(rotorLabel('MorphQuad', 0), 'M1 · 前右上');
   assert.equal(rotorLabel('MorphQuad', 7), 'M8 · 后右下');

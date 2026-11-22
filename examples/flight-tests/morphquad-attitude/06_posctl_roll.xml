@@ -1,0 +1,1439 @@
+<?xml version="1.0"?>
+<!-- flight-test-workspace:eyJ2ZXJzaW9uIjoxLCJuYW1lIjoiTW9ycGhRdWFkIOaZrumAmuWumueCuSDCtyBSb2xsIOS4u+adhiDCsTYwJSAvIDJzIMK3IOWbnuS4reWIueWBnCIsImFpcmNyYWZ0IjoiTW9ycGhRdWFkIiwiaW5pdGlhbGl6ZSI6ImN1cnJlbnQtaW5zdGFuY2UiLCJkdXJhdGlvbiI6MjQ0MCwicmF0ZUh6Ijo1MCwidGhyb3R0bGUiOjAuNSwiY2xvY2siOiJyZWFsdGltZSIsIm9uRmluaXNoIjoiaG9sZCIsIm9uQWJvcnQiOiJob2xkIiwiYmxvY2tzIjpbeyJpZCI6ImJjaGVja19hcm1lZCIsInR5cGUiOiJhc3NlcnQiLCJwIjp7ImZpZWxkIjoiYXJtZWQiLCJvcCI6ImVxIiwidmFsdWUiOjEsInRpbWVvdXQiOjF9fSx7ImlkIjoiYmNoZWNrX2FpcmJvcm5lIiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJsYW5kZWQiLCJvcCI6ImVxIiwidmFsdWUiOjAsInRpbWVvdXQiOjF9fSx7ImlkIjoiYnBvc2N0bF9yb2xsX2lucHV0IiwidHlwZSI6ImlucHV0X21vZGUiLCJwIjp7ImlucHV0Ijoibm9ybWFsIn19LHsiaWQiOiJicG9zY3RsX3JvbGxfbmV1dHJhbCIsInR5cGUiOiJuZXV0cmFsIiwicCI6e319LHsiaWQiOiJicG9zY3RsX3JvbGxfcm90b3IiLCJ0eXBlIjoiY2hhbm5lbCIsInAiOnsiY2hhbm5lbCI6InZlY3Rvci1zd2l0Y2giLCJhY3Rpb24iOiJzZXQiLCJ2YWx1ZSI6LTEwMH19LHsiaWQiOiJicG9zY3RsX3JvbGxfY2VudGVyX3Rocm90dGxlIiwidHlwZSI6InRocm90dGxlIiwicCI6eyJ2YWx1ZSI6NTB9fSx7ImlkIjoiYnBvc2N0bF9yb2xsX21vZGUiLCJ0eXBlIjoibW9kZSIsInAiOnsibW9kZSI6IlBPU0NUTCIsInRpbWVvdXQiOjh9fSx7ImlkIjoiYnBvc2N0bF9yb2xsX2VudHJ5X3N0YWJpbGl6ZSIsInR5cGUiOiJwYXJhbGxlbCIsInAiOnsiam9pbiI6ImFueSIsInRpbWVvdXQiOjM1fSwibGFuZXMiOltbeyJpZCI6ImJwb3NjdGxfcm9sbF9lbnRyeV9yZWNvdmVyIiwidHlwZSI6Im1hbnVhbF9yZWNvdmVyIiwicCI6eyJyZWZlcmVuY2UiOiJzdG9wIiwibW9kZSI6IlBPU0NUTCIsImhlYWRpbmciOiJrZWVwIiwicG9zaXRpb24iOjAuNSwic3BlZWQiOjAuMiwic2V0dGxlIjoyLCJtYXhTcGVlZCI6MywibWF4VGlsdCI6MjAsImFjY2VsZXJhdGlvbiI6MywicmF0ZSI6MzAsInRpbWVvdXQiOjMwfX1dLFt7ImlkIjoiYnBvc2N0bF9yb2xsX2VudHJ5X2hlaWdodCIsInR5cGUiOiJhbHRpdHVkZSIsInAiOnsidGFyZ2V0IjoxMCwiZHVyYXRpb24iOjQwLCJ0b2xlcmFuY2UiOjAuMiwiaG92ZXIiOjUwLCJtaW4iOjI1LCJtYXgiOjc1LCJzbGV3IjoyNSwicmVzcG9uc2UiOjgsImRhbXBpbmciOjEyLCJ0cmltIjoxLjUsImRlYWR6b25lIjo2fX1dXX0seyJpZCI6ImJwb3NjdGxfcm9sbF9wb3NpdGl2ZV9tYXJrIiwidHlwZSI6Im1hcmsiLCJwIjp7InRleHQiOiLmma7pgJogUE9TQ1RM77yacm9sbCDkuLvmnYYgNjAlIOaMgee7rSAyc++8jOajgOafpeWAvuaWnC/np7vliqjlkI7lm57kuK3liLnlgZwifX0seyJpZCI6ImJwb3NjdGxfcm9sbF9wb3NpdGl2ZV9yZXNwb25zZSIsInR5cGUiOiJwYXJhbGxlbCIsInAiOnsiam9pbiI6ImFsbCIsInRpbWVvdXQiOjR9LCJsYW5lcyI6W1t7ImlkIjoiYnBvc2N0bF9yb2xsX3Bvc2l0aXZlX3B1bHNlIiwidHlwZSI6InB1bHNlIiwicCI6eyJheGlzIjoicm9sbCIsInZhbHVlIjo2MCwiZHVyYXRpb24iOjJ9fV0sW3siaWQiOiJicG9zY3RsX3JvbGxfcG9zaXRpdmVfdGlsdCIsInR5cGUiOiJ3YWl0X3N0YXRlIiwicCI6eyJmaWVsZCI6InJvbGwtYWJzLWRlZyIsIm9wIjoiZ2UiLCJ2YWx1ZSI6MSwidGltZW91dCI6Mn19LHsiaWQiOiJicG9zY3RsX3JvbGxfcG9zaXRpdmVfbW92aW5nIiwidHlwZSI6IndhaXRfc3RhdGUiLCJwIjp7ImZpZWxkIjoiZ3JvdW5kc3BlZWQtbXBzIiwib3AiOiJnZSIsInZhbHVlIjowLjMsInRpbWVvdXQiOjJ9fV1dfSx7ImlkIjoiYnBvc2N0bF9yb2xsX3Bvc2l0aXZlX2JyYWtlX3N0YWJpbGl6ZSIsInR5cGUiOiJwYXJhbGxlbCIsInAiOnsiam9pbiI6ImFueSIsInRpbWVvdXQiOjM1fSwibGFuZXMiOltbeyJpZCI6ImJwb3NjdGxfcm9sbF9wb3NpdGl2ZV9icmFrZV9yZWNvdmVyIiwidHlwZSI6Im1hbnVhbF9yZWNvdmVyIiwicCI6eyJyZWZlcmVuY2UiOiJzdG9wIiwibW9kZSI6IlBPU0NUTCIsImhlYWRpbmciOiJrZWVwIiwicG9zaXRpb24iOjAuNSwic3BlZWQiOjAuMiwic2V0dGxlIjoyLCJtYXhTcGVlZCI6MywibWF4VGlsdCI6MjAsImFjY2VsZXJhdGlvbiI6MywicmF0ZSI6MzAsInRpbWVvdXQiOjMwfX1dLFt7ImlkIjoiYnBvc2N0bF9yb2xsX3Bvc2l0aXZlX2JyYWtlX2hlaWdodCIsInR5cGUiOiJhbHRpdHVkZSIsInAiOnsidGFyZ2V0IjoxMCwiZHVyYXRpb24iOjQwLCJ0b2xlcmFuY2UiOjAuMiwiaG92ZXIiOjUwLCJtaW4iOjI1LCJtYXgiOjc1LCJzbGV3IjoyNSwicmVzcG9uc2UiOjgsImRhbXBpbmciOjEyLCJ0cmltIjoxLjUsImRlYWR6b25lIjo2fX1dXX0seyJpZCI6ImJwb3NjdGxfcm9sbF9uZWdhdGl2ZV9tYXJrIiwidHlwZSI6Im1hcmsiLCJwIjp7InRleHQiOiLmma7pgJogUE9TQ1RM77yacm9sbCDkuLvmnYYgLTYwJSDmjIHnu60gMnPvvIzmo4Dmn6XlgL7mlpwv56e75Yqo5ZCO5Zue5Lit5Yi55YGcIn19LHsiaWQiOiJicG9zY3RsX3JvbGxfbmVnYXRpdmVfcmVzcG9uc2UiLCJ0eXBlIjoicGFyYWxsZWwiLCJwIjp7ImpvaW4iOiJhbGwiLCJ0aW1lb3V0Ijo0fSwibGFuZXMiOltbeyJpZCI6ImJwb3NjdGxfcm9sbF9uZWdhdGl2ZV9wdWxzZSIsInR5cGUiOiJwdWxzZSIsInAiOnsiYXhpcyI6InJvbGwiLCJ2YWx1ZSI6LTYwLCJkdXJhdGlvbiI6Mn19XSxbeyJpZCI6ImJwb3NjdGxfcm9sbF9uZWdhdGl2ZV90aWx0IiwidHlwZSI6IndhaXRfc3RhdGUiLCJwIjp7ImZpZWxkIjoicm9sbC1hYnMtZGVnIiwib3AiOiJnZSIsInZhbHVlIjoxLCJ0aW1lb3V0IjoyfX0seyJpZCI6ImJwb3NjdGxfcm9sbF9uZWdhdGl2ZV9tb3ZpbmciLCJ0eXBlIjoid2FpdF9zdGF0ZSIsInAiOnsiZmllbGQiOiJncm91bmRzcGVlZC1tcHMiLCJvcCI6ImdlIiwidmFsdWUiOjAuMywidGltZW91dCI6Mn19XV19LHsiaWQiOiJicG9zY3RsX3JvbGxfbmVnYXRpdmVfYnJha2Vfc3RhYmlsaXplIiwidHlwZSI6InBhcmFsbGVsIiwicCI6eyJqb2luIjoiYW55IiwidGltZW91dCI6MzV9LCJsYW5lcyI6W1t7ImlkIjoiYnBvc2N0bF9yb2xsX25lZ2F0aXZlX2JyYWtlX3JlY292ZXIiLCJ0eXBlIjoibWFudWFsX3JlY292ZXIiLCJwIjp7InJlZmVyZW5jZSI6InN0b3AiLCJtb2RlIjoiUE9TQ1RMIiwiaGVhZGluZyI6ImtlZXAiLCJwb3NpdGlvbiI6MC41LCJzcGVlZCI6MC4yLCJzZXR0bGUiOjIsIm1heFNwZWVkIjozLCJtYXhUaWx0IjoyMCwiYWNjZWxlcmF0aW9uIjozLCJyYXRlIjozMCwidGltZW91dCI6MzB9fV0sW3siaWQiOiJicG9zY3RsX3JvbGxfbmVnYXRpdmVfYnJha2VfaGVpZ2h0IiwidHlwZSI6ImFsdGl0dWRlIiwicCI6eyJ0YXJnZXQiOjEwLCJkdXJhdGlvbiI6NDAsInRvbGVyYW5jZSI6MC4yLCJob3ZlciI6NTAsIm1pbiI6MjUsIm1heCI6NzUsInNsZXciOjI1LCJyZXNwb25zZSI6OCwiZGFtcGluZyI6MTIsInRyaW0iOjEuNSwiZGVhZHpvbmUiOjZ9fV1dfV19 -->
+<runscript name="MorphQuad 普通定点 · Roll 主杆 ±60% / 2s · 回中刹停">
+  <use aircraft="MorphQuad" initialize="current-instance"/>
+  <run start="0" end="2440" dt="0.01">
+    <property value="0">test/runtime/ready</property>
+    <property value="0">test/runtime/complete</property>
+    <property value="0">test/runtime/failed</property>
+    <property value="0">test/rc/roll-norm</property>
+    <property value="0">test/rc/pitch-norm</property>
+    <property value="0">test/rc/yaw-norm</property>
+    <property value="0.5">test/rc/throttle-norm</property>
+    <property value="1">test/rc/enabled</property>
+    <property value="0">test/flow/sequence_1/done</property>
+    <property value="0">test/flow/sequence_1/cancelled</property>
+    <property value="0">test/flow/bcheck_armed_2/started</property>
+    <property value="0">test/flow/bcheck_armed_2/done</property>
+    <property value="0">test/flow/bcheck_armed_2/cancelled</property>
+    <property value="0">test/flow/bcheck_armed_2/deadline</property>
+    <property value="0">test/flow/bcheck_airborne_3/started</property>
+    <property value="0">test/flow/bcheck_airborne_3/done</property>
+    <property value="0">test/flow/bcheck_airborne_3/cancelled</property>
+    <property value="0">test/flow/bcheck_airborne_3/deadline</property>
+    <property value="0">test/flow/bposctl_roll_input_4/started</property>
+    <property value="0">test/flow/bposctl_roll_input_4/done</property>
+    <property value="0">test/flow/bposctl_roll_input_4/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_input_4/deadline</property>
+    <property value="0">test/rc/input-kind</property>
+    <property value="0">test/flow/bposctl_roll_neutral_5/started</property>
+    <property value="0">test/flow/bposctl_roll_neutral_5/done</property>
+    <property value="0">test/flow/bposctl_roll_neutral_5/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_neutral_5/deadline</property>
+    <property value="7">test/input/bposctl_roll_neutral_5/mask</property>
+    <property value="0">test/input/bposctl_roll_neutral_5/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_neutral_5/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_neutral_5/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_neutral_5/throttle-norm</property>
+    <property value="0">test/input/bposctl_roll_neutral_5/enabled</property>
+    <property value="0">test/flow/bposctl_roll_rotor_6/started</property>
+    <property value="0">test/flow/bposctl_roll_rotor_6/done</property>
+    <property value="0">test/flow/bposctl_roll_rotor_6/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_rotor_6/deadline</property>
+    <property value="0">test/channel/vector-switch/enabled</property>
+    <property value="0">test/channel/vector-switch/value-norm</property>
+    <property value="0">test/flow/bposctl_roll_center_throttle_7/started</property>
+    <property value="0">test/flow/bposctl_roll_center_throttle_7/done</property>
+    <property value="0">test/flow/bposctl_roll_center_throttle_7/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_center_throttle_7/deadline</property>
+    <property value="0">test/flow/bposctl_roll_mode_8/started</property>
+    <property value="0">test/flow/bposctl_roll_mode_8/done</property>
+    <property value="0">test/flow/bposctl_roll_mode_8/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_mode_8/deadline</property>
+    <property value="3">test/command/bposctl_roll_mode_8/kind</property>
+    <property value="3">test/command/bposctl_roll_mode_8/argument</property>
+    <property value="0">test/command/bposctl_roll_mode_8/status</property>
+    <property value="0">test/command/bposctl_roll_mode_8/request</property>
+    <property value="0">test/flow/bposctl_roll_entry_stabilize_9/started</property>
+    <property value="0">test/flow/bposctl_roll_entry_stabilize_9/done</property>
+    <property value="0">test/flow/bposctl_roll_entry_stabilize_9/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_entry_stabilize_9/deadline</property>
+    <property value="0">test/flow/sequence_10/done</property>
+    <property value="0">test/flow/sequence_10/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_entry_recover_11/started</property>
+    <property value="0">test/flow/bposctl_roll_entry_recover_11/done</property>
+    <property value="0">test/flow/bposctl_roll_entry_recover_11/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_entry_recover_11/deadline</property>
+    <property value="7">test/input/bposctl_roll_entry_recover_11/mask</property>
+    <property value="0">test/input/bposctl_roll_entry_recover_11/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_entry_recover_11/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_entry_recover_11/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_entry_recover_11/throttle-norm</property>
+    <property value="3">test/input/bposctl_roll_entry_recover_11/recover-reference</property>
+    <property value="3">test/input/bposctl_roll_entry_recover_11/recover-mode</property>
+    <property value="0">test/input/bposctl_roll_entry_recover_11/recover-heading</property>
+    <property value="0.5">test/input/bposctl_roll_entry_recover_11/recover-position-m</property>
+    <property value="0.2">test/input/bposctl_roll_entry_recover_11/recover-speed-mps</property>
+    <property value="2">test/input/bposctl_roll_entry_recover_11/recover-settle-s</property>
+    <property value="3">test/input/bposctl_roll_entry_recover_11/recover-max-speed-mps</property>
+    <property value="20">test/input/bposctl_roll_entry_recover_11/recover-max-tilt-deg</property>
+    <property value="3">test/input/bposctl_roll_entry_recover_11/recover-acceleration-mps2</property>
+    <property value="30">test/input/bposctl_roll_entry_recover_11/recover-rate-deg-s</property>
+    <property value="0">test/input/bposctl_roll_entry_recover_11/enabled</property>
+    <property value="0">test/manual/bposctl_roll_entry_recover_11/status</property>
+    <property value="0">test/flow/sequence_12/done</property>
+    <property value="0">test/flow/sequence_12/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_entry_height_13/started</property>
+    <property value="0">test/flow/bposctl_roll_entry_height_13/done</property>
+    <property value="0">test/flow/bposctl_roll_entry_height_13/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_entry_height_13/deadline</property>
+    <property value="8">test/input/bposctl_roll_entry_height_13/mask</property>
+    <property value="0">test/input/bposctl_roll_entry_height_13/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_entry_height_13/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_entry_height_13/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_entry_height_13/throttle-norm</property>
+    <property value="10">test/input/bposctl_roll_entry_height_13/height-target-m</property>
+    <property value="0.2">test/input/bposctl_roll_entry_height_13/height-tolerance-m</property>
+    <property value="0.5">test/input/bposctl_roll_entry_height_13/height-hover-norm</property>
+    <property value="0.25">test/input/bposctl_roll_entry_height_13/height-min-norm</property>
+    <property value="0.75">test/input/bposctl_roll_entry_height_13/height-max-norm</property>
+    <property value="0.25">test/input/bposctl_roll_entry_height_13/height-slew-norm-s</property>
+    <property value="0.08">test/input/bposctl_roll_entry_height_13/height-kp</property>
+    <property value="0.12">test/input/bposctl_roll_entry_height_13/height-kd</property>
+    <property value="0.015">test/input/bposctl_roll_entry_height_13/height-ki</property>
+    <property value="0.06">test/input/bposctl_roll_entry_height_13/height-deadzone-norm</property>
+    <property value="0">test/input/bposctl_roll_entry_height_13/enabled</property>
+    <property value="0">test/flow/bposctl_roll_positive_mark_14/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_mark_14/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_mark_14/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_mark_14/deadline</property>
+    <property value="0">test/flow/bposctl_roll_positive_response_15/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_response_15/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_response_15/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_response_15/deadline</property>
+    <property value="0">test/flow/sequence_16/done</property>
+    <property value="0">test/flow/sequence_16/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_pulse_17/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_pulse_17/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_pulse_17/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_pulse_17/deadline</property>
+    <property value="1">test/input/bposctl_roll_positive_pulse_17/mask</property>
+    <property value="0.6">test/input/bposctl_roll_positive_pulse_17/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_pulse_17/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_pulse_17/yaw-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_pulse_17/throttle-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_pulse_17/enabled</property>
+    <property value="0">test/flow/sequence_18/done</property>
+    <property value="0">test/flow/sequence_18/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_tilt_19/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_tilt_19/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_tilt_19/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_tilt_19/deadline</property>
+    <property value="0">test/flow/bposctl_roll_positive_moving_20/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_moving_20/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_moving_20/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_moving_20/deadline</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_stabilize_21/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_stabilize_21/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_stabilize_21/deadline</property>
+    <property value="0">test/flow/sequence_22/done</property>
+    <property value="0">test/flow/sequence_22/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_recover_23/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_recover_23/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_recover_23/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_recover_23/deadline</property>
+    <property value="7">test/input/bposctl_roll_positive_brake_recover_23/mask</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_recover_23/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_recover_23/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_recover_23/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_positive_brake_recover_23/throttle-norm</property>
+    <property value="3">test/input/bposctl_roll_positive_brake_recover_23/recover-reference</property>
+    <property value="3">test/input/bposctl_roll_positive_brake_recover_23/recover-mode</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_recover_23/recover-heading</property>
+    <property value="0.5">test/input/bposctl_roll_positive_brake_recover_23/recover-position-m</property>
+    <property value="0.2">test/input/bposctl_roll_positive_brake_recover_23/recover-speed-mps</property>
+    <property value="2">test/input/bposctl_roll_positive_brake_recover_23/recover-settle-s</property>
+    <property value="3">test/input/bposctl_roll_positive_brake_recover_23/recover-max-speed-mps</property>
+    <property value="20">test/input/bposctl_roll_positive_brake_recover_23/recover-max-tilt-deg</property>
+    <property value="3">test/input/bposctl_roll_positive_brake_recover_23/recover-acceleration-mps2</property>
+    <property value="30">test/input/bposctl_roll_positive_brake_recover_23/recover-rate-deg-s</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_recover_23/enabled</property>
+    <property value="0">test/manual/bposctl_roll_positive_brake_recover_23/status</property>
+    <property value="0">test/flow/sequence_24/done</property>
+    <property value="0">test/flow/sequence_24/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_height_25/started</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_height_25/done</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_height_25/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_positive_brake_height_25/deadline</property>
+    <property value="8">test/input/bposctl_roll_positive_brake_height_25/mask</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_height_25/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_height_25/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_height_25/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_positive_brake_height_25/throttle-norm</property>
+    <property value="10">test/input/bposctl_roll_positive_brake_height_25/height-target-m</property>
+    <property value="0.2">test/input/bposctl_roll_positive_brake_height_25/height-tolerance-m</property>
+    <property value="0.5">test/input/bposctl_roll_positive_brake_height_25/height-hover-norm</property>
+    <property value="0.25">test/input/bposctl_roll_positive_brake_height_25/height-min-norm</property>
+    <property value="0.75">test/input/bposctl_roll_positive_brake_height_25/height-max-norm</property>
+    <property value="0.25">test/input/bposctl_roll_positive_brake_height_25/height-slew-norm-s</property>
+    <property value="0.08">test/input/bposctl_roll_positive_brake_height_25/height-kp</property>
+    <property value="0.12">test/input/bposctl_roll_positive_brake_height_25/height-kd</property>
+    <property value="0.015">test/input/bposctl_roll_positive_brake_height_25/height-ki</property>
+    <property value="0.06">test/input/bposctl_roll_positive_brake_height_25/height-deadzone-norm</property>
+    <property value="0">test/input/bposctl_roll_positive_brake_height_25/enabled</property>
+    <property value="0">test/flow/bposctl_roll_negative_mark_26/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_mark_26/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_mark_26/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_mark_26/deadline</property>
+    <property value="0">test/flow/bposctl_roll_negative_response_27/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_response_27/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_response_27/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_response_27/deadline</property>
+    <property value="0">test/flow/sequence_28/done</property>
+    <property value="0">test/flow/sequence_28/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_pulse_29/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_pulse_29/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_pulse_29/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_pulse_29/deadline</property>
+    <property value="1">test/input/bposctl_roll_negative_pulse_29/mask</property>
+    <property value="-0.6">test/input/bposctl_roll_negative_pulse_29/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_pulse_29/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_pulse_29/yaw-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_pulse_29/throttle-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_pulse_29/enabled</property>
+    <property value="0">test/flow/sequence_30/done</property>
+    <property value="0">test/flow/sequence_30/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_tilt_31/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_tilt_31/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_tilt_31/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_tilt_31/deadline</property>
+    <property value="0">test/flow/bposctl_roll_negative_moving_32/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_moving_32/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_moving_32/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_moving_32/deadline</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_stabilize_33/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_stabilize_33/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_stabilize_33/deadline</property>
+    <property value="0">test/flow/sequence_34/done</property>
+    <property value="0">test/flow/sequence_34/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_recover_35/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_recover_35/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_recover_35/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_recover_35/deadline</property>
+    <property value="7">test/input/bposctl_roll_negative_brake_recover_35/mask</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_recover_35/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_recover_35/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_recover_35/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_negative_brake_recover_35/throttle-norm</property>
+    <property value="3">test/input/bposctl_roll_negative_brake_recover_35/recover-reference</property>
+    <property value="3">test/input/bposctl_roll_negative_brake_recover_35/recover-mode</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_recover_35/recover-heading</property>
+    <property value="0.5">test/input/bposctl_roll_negative_brake_recover_35/recover-position-m</property>
+    <property value="0.2">test/input/bposctl_roll_negative_brake_recover_35/recover-speed-mps</property>
+    <property value="2">test/input/bposctl_roll_negative_brake_recover_35/recover-settle-s</property>
+    <property value="3">test/input/bposctl_roll_negative_brake_recover_35/recover-max-speed-mps</property>
+    <property value="20">test/input/bposctl_roll_negative_brake_recover_35/recover-max-tilt-deg</property>
+    <property value="3">test/input/bposctl_roll_negative_brake_recover_35/recover-acceleration-mps2</property>
+    <property value="30">test/input/bposctl_roll_negative_brake_recover_35/recover-rate-deg-s</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_recover_35/enabled</property>
+    <property value="0">test/manual/bposctl_roll_negative_brake_recover_35/status</property>
+    <property value="0">test/flow/sequence_36/done</property>
+    <property value="0">test/flow/sequence_36/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_height_37/started</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_height_37/done</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_height_37/cancelled</property>
+    <property value="0">test/flow/bposctl_roll_negative_brake_height_37/deadline</property>
+    <property value="8">test/input/bposctl_roll_negative_brake_height_37/mask</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_height_37/roll-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_height_37/pitch-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_height_37/yaw-norm</property>
+    <property value="0.5">test/input/bposctl_roll_negative_brake_height_37/throttle-norm</property>
+    <property value="10">test/input/bposctl_roll_negative_brake_height_37/height-target-m</property>
+    <property value="0.2">test/input/bposctl_roll_negative_brake_height_37/height-tolerance-m</property>
+    <property value="0.5">test/input/bposctl_roll_negative_brake_height_37/height-hover-norm</property>
+    <property value="0.25">test/input/bposctl_roll_negative_brake_height_37/height-min-norm</property>
+    <property value="0.75">test/input/bposctl_roll_negative_brake_height_37/height-max-norm</property>
+    <property value="0.25">test/input/bposctl_roll_negative_brake_height_37/height-slew-norm-s</property>
+    <property value="0.08">test/input/bposctl_roll_negative_brake_height_37/height-kp</property>
+    <property value="0.12">test/input/bposctl_roll_negative_brake_height_37/height-kd</property>
+    <property value="0.015">test/input/bposctl_roll_negative_brake_height_37/height-ki</property>
+    <property value="0.06">test/input/bposctl_roll_negative_brake_height_37/height-deadzone-norm</property>
+    <property value="0">test/input/bposctl_roll_negative_brake_height_37/enabled</property>
+    <event name="bcheck_armed::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcheck_armed_2/cancelled eq 0
+</condition>test/runtime/ready eq 1
+test/flow/bcheck_armed_2/started eq 0
+</condition>
+      <set name="test/flow/bcheck_armed_2/started" value="1"/>
+      <set name="test/flow/bcheck_armed_2/deadline"><function><sum><property>simulation/sim-time-sec</property><value>1</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bcheck_armed::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcheck_armed_2/cancelled eq 0
+</condition>test/flow/bcheck_armed_2/started eq 1
+test/flow/bcheck_armed_2/done eq 0
+</condition>test/fc/armed eq 1
+</condition>
+      <set name="test/flow/bcheck_armed_2/done" value="1"/>
+    </event>
+    <event name="bcheck_armed::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcheck_armed_2/cancelled eq 0
+</condition>test/flow/bcheck_armed_2/started eq 1
+test/flow/bcheck_armed_2/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bcheck_armed_2/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bcheck_airborne::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcheck_airborne_3/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bcheck_armed_2/done eq 1
+</condition>test/flow/bcheck_airborne_3/started eq 0
+</condition>
+      <set name="test/flow/bcheck_airborne_3/started" value="1"/>
+      <set name="test/flow/bcheck_airborne_3/deadline"><function><sum><property>simulation/sim-time-sec</property><value>1</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bcheck_airborne::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcheck_airborne_3/cancelled eq 0
+</condition>test/flow/bcheck_airborne_3/started eq 1
+test/flow/bcheck_airborne_3/done eq 0
+</condition>test/fc/landed eq 0
+</condition>
+      <set name="test/flow/bcheck_airborne_3/done" value="1"/>
+    </event>
+    <event name="bcheck_airborne::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bcheck_airborne_3/cancelled eq 0
+</condition>test/flow/bcheck_airborne_3/started eq 1
+test/flow/bcheck_airborne_3/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bcheck_airborne_3/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_input::普通主杆">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_input_4/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bcheck_airborne_3/done eq 1
+</condition>test/flow/bposctl_roll_input_4/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_input_4/started" value="1"/>
+      <set name="test/rc/input-kind" value="1"/>
+      <set name="test/flow/bposctl_roll_input_4/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_neutral::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_neutral_5/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_input_4/done eq 1
+</condition>test/flow/bposctl_roll_neutral_5/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_neutral_5/started" value="1"/>
+      <set name="test/input/bposctl_roll_neutral_5/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_neutral_5/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.02</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_neutral::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_neutral_5/cancelled eq 0
+</condition>test/flow/bposctl_roll_neutral_5/started eq 1
+test/flow/bposctl_roll_neutral_5/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_neutral_5/deadline
+</condition>
+      <set name="test/input/bposctl_roll_neutral_5/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_neutral_5/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_rotor::vector-switch -100%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_rotor_6/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_neutral_5/done eq 1
+</condition>test/flow/bposctl_roll_rotor_6/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_rotor_6/started" value="1"/>
+      <set name="test/channel/vector-switch/value-norm" value="-1"/>
+      <set name="test/channel/vector-switch/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_rotor_6/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_center_throttle::基准油门">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_center_throttle_7/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_rotor_6/done eq 1
+</condition>test/flow/bposctl_roll_center_throttle_7/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_center_throttle_7/started" value="1"/>
+      <set name="test/rc/throttle-norm" value="0.5"/>
+      <set name="test/flow/bposctl_roll_center_throttle_7/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_mode::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_mode_8/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_center_throttle_7/done eq 1
+</condition>test/flow/bposctl_roll_mode_8/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_mode_8/started" value="1"/>
+      <set name="test/command/bposctl_roll_mode_8/request" value="1"/>
+      <set name="test/flow/bposctl_roll_mode_8/deadline"><function><sum><property>simulation/sim-time-sec</property><value>8</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_mode::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_mode_8/cancelled eq 0
+</condition>test/flow/bposctl_roll_mode_8/started eq 1
+test/flow/bposctl_roll_mode_8/done eq 0
+</condition>test/command/bposctl_roll_mode_8/status eq 1
+</condition>
+      <set name="test/command/bposctl_roll_mode_8/request" value="0"/>
+      <set name="test/flow/bposctl_roll_mode_8/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_mode::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_mode_8/cancelled eq 0
+</condition>test/flow/bposctl_roll_mode_8/started eq 1
+test/flow/bposctl_roll_mode_8/done eq 0
+</condition>test/command/bposctl_roll_mode_8/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_mode::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_mode_8/cancelled eq 0
+</condition>test/flow/bposctl_roll_mode_8/started eq 1
+test/flow/bposctl_roll_mode_8/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_mode_8/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_entry_stabilize::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_mode_8/done eq 1
+</condition>test/flow/bposctl_roll_entry_stabilize_9/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_entry_stabilize_9/started" value="1"/>
+      <set name="test/flow/bposctl_roll_entry_stabilize_9/deadline"><function><sum><property>simulation/sim-time-sec</property><value>35</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_entry_recover::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_10/cancelled eq 0
+test/flow/bposctl_roll_entry_recover_11/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_recover_11/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_entry_recover_11/started" value="1"/>
+      <set name="test/input/bposctl_roll_entry_recover_11/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_entry_recover_11/deadline"><function><sum><property>simulation/sim-time-sec</property><value>30</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_entry_recover::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_10/cancelled eq 0
+test/flow/bposctl_roll_entry_recover_11/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_recover_11/started eq 1
+test/flow/bposctl_roll_entry_recover_11/done eq 0
+</condition>test/manual/bposctl_roll_entry_recover_11/status eq 1
+</condition>
+      <set name="test/input/bposctl_roll_entry_recover_11/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_entry_recover_11/done" value="1"/>
+      <notify><property caption="position-error-m">test/manual/position-error-m</property><property caption="speed-mps">test/manual/speed-mps</property><property caption="held-s">test/manual/held-s</property></notify>
+    </event>
+    <event name="bposctl_roll_entry_recover::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_10/cancelled eq 0
+test/flow/bposctl_roll_entry_recover_11/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_recover_11/started eq 1
+test/flow/bposctl_roll_entry_recover_11/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_entry_recover_11/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_10::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_10/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_recover_11/done eq 1
+</condition>test/flow/sequence_10/done eq 0
+</condition>
+      <set name="test/flow/sequence_10/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_entry_height::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_12/cancelled eq 0
+test/flow/bposctl_roll_entry_height_13/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_height_13/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_entry_height_13/started" value="1"/>
+      <set name="test/input/bposctl_roll_entry_height_13/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_entry_height_13/deadline"><function><sum><property>simulation/sim-time-sec</property><value>40</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_entry_height::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_12/cancelled eq 0
+test/flow/bposctl_roll_entry_height_13/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_height_13/started eq 1
+test/flow/bposctl_roll_entry_height_13/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_entry_height_13/deadline
+</condition>
+      <set name="test/input/bposctl_roll_entry_height_13/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_entry_height_13/done" value="1"/>
+    </event>
+    <event name="sequence_12::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+test/flow/sequence_12/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_height_13/done eq 1
+</condition>test/flow/sequence_12/done eq 0
+</condition>
+      <set name="test/flow/sequence_12/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_entry_stabilize::any">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+</condition><condition logic="OR">test/flow/sequence_10/done eq 1
+test/flow/sequence_12/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_10/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_entry_recover_11/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_entry_recover_11/enabled" value="0"/>
+      <set name="test/flow/sequence_12/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_entry_height_13/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_entry_height_13/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_entry_stabilize_9/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_entry_stabilize::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_entry_stabilize_9/cancelled eq 0
+</condition>test/flow/bposctl_roll_entry_stabilize_9/started eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_entry_stabilize_9/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_mark::普通 POSCTL：roll 主杆 60% 持续 2s，检查倾斜/移动后回中刹停">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_mark_14/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_entry_stabilize_9/done eq 1
+</condition>test/flow/bposctl_roll_positive_mark_14/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_mark_14/started" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_mark_14/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_response::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_positive_mark_14/done eq 1
+</condition>test/flow/bposctl_roll_positive_response_15/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_response_15/started" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_response_15/deadline"><function><sum><property>simulation/sim-time-sec</property><value>4</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_pulse::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_16/cancelled eq 0
+test/flow/bposctl_roll_positive_pulse_17/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_pulse_17/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_pulse_17/started" value="1"/>
+      <set name="test/input/bposctl_roll_positive_pulse_17/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_pulse_17/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_pulse::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_16/cancelled eq 0
+test/flow/bposctl_roll_positive_pulse_17/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_pulse_17/started eq 1
+test/flow/bposctl_roll_positive_pulse_17/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_pulse_17/deadline
+</condition>
+      <set name="test/input/bposctl_roll_positive_pulse_17/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_positive_pulse_17/done" value="1"/>
+    </event>
+    <event name="sequence_16::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_16/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_pulse_17/done eq 1
+</condition>test/flow/sequence_16/done eq 0
+</condition>
+      <set name="test/flow/sequence_16/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_positive_tilt::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+test/flow/bposctl_roll_positive_tilt_19/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_tilt_19/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_tilt_19/started" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_tilt_19/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_tilt::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+test/flow/bposctl_roll_positive_tilt_19/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_tilt_19/started eq 1
+test/flow/bposctl_roll_positive_tilt_19/done eq 0
+</condition>test/fc/roll-abs-deg ge 1
+</condition>
+      <set name="test/flow/bposctl_roll_positive_tilt_19/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_positive_tilt::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+test/flow/bposctl_roll_positive_tilt_19/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_tilt_19/started eq 1
+test/flow/bposctl_roll_positive_tilt_19/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_tilt_19/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_moving::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+test/flow/bposctl_roll_positive_moving_20/cancelled eq 0
+</condition><condition logic="AND">test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_tilt_19/done eq 1
+</condition>test/flow/bposctl_roll_positive_moving_20/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_moving_20/started" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_moving_20/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_moving::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+test/flow/bposctl_roll_positive_moving_20/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_moving_20/started eq 1
+test/flow/bposctl_roll_positive_moving_20/done eq 0
+</condition>test/fc/groundspeed-mps ge 0.3
+</condition>
+      <set name="test/flow/bposctl_roll_positive_moving_20/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_positive_moving::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+test/flow/bposctl_roll_positive_moving_20/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_moving_20/started eq 1
+test/flow/bposctl_roll_positive_moving_20/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_moving_20/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_18::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+test/flow/sequence_18/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_moving_20/done eq 1
+</condition>test/flow/sequence_18/done eq 0
+</condition>
+      <set name="test/flow/sequence_18/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_positive_response::all">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+</condition><condition logic="AND">test/flow/sequence_16/done eq 1
+test/flow/sequence_18/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_16/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_pulse_17/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_positive_pulse_17/enabled" value="0"/>
+      <set name="test/flow/sequence_18/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_tilt_19/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_moving_20/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_response_15/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_response::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_response_15/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_response_15/started eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_response_15/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_brake_stabilize::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_positive_response_15/done eq 1
+</condition>test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_brake_stabilize_21/started" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_brake_stabilize_21/deadline"><function><sum><property>simulation/sim-time-sec</property><value>35</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_brake_recover::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_22/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_recover_23/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_recover_23/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_brake_recover_23/started" value="1"/>
+      <set name="test/input/bposctl_roll_positive_brake_recover_23/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_brake_recover_23/deadline"><function><sum><property>simulation/sim-time-sec</property><value>30</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_brake_recover::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_22/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_recover_23/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_recover_23/started eq 1
+test/flow/bposctl_roll_positive_brake_recover_23/done eq 0
+</condition>test/manual/bposctl_roll_positive_brake_recover_23/status eq 1
+</condition>
+      <set name="test/input/bposctl_roll_positive_brake_recover_23/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_positive_brake_recover_23/done" value="1"/>
+      <notify><property caption="position-error-m">test/manual/position-error-m</property><property caption="speed-mps">test/manual/speed-mps</property><property caption="held-s">test/manual/held-s</property></notify>
+    </event>
+    <event name="bposctl_roll_positive_brake_recover::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_22/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_recover_23/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_recover_23/started eq 1
+test/flow/bposctl_roll_positive_brake_recover_23/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_brake_recover_23/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_22::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_22/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_recover_23/done eq 1
+</condition>test/flow/sequence_22/done eq 0
+</condition>
+      <set name="test/flow/sequence_22/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_positive_brake_height::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_24/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_height_25/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_height_25/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_positive_brake_height_25/started" value="1"/>
+      <set name="test/input/bposctl_roll_positive_brake_height_25/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_brake_height_25/deadline"><function><sum><property>simulation/sim-time-sec</property><value>40</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_brake_height::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_24/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_height_25/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_height_25/started eq 1
+test/flow/bposctl_roll_positive_brake_height_25/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_brake_height_25/deadline
+</condition>
+      <set name="test/input/bposctl_roll_positive_brake_height_25/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_positive_brake_height_25/done" value="1"/>
+    </event>
+    <event name="sequence_24::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+test/flow/sequence_24/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_height_25/done eq 1
+</condition>test/flow/sequence_24/done eq 0
+</condition>
+      <set name="test/flow/sequence_24/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_positive_brake_stabilize::any">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+</condition><condition logic="OR">test/flow/sequence_22/done eq 1
+test/flow/sequence_24/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_22/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_brake_recover_23/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_positive_brake_recover_23/enabled" value="0"/>
+      <set name="test/flow/sequence_24/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_positive_brake_height_25/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_positive_brake_height_25/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_positive_brake_stabilize_21/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_positive_brake_stabilize::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_positive_brake_stabilize_21/cancelled eq 0
+</condition>test/flow/bposctl_roll_positive_brake_stabilize_21/started eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_positive_brake_stabilize_21/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_mark::普通 POSCTL：roll 主杆 -60% 持续 2s，检查倾斜/移动后回中刹停">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_mark_26/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_positive_brake_stabilize_21/done eq 1
+</condition>test/flow/bposctl_roll_negative_mark_26/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_mark_26/started" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_mark_26/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_response::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_negative_mark_26/done eq 1
+</condition>test/flow/bposctl_roll_negative_response_27/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_response_27/started" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_response_27/deadline"><function><sum><property>simulation/sim-time-sec</property><value>4</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_pulse::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_28/cancelled eq 0
+test/flow/bposctl_roll_negative_pulse_29/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_pulse_29/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_pulse_29/started" value="1"/>
+      <set name="test/input/bposctl_roll_negative_pulse_29/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_pulse_29/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_pulse::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_28/cancelled eq 0
+test/flow/bposctl_roll_negative_pulse_29/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_pulse_29/started eq 1
+test/flow/bposctl_roll_negative_pulse_29/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_pulse_29/deadline
+</condition>
+      <set name="test/input/bposctl_roll_negative_pulse_29/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_negative_pulse_29/done" value="1"/>
+    </event>
+    <event name="sequence_28::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_28/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_pulse_29/done eq 1
+</condition>test/flow/sequence_28/done eq 0
+</condition>
+      <set name="test/flow/sequence_28/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_negative_tilt::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+test/flow/bposctl_roll_negative_tilt_31/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_tilt_31/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_tilt_31/started" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_tilt_31/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_tilt::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+test/flow/bposctl_roll_negative_tilt_31/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_tilt_31/started eq 1
+test/flow/bposctl_roll_negative_tilt_31/done eq 0
+</condition>test/fc/roll-abs-deg ge 1
+</condition>
+      <set name="test/flow/bposctl_roll_negative_tilt_31/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_negative_tilt::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+test/flow/bposctl_roll_negative_tilt_31/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_tilt_31/started eq 1
+test/flow/bposctl_roll_negative_tilt_31/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_tilt_31/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_moving::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+test/flow/bposctl_roll_negative_moving_32/cancelled eq 0
+</condition><condition logic="AND">test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_tilt_31/done eq 1
+</condition>test/flow/bposctl_roll_negative_moving_32/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_moving_32/started" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_moving_32/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_moving::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+test/flow/bposctl_roll_negative_moving_32/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_moving_32/started eq 1
+test/flow/bposctl_roll_negative_moving_32/done eq 0
+</condition>test/fc/groundspeed-mps ge 0.3
+</condition>
+      <set name="test/flow/bposctl_roll_negative_moving_32/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_negative_moving::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+test/flow/bposctl_roll_negative_moving_32/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_moving_32/started eq 1
+test/flow/bposctl_roll_negative_moving_32/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_moving_32/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_30::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+test/flow/sequence_30/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_moving_32/done eq 1
+</condition>test/flow/sequence_30/done eq 0
+</condition>
+      <set name="test/flow/sequence_30/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_negative_response::all">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+</condition><condition logic="AND">test/flow/sequence_28/done eq 1
+test/flow/sequence_30/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_28/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_pulse_29/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_negative_pulse_29/enabled" value="0"/>
+      <set name="test/flow/sequence_30/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_tilt_31/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_moving_32/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_response_27/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_response::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_response_27/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_response_27/started eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_response_27/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_brake_stabilize::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_negative_response_27/done eq 1
+</condition>test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_brake_stabilize_33/started" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_brake_stabilize_33/deadline"><function><sum><property>simulation/sim-time-sec</property><value>35</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_brake_recover::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_34/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_recover_35/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_recover_35/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_brake_recover_35/started" value="1"/>
+      <set name="test/input/bposctl_roll_negative_brake_recover_35/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_brake_recover_35/deadline"><function><sum><property>simulation/sim-time-sec</property><value>30</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_brake_recover::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_34/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_recover_35/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_recover_35/started eq 1
+test/flow/bposctl_roll_negative_brake_recover_35/done eq 0
+</condition>test/manual/bposctl_roll_negative_brake_recover_35/status eq 1
+</condition>
+      <set name="test/input/bposctl_roll_negative_brake_recover_35/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_negative_brake_recover_35/done" value="1"/>
+      <notify><property caption="position-error-m">test/manual/position-error-m</property><property caption="speed-mps">test/manual/speed-mps</property><property caption="held-s">test/manual/held-s</property></notify>
+    </event>
+    <event name="bposctl_roll_negative_brake_recover::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_34/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_recover_35/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_recover_35/started eq 1
+test/flow/bposctl_roll_negative_brake_recover_35/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_brake_recover_35/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_34::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_34/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_recover_35/done eq 1
+</condition>test/flow/sequence_34/done eq 0
+</condition>
+      <set name="test/flow/sequence_34/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_negative_brake_height::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_36/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_height_37/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_height_37/started eq 0
+</condition>
+      <set name="test/flow/bposctl_roll_negative_brake_height_37/started" value="1"/>
+      <set name="test/input/bposctl_roll_negative_brake_height_37/enabled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_brake_height_37/deadline"><function><sum><property>simulation/sim-time-sec</property><value>40</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_brake_height::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_36/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_height_37/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_height_37/started eq 1
+test/flow/bposctl_roll_negative_brake_height_37/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_brake_height_37/deadline
+</condition>
+      <set name="test/input/bposctl_roll_negative_brake_height_37/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_negative_brake_height_37/done" value="1"/>
+    </event>
+    <event name="sequence_36::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+test/flow/sequence_36/cancelled eq 0
+<condition logic="AND">test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_height_37/done eq 1
+</condition>test/flow/sequence_36/done eq 0
+</condition>
+      <set name="test/flow/sequence_36/done" value="1"/>
+    </event>
+    <event name="bposctl_roll_negative_brake_stabilize::any">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+</condition><condition logic="OR">test/flow/sequence_34/done eq 1
+test/flow/sequence_36/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_34/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_brake_recover_35/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_negative_brake_recover_35/enabled" value="0"/>
+      <set name="test/flow/sequence_36/cancelled" value="1"/>
+      <set name="test/flow/bposctl_roll_negative_brake_height_37/cancelled" value="1"/>
+      <set name="test/input/bposctl_roll_negative_brake_height_37/enabled" value="0"/>
+      <set name="test/flow/bposctl_roll_negative_brake_stabilize_33/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bposctl_roll_negative_brake_stabilize::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bposctl_roll_negative_brake_stabilize_33/cancelled eq 0
+</condition>test/flow/bposctl_roll_negative_brake_stabilize_33/started eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bposctl_roll_negative_brake_stabilize_33/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_1::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+<condition logic="AND">test/runtime/ready eq 1
+test/flow/bposctl_roll_negative_brake_stabilize_33/done eq 1
+</condition>test/flow/sequence_1/done eq 0
+</condition>
+      <set name="test/flow/sequence_1/done" value="1"/>
+    </event>
+    <event name="test::complete">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/done eq 1
+</condition>
+      <set name="test/runtime/complete" value="1"/>
+      <notify></notify>
+    </event>
+  </run>
+</runscript>

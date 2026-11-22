@@ -115,8 +115,9 @@ try{
  const file=new FakeLink();const packet=(at,data)=>{const payload=new Uint8Array(97);view(payload).setUint32(0,at,true);view(payload).setUint16(4,42,true);payload[6]=data.length;payload.set(data,7);return{id:120,payload};};
  file.respond=(id,p)=>{if(id===119){const at=view(p).getUint32(0,true);if(at===0){file.emit(packet(0,[0,1,2,3]));file.emit(packet(0,[0,1,2,3]));}else file.emit(packet(at,Array.from({length:8-at},(_,i)=>i+at)));}};
  assert.deepEqual(Array.from(await readLogWindow(file,42,0,8,new AbortController().signal,()=>{})),[0,1,2,3,4,5,6,7]);assert.equal(file.listeners.size,0);
- const connection=new Px4Connection({system:7,component:1});let pinned='';connection.transport.pinPeer=async p=>{pinned=p;};connection.transport.onStatus(true);
+ const connection=new Px4Connection({system:7,component:1});let pinned='',finishPin;connection.transport.pinPeer=p=>{pinned=p;return new Promise(resolve=>{finishPin=resolve;});};connection.transport.onStatus(true);
  connection.transport.onPacket(Uint8Array.from(f.heartbeatV2),'127.0.0.1:10001',true);assert.equal(pinned,'127.0.0.1:10001');assert.ok(connection.alive);
+ let ready=false;const nativeReady=connection.ready.then(()=>{ready=true;});await Promise.resolve();assert.equal(ready,false,'native operations must wait for peer pin acknowledgement');finishPin();await nativeReady;assert.equal(ready,true);
  const first=connection.lastHeartbeat;connection.transport.onPacket(Uint8Array.from(f.heartbeatV2),'127.0.0.1:10002',true);assert.equal(connection.lastHeartbeat,first,'other UDP sources cannot replace the selected source');
  console.log('PASS: independent MAVLink vectors, integer union decoding, CRC/resync, metadata, FTP paths/chunks and stale NAK recovery, parameter write/readback, rejection/retry/cancel/timeout, Telnet negotiation, log coverage and peer isolation.');
 }finally{await rm(dir,{recursive:true,force:true});}

@@ -1,3 +1,4 @@
+import { windProfileError } from '../sim/windProfile';
 import { useEffect, useRef, useState } from 'react';
 import { cachedEditBaseline, changedModelPaths, compactModelBaseline, mainXmlPath, readRemoteBaseline, remoteBaselineKey, restoreModelBaseline, type ModelProject } from '../utils/modelChanges';
 import { environmentFromProject, environmentFields } from '../sim/runtimeParameters';
@@ -17,7 +18,10 @@ import { fleetSlotIds, type FleetInitialOverrides, type FleetNetworkOverrides, t
 import LocalSettingsDialog from './LocalSettingsDialog';
 import J23GuideDialog from './J23GuideDialog';
 import NshConsoleDialog from './NshConsoleDialog';
-import Px4Toolbox from './Px4Toolbox';
+import Px4ToolboxWindowHost from './Px4ToolboxWindow';
+import WindowControls from './WindowControls';
+import { hideTestToolbox, openTestToolbox, setTestDisplay, useFlightTestStore } from '../flight-test/session';
+import { useUpperMcp } from '../flight-test/mcp';
 import SerialAssistantDialog from './SerialAssistantDialog';
 import UsbFileManager from './UsbFileManager';
 import XmlSourceBrowser, { type XmlSourceDocument } from './XmlSourceBrowser';
@@ -118,6 +122,7 @@ async function withEnvironment(data: any, model: string) {
   const def = getComponentDef('environment')!;
   const params = Object.fromEntries(Object.entries(def.params).map(([key, value]) => [key, value.default]));
   for (const [field, configKey] of environmentFields) if (Number.isFinite(environment[configKey])) params[field] = environment[configKey];
+  if (environment.windProfile) params.wind_profile = environment.windProfile;
   return { ...data, nodes: [...data.nodes.filter((node: any) => node.data.componentType !== 'environment'), {
     id: 'runtime-environment', type: 'aircraftComponent', position: { x: 40, y: 40 },
     data: { label: def.label, componentType: 'environment', params },
@@ -312,7 +317,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const [showTelemetryRecorder, setShowTelemetryRecorder] = useState(false);
   const [telemetryRecording, setTelemetryRecording] = useState(false);
   const [showNshConsole, setShowNshConsole] = useState(false);
-  const [showPx4Toolbox, setShowPx4Toolbox] = useState(false);
+  const showPx4Toolbox = useFlightTestStore(s => s.toolboxVisible);
+  const mcpStatus = useUpperMcp();
+  const px4ToolboxVisited = useFlightTestStore(s => s.toolboxVisited);
+  const setShowPx4Toolbox = (visible: boolean) => visible ? openTestToolbox() : hideTestToolbox();
   const [showSerialAssistant, setShowSerialAssistant] = useState(false);
   const [showUsbFiles, setShowUsbFiles] = useState(false);
   const [showModelPull, setShowModelPull] = useState(false);
@@ -402,13 +410,6 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     resolve: (accepted: boolean) => void;
   } | null>(null);
 
-  const windowAction = async (action: 'min' | 'max' | 'close') => {
-    if (!isTauri) return;
-    const window = getCurrentWindow();
-    if (action === 'min') await window.minimize();
-    else if (action === 'max') await window.toggleMaximize();
-    else await window.close();
-  };
   const openPlotJuggler = async () => {
     setShowToolsMenu(false);
     setPlotJugglerOpening(true);
@@ -696,6 +697,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     // approval. A failed read is never treated as a missing or unchanged file.
     const changes = await compareModelXml([...candidates.values()], loadRemoteXmlForReview);
     const environment = environmentFromProject(snapshot);
+    if (environment?.windProfile) {
+      const error = windProfileError(environment.windProfile);
+      if (error) throw new Error(error);
+    }
     if (environment && (force || JSON.stringify(environment) !== JSON.stringify(environmentFromProject(baseline)))) {
       const path = `config/models/${model}.json`, remote = await readEnvironmentConfig(path);
       const previous = remote ? JSON.parse(remote) : { version: 1 };
@@ -1222,7 +1227,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             {showToolsMenu && <div className="file-menu-dropdown" role="menu">
               <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
-              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / NSH' : 'PX4 Toolbox · Parameters / Logs / NSH'}</button>
+              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试' : 'PX4 Toolbox · Parameters / Logs / Messages / NSH / Tests'}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
               <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口与网口助手（本机）' : 'Serial & Network Assistant (Local)'}</button>
@@ -1245,17 +1250,15 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         {showNshConsole && <NshConsoleDialog onClose={() => setShowNshConsole(false)} />}
         {showUsbFiles && <UsbFileManager onClose={() => setShowUsbFiles(false)} />}
         <div className="toolbar-right">
-          {isTauri && <div className="window-controls" onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
-            <button onClick={() => void windowAction('min')} title={isZh ? '最小化' : 'Minimize'} aria-label={isZh ? '最小化' : 'Minimize'}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10" /></svg></button>
-            <button onClick={() => void windowAction('max')} title={isZh ? '最大化/还原' : 'Maximize/Restore'} aria-label={isZh ? '最大化或还原' : 'Maximize or restore'}><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg></button>
-            <button className="window-close" onClick={() => void windowAction('close')} title={isZh ? '关闭' : 'Close'} aria-label={isZh ? '关闭' : 'Close'}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
-          </div>}
+          {mcpStatus?.enabled && <button className="toolbar-mcp" title={`${isZh ? 'MCP 已启用，共用上位机连接' : 'MCP enabled, using desktop connection'}\n${mcpStatus.endpointFile ?? ''}${mcpStatus.audit.length ? '\n' + mcpStatus.audit[mcpStatus.audit.length - 1].tool : ''}`} onClick={() => setShowPx4Toolbox(true)}>MCP</button>}
+          {isTauri && <WindowControls zh={isZh}/>}
           <input ref={fileInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} />
           <input ref={directoryInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} {...({ webkitdirectory: '', directory: '' } as any)} />
         </div>
       </div>
 
-      {showPx4Toolbox && <Px4Toolbox onClose={() => setShowPx4Toolbox(false)} />}
+      <Px4ToolboxWindowHost visible={showPx4Toolbox} visited={px4ToolboxVisited}
+        onShowScene={() => { hideTestToolbox(); setTestDisplay('compact'); onSelectWorkspace?.('scene'); }} />
       {showSerialAssistant && <SerialAssistantDialog onClose={() => setShowSerialAssistant(false)} />}
       {showSimulationConfig && <SimulationConfigDialog key={`${activeInstance}:${instanceSlots[activeInstance]}`}
         instanceId={activeInstance} model={instanceSlots[activeInstance]} slots={instanceSlots}

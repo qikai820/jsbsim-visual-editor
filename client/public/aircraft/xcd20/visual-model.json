@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "model": "XCD20",
+  "units": "m",
+  "basis": "body FRD; scene [right, up, aft] = [body Y, -body Z, -body X]",
+  "diagonalWheelbase": 0.7,
+  "rotorPlaneSpacing": 0.15,
+  "rotorRadius": 0.1905,
+  "propellerPitch": 0.254,
+  "blades": 3,
+  "batteryDimensionsBody": [
+    0.2,
+    0.15,
+    0.08
+  ],
+  "groundClearance": 0.25,
+  "visual": {
+    "battery_center_body_m": [
+      0,
+      0,
+      -0.055
+    ],
+    "battery_center_status": "Display-only estimate from supplied image; not used as a measured mass center.",
+    "frame_plate_dimensions_body_m": [
+      0.3,
+      0.23,
+      0.008
+    ],
+    "motor_body_diameter_m": 0.062,
+    "motor_body_height_m": 0.0447,
+    "motor_adapter_height_m": 0.006,
+    "reference_payload": {
+      "visible": true,
+      "center_body_m": [
+        0,
+        0,
+        0.155
+      ],
+      "radius_m": 0.085,
+      "status": "Display-only green payload reconstructed from user image; dimensions and mass are not measured."
+    }
+  },
+  "rotors": [
+    {
+      "channel": 0,
+      "motor_number": 1,
+      "name": "front_right_upper",
+      "body_position_m": [
+        0.2474873734152916,
+        0.2474873734152916,
+        -0.075
+      ],
+      "reaction_yaw_sign": 1,
+      "paired_channel": 5,
+      "prop_spin_body_z_sign": -1,
+      "scene_position_m": [
+        0.2474873734152916,
+        0.075,
+        -0.2474873734152916
+      ],
+      "propeller_sense": 1
+    },
+    {
+      "channel": 1,
+      "motor_number": 2,
+      "name": "front_left_upper",
+      "body_position_m": [
+        0.2474873734152916,
+        -0.2474873734152916,
+        -0.075
+      ],
+      "reaction_yaw_sign": -1,
+      "paired_channel": 4,
+      "prop_spin_body_z_sign": 1,
+      "scene_position_m": [
+        -0.2474873734152916,
+        0.075,
+        -0.2474873734152916
+      ],
+      "propeller_sense": -1
+    },
+    {
+      "channel": 2,
+      "motor_number": 3,
+      "name": "rear_left_upper",
+      "body_position_m": [
+        -0.2474873734152916,
+        -0.2474873734152916,
+        -0.075
+      ],
+      "reaction_yaw_sign": 1,
+      "paired_channel": 7,
+      "prop_spin_body_z_sign": -1,
+      "scene_position_m": [
+        -0.2474873734152916,
+        0.075,
+        0.2474873734152916
+      ],
+      "propeller_sense": 1
+    },
+    {
+      "channel": 3,
+      "motor_number": 4,
+      "name": "rear_right_upper",
+      "body_position_m": [
+        -0.2474873734152916,
+        0.2474873734152916,
+        -0.075
+      ],
+      "reaction_yaw_sign": -1,
+      "paired_channel": 6,
+      "prop_spin_body_z_sign": 1,
+      "scene_position_m": [
+        0.2474873734152916,
+        0.075,
+        0.2474873734152916
+      ],
+      "propeller_sense": -1
+    },
+    {
+      "channel": 4,
+      "motor_number": 5,
+      "name": "front_left_lower",
+      "body_position_m": [
+        0.2474873734152916,
+        -0.2474873734152916,
+        0.075
+      ],
+      "reaction_yaw_sign": 1,
+      "paired_channel": 1,
+      "prop_spin_body_z_sign": -1,
+      "scene_position_m": [
+        -0.2474873734152916,
+        -0.075,
+        -0.2474873734152916
+      ],
+      "propeller_sense": 1
+    },
+    {
+      "channel": 5,
+      "motor_number": 6,
+      "name": "front_right_lower",
+      "body_position_m": [
+        0.2474873734152916,
+        0.2474873734152916,
+        0.075
+      ],
+      "reaction_yaw_sign": -1,
+      "paired_channel": 0,
+      "prop_spin_body_z_sign": 1,
+      "scene_position_m": [
+        0.2474873734152916,
+        -0.075,
+        -0.2474873734152916
+      ],
+      "propeller_sense": -1
+    },
+    {
+      "channel": 6,
+      "motor_number": 7,
+      "name": "rear_right_lower",
+      "body_position_m": [
+        -0.2474873734152916,
+        0.2474873734152916,
+        0.075
+      ],
+      "reaction_yaw_sign": 1,
+      "paired_channel": 3,
+      "prop_spin_body_z_sign": -1,
+      "scene_position_m": [
+        0.2474873734152916,
+        -0.075,
+        0.2474873734152916
+      ],
+      "propeller_sense": 1
+    },
+    {
+      "channel": 7,
+      "motor_number": 8,
+      "name": "rear_left_lower",
+      "body_position_m": [
+        -0.2474873734152916,
+        -0.2474873734152916,
+        0.075
+      ],
+      "reaction_yaw_sign": -1,
+      "paired_channel": 2,
+      "prop_spin_body_z_sign": 1,
+      "scene_position_m": [
+        -0.2474873734152916,
+        -0.075,
+        0.2474873734152916
+      ],
+      "propeller_sense": -1
+    }
+  ],
+  "limitations": [
+    "Battery and payload visual positions are illustration estimates, not measured mass centers.",
+    "Mass/inertia and coaxial effects retain the documented assumptions."
+  ]
+}

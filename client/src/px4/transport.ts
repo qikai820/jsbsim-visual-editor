@@ -9,6 +9,7 @@ export class ToolTransport {
   onEndpoint: (label: string) => void = () => {};
   onPacket: (bytes: Uint8Array, peer?: string, datagram?: boolean) => void = () => {};
   constructor(readonly owner: 'px4' | 'nsh') {}
+  get sessionId() { return this.session; }
   subscribe = (fn: (bytes: Uint8Array) => void) => { this.output.add(fn); return () => { this.output.delete(fn); }; };
   async open(config: TransportConfig) {
     await this.close(); const generation = ++this.generation;

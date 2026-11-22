@@ -36,6 +36,30 @@ export class Px4Shell implements TerminalChannel {
     const work = this.queue.then(async () => { for (let i = 0; i < bytes.length; i += 70) { if (!this.active) throw Error('终端会话已结束'); await this.link.send(126, this.packet(bytes.subarray(i, i+70))); } });
     this.queue = work.catch(() => {}); return work;
   };
+  async saveParameters(signal: AbortSignal) {
+    if (signal.aborted) throw Error('操作已取消');
+    await this.open();
+    // PREFLIGHT_STORAGE is acknowledged before PX4's worker finishes saving.
+    // Wait for the synchronous NSH command's exit status before requesting reboot.
+    const token = 'PX4S' + Math.random().toString(36).slice(2, 10);
+    await new Promise<void>((resolve, reject) => {
+      let output = '', unsubscribe = () => {}, timer: ReturnType<typeof setTimeout>;
+      const clean = () => { unsubscribe(); clearTimeout(timer); signal.removeEventListener('abort', cancel); this.link.signal.removeEventListener('abort', cancel); };
+      const finish = (error?: Error) => { clean(); error ? reject(error) : resolve(); };
+      const cancel = () => finish(Error('参数保存已取消或飞控连接已断开'));
+      timer = setTimeout(() => finish(Error('参数保存结果未确认，未发送重启指令')), 10000);
+      signal.addEventListener('abort', cancel, { once: true }); this.link.signal.addEventListener('abort', cancel, { once: true });
+      unsubscribe = this.subscribe(bytes => {
+        output = (output + new TextDecoder().decode(bytes)).slice(-16384);
+        const lines = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n').split('\n').map(s => s.trim());
+        if (lines.includes(token + '0')) finish();
+        else if (lines.includes(token + '1')) finish(Error('飞控参数保存失败，未发送重启指令'));
+      });
+      if (signal.aborted || this.link.signal.aborted) { cancel(); return; }
+      // Clear any unfinished input line; leave a running console command alone.
+      void this.write(`\x15if param save; then echo ${token}0; else echo ${token}1; fi\r`).catch(e => finish(e instanceof Error ? e : Error(String(e))));
+    });
+  }
   async close(release = true) {
     if (this.timer) clearInterval(this.timer); this.timer = undefined;
     if (this.active && release && this.link.connected) {

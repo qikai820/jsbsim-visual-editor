@@ -42,6 +42,8 @@ mod usb_file_picker;
 mod usb_file_editor;
 mod serial_assistant;
 mod tool_transport;
+mod flight_test;
+mod mcp;
 mod px4_files;
 mod px4_metadata;
 
@@ -1554,6 +1556,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            if let Err(error) = mcp::start(app.handle().clone()) {
+                eprintln!("MCP bridge unavailable: {error}");
+            }
             let sim_client = sim_client::SimClient::new(5801);
             let app_handle = app.handle().clone();
 
@@ -1604,6 +1609,9 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            mcp::mcp_bridge_status,
+            mcp::mcp_claim_request,
+            mcp::mcp_complete_request,
             select_model_import,
             generate_xml,
             parse_xml,
@@ -1708,6 +1716,13 @@ fn main() {
             tool_transport::tool_transport_close,
             tool_transport::tool_transport_pin_peer,
             tool_transport::tool_simulator_nsh_target,
+            flight_test::flight_test_validate,
+            flight_test::flight_test_start,
+            flight_test::flight_test_status,
+            flight_test::flight_test_rc_source_status,
+            flight_test::flight_test_rc_source_select,
+            flight_test::flight_test_stop,
+            flight_test::flight_test_report,
             px4_files::px4_log_begin,
             px4_files::px4_log_write,
             px4_files::px4_log_finish,
@@ -1731,10 +1746,21 @@ fn main() {
             serial_assistant_replay,
             serial_assistant_export,
         ])
+        .on_window_event(|window, event| {
+            // A hidden toolbox must not keep the process and HIL session alive
+            // after the user closes the main application window.
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                window.app_handle().exit(0);
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                mcp::shutdown();
+                let _=flight_test::stop(None);
                 telemetry_recorder::global().stop();
                 serial_assistant::global().shutdown();
             }

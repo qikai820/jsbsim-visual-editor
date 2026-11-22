@@ -92,13 +92,9 @@ try {
   for (const angle of [.45, -.55, .9]) {
     sampleSequence++;
     await evaluate(`(()=>{const revision=window.__calls.filter(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.length).at(-1).args.revision;window.__sampleQueue.push({instance_id:'01',model:'voliro_t',tree_generation:'demo',state:'running',timestamp:${13 + sampleSequence * .01},monitor:{version:1,revision,sequence:${sampleSequence},samples:{'fcs/voliro_t/pitch-rad':[${angle},${13 + sampleSequence * .01},false]}}})})()`);
-    let followed = false;
-    for (let i = 0; i < 25; i++) {
-      followed = await evaluate(`Math.abs(window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-tilt-01-0').rotation.x+${angle})<.0001`);
-      if (followed) break;
-      await new Promise(r => setTimeout(r, 10));
-    }
-    assert.ok(followed, 'servo geometry follows sampled angle without waiting for inspector refresh');
+    // The inspector stays held throughout; wait for a rendered frame rather
+    // than a 250 ms wall-clock budget on the software WebGL renderer.
+    await until(`Math.abs(window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-tilt-01-0').rotation.x+${angle})<.0001`);
   }
   await evaluate('window.__holdInspector=false');
   await until(`document.querySelector('.scene-mechanism-status').textContent.includes('高速采样')`);
@@ -107,7 +103,7 @@ try {
   await evaluate(`window.__rotorSequence=4;window.__pushRotor=(samples,t)=>{const revision=window.__calls.filter(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.length).at(-1).args.revision;window.__sampleQueue.push({instance_id:'01',model:'voliro_t',tree_generation:'demo',state:'running',timestamp:t,monitor:{version:1,revision,sequence:window.__rotorSequence++,samples:Object.fromEntries(Object.entries(samples).map(([i,rpm])=>[Number.isInteger(Number(i))?'fcs/voliro_t/rpm['+i+']':i,[rpm,t,false]]))}})};window.__pushRotor({0:2400,4:-1200,'fcs/voliro_t/rpm-model/version':1,'fcs/voliro_t/rpm-model/tail-calibrated':0},13.04)`);
   await until(`document.querySelector('.scene-rpm-row[data-rotor="0"]').textContent.includes('2400')`);
   assert.ok(await evaluate(`document.querySelector('.scene-rpm-row[data-rotor="4"]').textContent.includes('未标定')`),'uncalibrated tail model state is identified');
-  assert.ok(await evaluate(`(()=>{const d=window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').userData;return d.rpm===2400 && Math.abs(d.visualAngularVelocity)<Math.abs(d.angularVelocity)})()`),'the display keeps actual RPM while compressing visual phase');
+  await until(`(()=>{const d=window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').userData;return d.rpm===2400 && Math.abs(d.visualAngularVelocity)<Math.abs(d.angularVelocity)})()`);
   assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').parent.parent.position.x`),.45,'M1 is the right upper rotor');
   assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-1').parent.position.y`),-.055,'M2 is the right lower rotor');
   assert.ok(await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene;return s.getObjectByName('scene-rotor-01-0').userData.angularVelocity>0 && s.getObjectByName('scene-rotor-01-1').userData.angularVelocity<0 && s.getObjectByName('scene-rotor-01-4').userData.angularVelocity<0})()`),'coaxial pair and reversible tail follow the sampled directions');
@@ -117,6 +113,9 @@ try {
   await new Promise(r=>setTimeout(r,100));
   assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-0').rotation.y`),stoppedAngle,'zero measured RPM stops geometry even with nonzero ESC and the inspector timer held');
   await evaluate('window.__holdInspector=false');
+  // The preceding GPU checks can outlast pose freshness on slow software GL.
+  // Supply a new F450 pose before testing its live-only pause control.
+  await evaluate(`window.__emit('scene-frames',[{...window.__packets[1],timestamp:13.06,capture_monotonic_us:13.06e6}])`);
   await evaluate(`document.querySelector('[data-aircraft="02"]').click()`);
   await until(`document.querySelector('.scene-inspector header strong').textContent==='02 · F450'`);
   await evaluate(`document.querySelector('.scene-toolbar .scene-action').click()`);
@@ -195,8 +194,9 @@ try {
   await new Promise(r => setTimeout(r, 400));
   const rendering = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();return {calls:s.gl.info.render.calls,triangles:s.gl.info.render.triangles,textures:s.gl.info.memory.textures,geometries:s.gl.info.memory.geometries,shadows:s.gl.shadowMap.enabled}})()`);
   assert.ok(rendering.calls <= 240, `eight-aircraft draw budget: ${JSON.stringify(rendering)}`);
-  // The detailed F-35 contributes 190514 triangles and 25 embedded PBR maps.
-  assert.ok(rendering.triangles < 206000, `eight-aircraft plus detailed F-35 triangle budget: ${JSON.stringify(rendering)}`);
+  // F-35 contributes 190514 triangles; the detailed MorphQuad adds ~20k.
+  // Material batching retains the existing draw-call and texture caps.
+  assert.ok(rendering.triangles < 226000, `eight-aircraft plus detailed F-35/MorphQuad triangle budget: ${JSON.stringify(rendering)}`);
   assert.ok(rendering.textures >= 33 && rendering.textures <= 34, 'seven environment maps, 25 F-35 maps, one neutral PBR light probe and at most one carbon map');
   assert.equal(rendering.shadows, false, 'scenery never enables a shadow-map render pass');
   const surfaceIds = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map?.value)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`);
@@ -218,7 +218,7 @@ try {
   const runningRendering = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();return {calls:s.gl.info.render.calls,triangles:s.gl.info.render.triangles}})()`);
   // Photo shell/pods and lofted MSC blades add detail; keep the draw-call cap.
   // Nine F-35 materials, transparent canopy passes, its shadow and the apron.
-  assert.ok(runningRendering.calls <= 255 && runningRendering.triangles < 208000, `running eight-aircraft plus detailed F-35 budget: ${JSON.stringify(runningRendering)}`);
+  assert.ok(runningRendering.calls <= 255 && runningRendering.triangles < 228000, `running eight-aircraft plus detailed F-35/MorphQuad budget: ${JSON.stringify(runningRendering)}`);
   await evaluate(`document.querySelector('.scene-camera-tabs button:nth-child(2)').click()`);
   assert.equal(await evaluate(`window.__calls.filter(c=>c.command==='sim_instance_control').length`), callsBefore, 'demo pause/resume never sends flight-control commands');
   await screenshot('/tmp/jsbsim-flight-scene-1600.png');
@@ -258,7 +258,7 @@ try {
   await until(`document.querySelector('.scene-inspector header strong').textContent==='01 · MorphQuad' && document.querySelectorAll('.scene-gimbal-row').length===4 && document.querySelectorAll('.scene-rpm-row').length===8`);
   await until(`window.__calls.some(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.length===32&&c.args.keys.includes('fcs/gimbal-inner-rad[3]')&&c.args.keys.includes('propulsion/engine[7]/propeller-rpm'))`);
   const morphGeometry = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene;return Array.from({length:4},(_,i)=>{const p=s.getObjectByName('scene-gimbal-outer-01-'+i).parent;return [p.position.x,p.position.y,p.position.z]})})()`);
-  assert.deepEqual(morphGeometry, [[.225,.04,-.225],[-.225,.04,-.225],[-.225,.04,.225],[.225,.04,.225]]);
+  assert.deepEqual(morphGeometry, [[.203,0,-.190],[-.203,0,-.190],[-.203,0,.190],[.203,0,.190]]);
   await until(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene;return Array.from({length:4},(_,i)=>s.getObjectByName('scene-rotor-01-'+(i*2))?.userData.angularVelocity*s.getObjectByName('scene-rotor-01-'+(i*2+1))?.userData.angularVelocity<0).every(Boolean)})()`);
   assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-rotor-01-7').children[0].count`),3,'MorphQuad uses three blades per propeller');
   await evaluate(`window.__holdInspector=true;window.__morphSequence=1;window.__pushGimbal=(a,b)=>{const revision=window.__calls.filter(c=>c.command==='sim_monitor_subscribe'&&c.args.instanceId===1&&c.args.keys.length).at(-1).args.revision;window.__sampleQueue.push({instance_id:'01',model:'MorphQuad',tree_generation:'demo',state:'running',timestamp:30.1+window.__morphSequence*.01,monitor:{version:1,revision,sequence:window.__morphSequence++,samples:{'fcs/gimbal-outer-rad[0]':[a,30.1,false],'fcs/gimbal-inner-rad[0]':[b,30.1,false]}}})}`);
@@ -295,7 +295,8 @@ try {
   await until(`document.querySelectorAll('[data-aircraft]').length===8`);
   await new Promise(r => setTimeout(r, 1500));
   await screenshot('/tmp/jsbsim-flight-scene-app.png');
-  await evaluate(`document.querySelector('.scene-breadcrumb>button').click()`);
+  await evaluate(`document.querySelector('.workspace-menu-trigger').click()`);
+  await clickText('✎ 模型编辑');
   await until(`!document.querySelector('[data-testid=flight-scene]')`);
   await evaluate(`document.querySelector('.workspace-menu-trigger').click()`);
   await clickText('◈ 飞行视景');

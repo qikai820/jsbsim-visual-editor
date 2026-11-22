@@ -2,9 +2,32 @@ import { invoke } from '@tauri-apps/api/core';
 import { aborted, delay, frameUri, FtpReader, Px4Connection } from './connection';
 import { crc32, normalizeParameterValue, parameterSetPayload, parameterValue, stringAt, view } from './protocol';
 import { parseMetadata, type MetadataCatalog } from './metadata';
+import { cacheLocalText } from '../utils/browserCache';
 export type Parameter = { name: string; value: number; type: number; index: number };
 export type LogEntry = { id: number; time: number; size: number };
 export type UlogSummary = { path: string; name: string; size: number; version: number; duration: number | null; topics: Array<{ name: string; multiId: number; samples: number; frequency: number | null }>; parameters: Record<string, number | string>; info: Record<string, string>; dropoutCount: number; dropoutMs: number; truncated: boolean };
+
+export async function readParameter(link: Px4Connection, name: string, signal: AbortSignal): Promise<Parameter> {
+  if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) throw Error('无效的 PX4 参数名称');
+  const request = new Uint8Array(20); view(request).setInt16(0, -1, true);
+  request[2] = link.target.system; request[3] = link.target.component; request.set(new TextEncoder().encode(name), 4);
+  const control = new AbortController(), cancel = () => control.abort(); signal.addEventListener('abort', cancel, { once: true });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      aborted(signal, link.signal);
+      if (!link.alive) throw Error('请等待飞控心跳后读取参数');
+      const waiting = link.wait(f => f.id === 22 && stringAt(f.payload, 8, 16) === name, 1000, control.signal);
+      void waiting.catch(() => {});
+      await link.send(20, request);
+      try {
+        const frame = await waiting, value = parameterValue(frame.payload, link.bytewise);
+        if (!Number.isFinite(value)) throw Error(`${name} 返回了无效数值`);
+        return { name, value, type: frame.payload[24], index: view(frame.payload).getUint16(6, true) };
+      } catch (e) { aborted(signal, link.signal); if (attempt === 2) throw Error(`无法读取 ${name}：${e instanceof Error ? e.message : String(e)}`); }
+    }
+    throw Error(`无法读取 ${name}`);
+  } finally { control.abort(); signal.removeEventListener('abort', cancel); }
+}
 
 export async function writeParameter(link: Px4Connection, parameter: Parameter, value: number, signal: AbortSignal, update: (parameter: Parameter) => void): Promise<Parameter> {
   aborted(signal, link.signal);
@@ -159,7 +182,7 @@ export async function loadVehicleMetadata(link: Px4Connection, signal: AbortSign
       if (key) { const cached = localStorage.getItem(key); if (cached) return parseMetadata(cached, { kind: 'cache', label: candidate.uri, uri: candidate.uri, crc: checksum, matched: true }); }
       const text = await read(candidate.uri, checksum);
       const catalog = parseMetadata(text, { kind: 'vehicle', label: candidate.uri, uri: candidate.uri, crc: checksum, matched: true });
-      if (key) try { localStorage.setItem(key, text); } catch { /* Metadata remains usable if the cache is full. */ }
+      if (key) cacheLocalText(key, text);
       return catalog;
     } catch (e) { aborted(signal, link.signal); if (key) localStorage.removeItem(key); errors.push(`${candidate.uri}：${e instanceof Error ? e.message : String(e)}`); }
   }

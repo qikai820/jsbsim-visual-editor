@@ -14,6 +14,8 @@ import FlightSceneCanvas, { type SceneLayers } from './FlightSceneCanvas';
 import SceneEditorPanel from './SceneEditorPanel';
 import { useSceneEditor } from './useSceneEditor';
 import { useSceneModelOrigin } from './useSceneModelOrigin';
+import { sessionIsActive, setTestDisplay, useFlightTestStore } from '../../flight-test/session';
+import { SceneFlightTestPanel, SceneFlightTestStatus } from './SceneFlightTest';
 import './flightScene.css';
 import './flightSceneWorkspace.css';
 
@@ -117,6 +119,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const [display, setDisplay] = useState<SceneDisplay>(loadSceneDisplay);
   const [panel, setPanel] = useState<'aircraft' | 'layers' | 'settings' | 'telemetry' | 'instruments' | 'editor' | null>(null);
   const [focus, setFocus] = useState(false), [valueSelected, setValueSelected] = useState(0), [hudSettings, setHudSettings] = useState(false);
+  const testDisplay = useFlightTestStore(state => state.display), testRunning = useFlightTestStore(sessionIsActive);
   const [storageError, setStorageError] = useState(false);
   const customKeys = useMemo(() => sceneValueKeys(display.values), [display.values]);
   const customSignature = customKeys.join('\n');
@@ -213,6 +216,8 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const subscribed = new Set(mergeSceneMonitorKeys(userKeys, sceneMonitorKeys(selectedModel, customKeys)).map(canonicalMonitorProperty));
   const unavailableKeys = demo ? [] : customKeys.filter(key => !subscribed.has(canonicalMonitorProperty(key)));
   const rightOpen = !focus && (panel === 'telemetry' || panel === 'instruments' || editor.enabled && panel === 'editor');
+  const testVisible = testDisplay !== 'hidden' && !focus && !editor.enabled && !['aircraft', 'layers', 'settings'].includes(panel ?? '');
+  const restoreTest = () => { setFocus(false); setPanel(null); editor.setEnabled(false); setTestDisplay('compact'); };
   const toolbar = <div className={`scene-toolbar ${toolbarHost ? 'scene-toolbar-embedded' : ''}`}>
       <div className="scene-breadcrumb"><button onClick={onClose} title="返回模型编辑" aria-label="返回模型编辑">←</button><strong>飞行视景</strong></div>
       <select className="scene-aircraft-select" aria-label="选择视景飞行器" value={selected} onChange={event => setSelected(event.target.value)}>
@@ -242,6 +247,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         <button aria-label="场景图层" aria-pressed={panel === 'layers'} onClick={() => togglePanel('layers')}><SceneIcon name="layers" /><span>图层</span></button>
         <button aria-label={editor.enabled ? '场景属性' : '飞行遥测'} aria-pressed={panel === 'telemetry' || panel === 'editor'} onClick={() => togglePanel(editor.enabled ? 'editor' : 'telemetry')}><SceneIcon name="gauge" /><span>{editor.enabled ? '属性' : '遥测'}</span></button>
         <button aria-label="姿态趋势" aria-pressed={display.trend} disabled={editor.enabled} onClick={toggleTrend}><SceneIcon name="chart" /><span>趋势</span></button>
+        <button className="scene-test-tool" aria-label={testVisible ? '隐藏仿真测试' : '显示仿真测试'} aria-pressed={testVisible} onClick={() => testVisible ? setTestDisplay('hidden') : restoreTest()}><SceneIcon name="test" /><span>测试</span>{testRunning && <i />}</button>
         <button aria-label="视图设置" aria-pressed={panel === 'settings'} onClick={() => togglePanel('settings')}><SceneIcon name="settings" /><span>设置</span></button>
       </nav>
       <aside className="scene-sidebar" hidden={focus || !['aircraft', 'layers', 'settings'].includes(panel ?? '')}><header><strong>{panel === 'layers' ? '场景图层' : panel === 'settings' ? '视图设置' : `飞行器 · ${ids.length} 架`}</strong><button className="scene-panel-close" aria-label="收起侧栏" onClick={() => setPanel(null)}><SceneIcon name="close" /></button></header>
@@ -267,10 +273,11 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
             <p className="scene-muted">未收到地面高程时显示参考平面，离地高度留空。</p><button className="scene-action" disabled={!pose || !!editor.document.georeference} onClick={() => { feed.recenter(selected); setCameraVersion(v => v + 1); }}>以所选飞机重设场景原点</button></details>
         </div>
       </aside>
-      <main className="scene-main"><div className="scene-viewport">
+      <main className="scene-main"><div className="scene-viewport" data-test-open={testVisible}>
         <SceneBoundary resetKey={cameraVersion}>{visible && <FlightSceneCanvas feed={feed} revision={revision} selected={selected} onSelect={setSelected} mode={viewMode} layers={layers} onFps={setFps} groundAltitude={groundPlane.current.altitude} cameraVersion={cameraVersion} editor={editor} />}</SceneBoundary>
         <div className="scene-viewport-caption">◉ {editor.enabled ? '场景编辑' : `${MODES.find(m => m[0] === mode)?.[1]}视角`} <span>{selected} · {pose?.model || slots[selected] || '等待数据'}</span></div>
         <div className="scene-viewport-tools"><span>N ↑</span><button title="重新定位相机" aria-label="重新定位相机" onClick={() => setCameraVersion(v => v + 1)}>◎</button></div>
+        <SceneFlightTestPanel hidden={!testVisible} selected={selected} model={selectedModel} onSelectInstance={setSelected} />
         {!feed.aircraft.size && !editor.enabled && !editor.document.objects.some(object => object.assetId) && <div className="scene-empty"><span>飞行视景已就绪</span><p>连接仿真机后显示实时飞机与航迹</p><button onClick={toggleDemo}>浏览演示场景 →</button></div>}
         {pose && !selectedFresh && <div className="scene-stale" role="status">遥测已过期 · 飞机保持最后位姿</div>}
         <details className="scene-camera-select"><summary><SceneIcon name="camera" />{MODES.find(item => item[0] === viewMode)?.[1]}<SceneIcon name="chevron" /></summary><div className="scene-camera-tabs" aria-label="相机视角">{MODES.map(([key, label]) => <button key={key} disabled={editor.enabled && key !== 'free'} aria-pressed={viewMode === key} className={viewMode === key ? 'active' : ''} onClick={event => { setMode(key); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{label}</button>)}</div></details>
@@ -312,7 +319,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
         <section className="scene-position"><h3>位置</h3><span>纬度 <b>{format(pose?.latitude, 7)}°</b></span><span>经度 <b>{format(pose?.longitude, 7)}°</b></span><span>垂直速度 <b>{format(pose?.verticalSpeed)} m/s</b></span></section>
       </aside>}
     </div>
-    <footer className="scene-status"><span><i className={`scene-dot ${online ? 'online' : ''}`} />{demo ? '演示模式' : online ? '正在接收仿真数据' : '等待仿真遥测'}</span><span>位姿 {format(hz, 0)} Hz</span><span>渲染 {visible ? fps : 0} FPS</span><span>数据年龄 {pose ? Math.max(0, Math.round(now - pose.receivedAt)) : '—'} ms</span><span>{online} / {ids.length} 在线</span><small>{demo ? '演示数据 · 不控制仿真机' : '实时视景 · 本地资源'}</small><button aria-pressed={display.trend} disabled={editor.enabled} onClick={toggleTrend}>姿态趋势 <SceneIcon name="chevron" /></button></footer>
+    <footer className="scene-status"><span><i className={`scene-dot ${online ? 'online' : ''}`} />{demo ? '演示模式' : online ? '正在接收仿真数据' : '等待仿真遥测'}</span><span>位姿 {format(hz, 0)} Hz</span><span>渲染 {visible ? fps : 0} FPS</span><span>数据年龄 {pose ? Math.max(0, Math.round(now - pose.receivedAt)) : '—'} ms</span><span>{online} / {ids.length} 在线</span><SceneFlightTestStatus hidden={!testVisible} onRestore={restoreTest} /><small>{demo ? '演示数据 · 不控制仿真机' : '实时视景 · 本地资源'}</small><button aria-pressed={display.trend} disabled={editor.enabled} onClick={toggleTrend}>姿态趋势 <SceneIcon name="chevron" /></button></footer>
   </div>;
 }
 

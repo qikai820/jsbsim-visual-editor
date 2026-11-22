@@ -2,11 +2,14 @@ node_modules/
 dist/
 projects/
 src-tauri/target/
+tools/flight-test-cli/target/
 src-tauri/gen/
 src-tauri/.env
 .qwen/
 .toolchains/
 *.log
 .DS_Store
+__pycache__/
+*.py[cod]
 test-*.mjs
 test-*.png

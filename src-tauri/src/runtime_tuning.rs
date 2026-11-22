@@ -28,10 +28,14 @@ pub fn snapshot(id: u8) -> Option<Value> {
     Some(frame)
 }
 pub fn packet(instance: u8, request: u32, session: &str, edits: &[Edit]) -> Result<Vec<u8>, String> {
-    if !(1..=32).contains(&instance) || request == 0 || edits.is_empty() || edits.len() > 12 { return Err("实时调参一次需包含 1～12 个参数".into()); }
+    let wind = edits.iter().any(|edit| edit.key.starts_with("_tuning/wind/"));
+    if wind && (edits.len() != 14 || edits.iter().any(|edit| !edit.key.starts_with("_tuning/wind/"))) {
+        return Err("风场参数须单独整组提交，共 14 项".into());
+    }
+    if !(1..=32).contains(&instance) || request == 0 || edits.is_empty() || (!wind && edits.len() > 12) { return Err("实时调参一次需包含 1～12 个参数".into()); }
     if session.len() != 16 { return Err("实时调参会话无效".into()); }
     let generation = u64::from_str_radix(session, 16).ok().filter(|n| *n != 0).ok_or("实时调参会话无效")?;
-    let mut out = b"VPAR".to_vec(); out.extend([instance, edits.len() as u8, 0, 0]);
+    let mut out = if wind { b"VWIN" } else { b"VPAR" }.to_vec(); out.extend([instance, edits.len() as u8, 0, 0]);
     out.extend(request.to_le_bytes()); out.extend(generation.to_le_bytes());
     let mut keys = std::collections::HashSet::new();
     for edit in edits {
@@ -50,6 +54,9 @@ pub fn apply(instance: u8, session: &str, model: &str, edits: &[Edit], send: imp
     }
     if before["tuning"]["session"].as_str() != Some(session) || before["model"].as_str() != Some(model) {
         return Err("模型或运行会话已改变，请重新提交参数".into());
+    }
+    if edits.iter().any(|edit| edit.key.starts_with("_tuning/wind/")) && before["tuning"]["wind"].as_u64().unwrap_or(0) < 1 {
+        return Err("当前运行端尚不支持波形风场，请更新仿真机固件；修改已保留".into());
     }
     if edits.iter().any(|edit| edit.key.starts_with("_tuning/inertia/")) && before["tuning"]["inertia"] != true {
         return Err("当前运行端尚不支持惯量实时更新，请更新仿真机固件；修改已保留".into());

@@ -325,6 +325,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const state = get();
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
+    if (node.data.componentType === 'environment' && node.data.params.wind_profile?.active && !('wind_profile' in params) &&
+        ['wind_north_fps', 'wind_east_fps', 'wind_down_fps'].some(key => key in params))
+      params = { ...params, wind_profile: { ...node.data.params.wind_profile, active: 0 } };
     params = synchronizeTablePatch(node.data.params, params);
     const changedKeys = Object.keys(params).filter(key =>
       JSON.stringify(node.data.params?.[key]) !== JSON.stringify(params[key]));

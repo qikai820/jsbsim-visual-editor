@@ -1,12 +1,16 @@
 import { useFlowStore } from '../store/flowStore';
 import FloatInput from './FloatInput';
+import WindProfileEditor from './WindProfileEditor';
+import { profileFromEnvironment, windProfileEdits, windProfileError, type WindProfile } from '../sim/windProfile';
+import { withoutAutomaticRuntimeTuning } from '../sim/runtimeTuningOrigin';
 import { environmentEdits, environmentFields, projectModelNames } from '../sim/runtimeParameters';
-import { submitRuntimeEdits } from '../store/runtimeTuningStore';
+import { submitRuntimeEdits, useRuntimeTuningStore, refreshRuntimeSnapshot } from '../store/runtimeTuningStore';
 import { useEffect, useMemo, useState } from 'react';
 import { firmwareRollback, firmwareInfo, type FirmwareInfo, firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 import { useSimSocket } from '../sim/useSimSocket';
 import { fleetSlotIds } from '../utils/fleetModelGroups';
+import { cacheLocalText, tryStoreLocalText } from '../utils/browserCache';
 
 type Tab = '系统设置' | '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
 type VariableCategory = 'attitude' | 'position' | 'inertia' | 'controls' | 'propulsion' | 'environment' | 'simulation' | 'other';
@@ -85,6 +89,7 @@ const formatBuildTime = (value: string | undefined, isZh: boolean) => {
 export default function SimulationConfigDialog({ model, instanceId, slots, onSelectInstance, onClose }: { model: string; instanceId: string; slots: Record<string, string>; onSelectInstance: (id: string) => void | Promise<void>; onClose: () => void }) {
   const { isZh } = useLanguage();
   const { telemetry, connected } = useSimSocket();
+  const windTuning = useRuntimeTuningStore();
   const tr = (zh: string, en: string) => isZh ? zh : en;
   const safeModel = (model || 'default').replace(/[^a-zA-Z0-9_.-]/g, '_');
   const variableCacheKey = `jsbsim-mcap-variables:${safeModel}`;
@@ -110,6 +115,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   const [simulatorVersion, setSimulatorVersion] = useState<SimulatorVersion | null>(null);
   const [versionStatus, setVersionStatus] = useState(tr('正在读取仿真机版本…', 'Reading simulator version…'));
   const [showVersionManager, setShowVersionManager] = useState(false);
+  const [snapshotStatus, setSnapshotStatus] = useState('');
   const [firmwareFile, setFirmwareFile] = useState<File | FirmwareSelection | null>(null);
   const [firmwareUpdating, setFirmwareUpdating] = useState(false);
   const [firmwareStatus, setFirmwareStatus] = useState(tr('请选择 nuttx.bin 固件', 'Select a nuttx.bin firmware image'));
@@ -127,14 +133,32 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   });
   const serialized = useMemo(() => JSON.stringify(config, null, 2), [config]);
   const set = (group: string, key: string, value: any) => {
-    setConfig((current: any) => ({ ...current, [group]: { ...current[group], [key]: value } }));
+    const fixed = group === 'environment' && ['windNorthFps', 'windEastFps', 'windDownFps'].includes(key) && config.environment.windProfile
+      ? { ...config.environment.windProfile, active: 0 as const } : null;
+    setConfig((current: any) => ({ ...current, [group]: { ...current[group], [key]: value, ...(fixed ? { windProfile: fixed } : {}) } }));
     if (group === 'environment') {
       const project = useFlowStore.getState();
       const node = project.nodes.find(node => node.data.componentType === 'environment');
       const field = environmentFields.find(([, configKey]) => configKey === key)?.[0];
       if (node && field && projectModelNames(project).includes(model)) project.updateNodeParams(node.id, { [field]: Number(value) });
-      else submitRuntimeEdits(environmentEdits({ [key]: Number(value) }), [model], Number(instanceId));
+      else submitRuntimeEdits([...(fixed ? windProfileEdits(fixed) : []), ...environmentEdits({ [key]: Number(value) })], [model], Number(instanceId));
     }
+  };
+  const changeWind = (profile: WindProfile) => {
+    useRuntimeTuningStore.setState({ message: tr('风场修改已保留，点击“应用风场”生效', 'Wind draft retained; click Apply wind to activate'), error: false });
+    setConfig((current: any) => ({ ...current, environment: { ...current.environment, windProfile: profile } }));
+    const project = useFlowStore.getState();
+    const node = project.nodes.find(node => node.data.componentType === 'environment');
+    if (node && projectModelNames(project).includes(model))
+      withoutAutomaticRuntimeTuning(() => project.updateNodeParams(node.id, { wind_profile: profile }));
+  };
+  const applyWind = async (profile: WindProfile) => {
+    try {
+      await refreshRuntimeSnapshot();
+      const edits = windProfileEdits(profile);
+      if (!profile.active) edits.push(...environmentEdits(config.environment).filter(edit => edit.key.startsWith('atmosphere/wind-')));
+      submitRuntimeEdits(edits, [model], Number(instanceId));
+    } catch (error) { useRuntimeTuningStore.setState({ message: String(error), error: true }); }
   };
   const selectedVariables: string[] = Array.isArray(config.mcap.selectedVariables) ? config.mcap.selectedVariables : [];
   const criticalVariables: string[] = Array.isArray(config.mcap.criticalVariables) ? config.mcap.criticalVariables : [];
@@ -185,7 +209,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
     if (paths.length === 0) return;
     setAvailableVariables(previous => {
       if (previous.length === paths.length && previous.every((path, index) => path === paths[index])) return previous;
-      localStorage.setItem(variableCacheKey, JSON.stringify(paths));
+      cacheLocalText(variableCacheKey, JSON.stringify(paths));
       return paths;
     });
   }, [telemetry, model, instanceId, variableCacheKey]);
@@ -202,7 +226,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
       if (!paths.length) return;
       setAvailableVariables(previous => {
         if (previous.length === paths.length && previous.every((path, index) => path === paths[index])) return previous;
-        localStorage.setItem(variableCacheKey, JSON.stringify(paths));
+        cacheLocalText(variableCacheKey, JSON.stringify(paths));
         return paths;
       });
     }).catch(() => {}); };
@@ -229,10 +253,25 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const draft = () => {
+      const project = useFlowStore.getState();
+      return projectModelNames(project).includes(model) ? project.nodes.find(node => node.data.componentType === 'environment')?.data.params.wind_profile : undefined;
+    };
     ftpDownloadSimConfig(path).then(result => {
-      const loaded = merge(JSON.parse(result.content)); setConfig(loaded);
-      setBaseline(JSON.stringify(loaded, null, 2)); setStatus(tr('已从仿真机读取', 'Loaded from simulator'));
-    }).catch(() => { setConfig(defaults); setBaseline(''); setStatus(tr('未找到模型配置，当前使用默认值', 'No model configuration found; using defaults')); });
+      if (!active) return;
+      const loaded = merge(JSON.parse(result.content));
+      setBaseline(JSON.stringify(loaded, null, 2));
+      const profile = draft();
+      setConfig(profile ? { ...loaded, environment: { ...loaded.environment, windProfile: profile } } : loaded);
+      setStatus(tr('已从仿真机读取', 'Loaded from simulator'));
+    }).catch(() => {
+      if (!active) return;
+      const profile = draft();
+      setConfig(profile ? { ...defaults, environment: { ...defaults.environment, windProfile: profile } } : defaults);
+      setBaseline(''); setStatus(tr('未找到模型配置，当前使用默认值', 'No model configuration found; using defaults'));
+    });
+    return () => { active = false; };
   }, [path]);
 
   const refreshSimulatorVersion = async () => {
@@ -250,8 +289,12 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   const saveVersionSnapshot = () => {
     if (!simulatorVersion) return;
     const next = [{ ...simulatorVersion, savedAt: new Date().toISOString() }, ...versionSnapshots].slice(0, 20);
+    if (!tryStoreLocalText('jsbsim-simulator-version-snapshots', JSON.stringify(next))) {
+      setSnapshotStatus(tr('未能保存快照：本机存储空间不足或不可用。', 'Snapshot not saved: local storage is full or unavailable.'));
+      return;
+    }
     setVersionSnapshots(next);
-    localStorage.setItem('jsbsim-simulator-version-snapshots', JSON.stringify(next));
+    setSnapshotStatus(tr('快照已保存到本机', 'Snapshot saved locally'));
   };
 
   const chooseFirmware = async () => {
@@ -375,6 +418,10 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
 
   const save = async () => {
     if (saving) return;
+    if (config.environment.windProfile) {
+      const error = windProfileError(config.environment.windProfile, isZh);
+      if (error) { setStatus(error); return; }
+    }
     if (!Number.isInteger(config.runtime.displayRateHz) || config.runtime.displayRateHz < 1 || config.runtime.displayRateHz > 100) {
       setStatus(tr('显示频率请输入 1～100 Hz 的整数。', 'Display rate must be an integer from 1 to 100 Hz.'));
       return;
@@ -410,9 +457,11 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
     }
     setPlotRateSaving(true);
     try {
-      await setPlotJugglerRate(rate);
+      const result = await setPlotJugglerRate(rate);
       setPlotRateApplied(rate);
-      setPlotRateStatus(tr('已应用并保存到本机。', 'Applied and saved locally.'));
+      setPlotRateStatus(result.preferenceSaved
+        ? tr('已应用并保存到本机。', 'Applied and saved locally.')
+        : tr('已应用；本机存储空间不足或不可用，未保存此偏好。', 'Applied; preference not saved because local storage is full or unavailable.'));
     } catch (error) {
       setPlotRateStatus(`${tr('应用失败', 'Failed to apply')}: ${String(error)}`);
     } finally {
@@ -476,17 +525,21 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
             {([['latitudeDeg',tr('纬度','Latitude'),'°'],['longitudeDeg',tr('经度','Longitude'),'°'],['altitudeM',tr('海拔','Altitude'),'m'],['rollDeg','Roll','°'],['pitchDeg','Pitch','°'],['yawDeg','Yaw','°'],['airspeedMps',tr('初始空速','Initial airspeed'),'m/s']] as const).map(([key,label,unit]) => <NumberField key={key} label={label} value={config.initial[key]} step={0.1} unit={unit} onChange={(v:any)=>set('initial',key,v)} />)}
             <label className="sim-config-check"><input type="checkbox" checked={config.initial.trim} onChange={e=>set('initial','trim',e.target.checked)} />{tr('启动时执行配平','Trim on startup')}</label>
           </div></section>}
-          {tab === '环境模型' && <section><h3>{tr('环境模型','Environment Model')}</h3><p>{tr('支持实时调参的运行端会立即应用环境修改并保持当前状态；保存后下次启动保留。','Environment edits apply live on a supported runtime. Save to retain them for the next start.')}</p><div className="sim-config-grid">
+          {tab === '环境模型' && <section><h3>{tr('环境模型','Environment Model')}</h3><p>{tr('大气与湍流参数支持实时调参；环境风请点击“应用风场”。保存后下次启动保留。','Atmosphere and turbulence edits apply live; click Apply wind for wind changes. Save to retain for the next start.')}</p><div className="sim-config-grid">
             <NumberField commit label={tr('海平面压力','Sea-level pressure')} value={config.environment.pressureSlPsf} step={0.01} min={0} unit="PSF" onChange={(v:any)=>set('environment','pressureSlPsf',v)} />
             <NumberField commit label={tr('温度偏差','Temperature bias')} value={config.environment.temperatureBiasR} step={0.1} unit="R" onChange={(v:any)=>set('environment','temperatureBiasR',v)} />
             <NumberField commit label={tr('相对湿度','Relative humidity')} value={config.environment.relativeHumidityPct} step={1} min={0} unit="%" onChange={(v:any)=>set('environment','relativeHumidityPct',v)} />
-            <NumberField commit label={tr('北向风','North wind')} value={config.environment.windNorthFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windNorthFps',v)} />
-            <NumberField commit label={tr('东向风','East wind')} value={config.environment.windEastFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windEastFps',v)} />
-            <NumberField commit label={tr('地向风','Down wind')} value={config.environment.windDownFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windDownFps',v)} />
             <SelectField label={tr('湍流模型','Turbulence model')} value={String(config.environment.turbulenceType)} onChange={(v:any)=>set('environment','turbulenceType',Number(v))}><option value="0">0 · {tr('关闭','Off')}</option><option value="1">1 · Standard</option><option value="2">2 · Culp</option><option value="3">3 · MIL-SPEC</option><option value="4">4 · Tustin</option></SelectField>
             <NumberField commit label={tr('20 ft 风速','20 ft wind speed')} value={config.environment.turbulenceWindspeed20ftFps} step={0.1} min={0} unit="ft/s" onChange={(v:any)=>set('environment','turbulenceWindspeed20ftFps',v)} />
             <NumberField commit label={tr('湍流强度','Turbulence severity')} value={config.environment.turbulenceSeverity} step={1} min={0} unit="0–7" onChange={(v:any)=>set('environment','turbulenceSeverity',Math.min(7, Math.max(0, v)))} />
-          </div></section>}
+          </div><WindProfileEditor value={profileFromEnvironment(config.environment)} onChange={changeWind} onApply={profile => void applyWind(profile)} busy={windTuning.busy}
+            message={windTuning.message === '等待运行端' ? undefined : windTuning.message} error={windTuning.error}
+            legacyFields={<div className="sim-config-grid">
+            <NumberField commit label={tr('北向风','North wind')} value={config.environment.windNorthFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windNorthFps',v)} />
+            <NumberField commit label={tr('东向风','East wind')} value={config.environment.windEastFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windEastFps',v)} />
+            <NumberField commit label={tr('地向风','Down wind')} value={config.environment.windDownFps} step={0.1} unit="ft/s" onChange={(v:any)=>set('environment','windDownFps',v)} />
+            </div>} />
+          </section>}
           {tab === 'MCAP日志' && <section><h3>{tr('MCAP日志','MCAP Logging')}</h3><div className="sim-config-grid">
             <label className="sim-config-check"><input type="checkbox" checked={config.mcap.enabled} onChange={e=>set('mcap','enabled',e.target.checked)} />{tr('启用 MCAP 日志','Enable MCAP logging')}</label>
             <NumberField label={tr('状态与关键字段频率','State and critical field rate')} value={config.mcap.rateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','rateHz',Math.min(500,v))} /><NumberField label={tr('普通字段频率','Background field rate')} value={config.mcap.backgroundRateHz} min={1} unit="Hz" onChange={(v:any)=>set('mcap','backgroundRateHz',Math.min(500,v))} /><NumberField label={tr('队列深度','Queue depth')} value={config.mcap.queueDepth} min={32} onChange={(v:any)=>set('mcap','queueDepth',Math.min(2048,v))} />
@@ -569,6 +622,7 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           <header><b>{tr('仿真机版本管理', 'Simulator Version Manager')}</b><button type="button" disabled={firmwareUpdating} onClick={() => setShowVersionManager(false)}>×</button></header>
           <p>{tr('版本来自仿真机只读 VERSION.json；快照保存在本机，便于记录每次固件和航空库组合。', 'The version comes from the simulator read-only VERSION.json. Snapshots are stored locally to track firmware and aviation-library combinations.')}</p>
           <div className="sim-config-version-actions"><button type="button" disabled={firmwareUpdating} onClick={() => void refreshSimulatorVersion()}>{tr('重新读取仿真机', 'Read simulator')}</button><button type="button" disabled={!simulatorVersion || firmwareUpdating} onClick={saveVersionSnapshot}>{tr('保存当前快照', 'Save snapshot')}</button></div>
+          {snapshotStatus && <p role="status">{snapshotStatus}</p>}
           <div className="sim-config-version-list">{versionSnapshots.length === 0 ? <span>{tr('暂无版本快照', 'No version snapshots')}</span> : versionSnapshots.map((item, index) => <article key={`${item.savedAt}-${index}`}><b>{item.product || 'JSBSim Realtime'} {item.version || '—'}</b><span>{item.firmware || '—'} · JSBSim {item.jsbsim || '—'} · {new Date(item.savedAt).toLocaleString()}</span></article>)}</div>
         </section>
       </div>}

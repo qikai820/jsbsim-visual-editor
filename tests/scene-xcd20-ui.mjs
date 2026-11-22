@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { mkdir,writeFile } from 'node:fs/promises';
+import { uiBrowser } from './support/ui-browser.mjs';
+const output=process.argv[2]||'/tmp/xcd20-visual';await mkdir(output,{recursive:true});
+const source=`import React from'react';import{createRoot}from'react-dom/client';import{Canvas,useFrame,useThree}from'@react-three/fiber';import{OrbitControls}from'@react-three/drei';import{Box3,Vector3}from'three';import{GLTFLoader}from'three/examples/jsm/loaders/GLTFLoader.js';import{Xcd20Airframe}from'./src/components/flight-scene/FlightSceneCanvas';import{FlightSceneFeed}from'./src/sim/flightSceneState';import{XCD20_ROTORS}from'./src/sim/sceneXcd20';
+const feed=new FlightSceneFeed();let t=30,state='paused',rpms=Array(8).fill(0);window.frames=0;window.Box3=Box3;window.Vector3=Vector3;
+function update(){const properties=Object.fromEntries(XCD20_ROTORS.flatMap(r=>[['/propulsion/engine['+r.channel+']/propeller-rpm',rpms[r.channel]],['/propulsion/engine['+r.channel+']/propeller-sense',r.sense]]));feed.ingest({instance_id:'01',model:'XCD20',tree_generation:1,state,timestamp:++t,capture_monotonic_us:t*1e6,latitude_deg:34,longitude_deg:109,altitude_m:583,roll_deg:0,pitch_deg:0,yaw_deg:0,properties,scene_property_age_ms:Object.fromEntries(Object.keys(properties).map(k=>[k,0]))},performance.now());}
+window.inputs=(s,values)=>{state=s;rpms=values;update();};update();setInterval(()=>{if(state==='running')update();},100);
+window.loadExport=async()=>{const asset=await new GLTFLoader().loadAsync('/aircraft/xcd20/XCD20.glb');return{stations:Array.from({length:8},(_,i)=>asset.scene.getObjectByName('xcd20-station-'+i)?.position.toArray()),battery:asset.scene.getObjectByName('xcd20-battery-reference')?.userData};};
+function Probe(){window.view=useThree();useFrame(()=>window.frames++);return null;}
+createRoot(document.getElementById('root')).render(<main style={{height:'100vh',display:'flex',flexDirection:'column',fontFamily:'sans-serif',background:'#eef1f3',color:'#253343'}}><style>{'html,body,#root{margin:0;height:100%;overflow:hidden}*{box-sizing:border-box}'}</style><header style={{padding:'22px 32px 8px'}}><h1 style={{margin:0,fontSize:28}}>XCD20 · 共轴八旋翼</h1><p style={{margin:'8px 0',fontSize:16}}>700 mm 对角轴距　｜　150 mm 上下桨距　｜　CINE 1510 三叶桨　｜　12S · 20 kg</p></header><div style={{flex:1,minHeight:0}}><Canvas dpr={1} camera={{position:[1.05,.73,1.15],fov:42,near:.01,far:20}} gl={{antialias:true}}><color attach="background" args={['#eef1f3']}/><hemisphereLight args={['#ffffff','#8292a5',2.5]}/><directionalLight position={[1,2,1]} intensity={3}/><directionalLight position={[-1,1,-1]} intensity={1.2}/><Xcd20Airframe feed={feed} id="01" color="#159fd0" showThrust={false}/><mesh rotation={[-Math.PI/2,0,0]} position={[0,-.257,0]}><planeGeometry args={[20,20]}/><meshStandardMaterial color="#e1e5e8" roughness={1}/></mesh><OrbitControls makeDefault target={[0,-.04,0]} minDistance={.3} maxDistance={4}/><Probe/></Canvas></div><footer style={{padding:'10px 32px 20px',fontSize:14,color:'#5b6878'}}>粉红：200×150×80 mm 电池。电池高度及绿色载荷为外观示意，重心和惯量保留已记录的估算。</footer></main>);`;
+const ui=await uiBrowser(source,{port:5201,width:1500,height:1050});const{ev,until,send}=ui;
+const snapshot=async name=>writeFile(output+'/'+name+'.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+try{
+ await until("window.frames>5&&window.view.scene.getObjectByName('xcd20-rotor-7')");
+ const stats=await ev(`(()=>{const root=view.scene.getObjectByName('scene-xcd20-01');root.updateWorldMatrix(true,true);const box=new Box3().setFromObject(root);return{bounds:[box.min.toArray(),box.max.toArray()],rotors:Array.from({length:8},(_,i)=>{const r=root.getObjectByName('xcd20-rotor-'+i);return{position:r.getWorldPosition(new Vector3()).toArray(),blades:r.children[0].count};}),geometries:view.gl.info.memory.geometries,calls:view.gl.info.render.calls};})()`);
+ for(let i=0;i<8;i++){assert.equal(stats.rotors[i].blades,3);assert(Math.abs(Math.abs(stats.rotors[i].position[1])-.075)<1e-9);}
+ assert(Math.abs(Math.hypot(stats.rotors[0].position[0]-stats.rotors[2].position[0],stats.rotors[0].position[2]-stats.rotors[2].position[2])-.7)<1e-9);
+ await snapshot('perspective');await ev('view.camera.position.set(0,1.75,.0001);view.controls.target.set(0,0,0);view.controls.update()');await until('view.camera.position.y>1.7');await snapshot('plan');
+ await ev('view.camera.position.set(0,.14,-1.65);view.controls.target.set(0,-.04,0);view.controls.update()');await snapshot('side');
+ await ev("window.inputs('running',Array.from({length:8},(_,i)=>4900+i*20))");await until("view.scene.getObjectByName('xcd20-rotor-7').userData.rpm===5040");
+ const signs=await ev("Array.from({length:8},(_,i)=>Math.sign(view.scene.getObjectByName('xcd20-rotor-'+i).userData.angularVelocity))");assert.deepEqual(signs,[1,-1,1,-1,1,-1,1,-1]);
+ const warmGeometries=await ev('view.gl.info.memory.geometries');assert(warmGeometries<=stats.geometries+1,'first visible blur disk may allocate its shared GPU geometry');
+ const first=await ev("view.scene.getObjectByName('xcd20-rotor-0').rotation.y");await until(`Math.abs(view.scene.getObjectByName('xcd20-rotor-0').rotation.y-(${first}))>.001`);
+ await ev("window.inputs('paused',Array(8).fill(5000))");await until("view.scene.getObjectByName('xcd20-rotor-0').userData.angularVelocity===0");
+ const paused=await ev("view.scene.getObjectByName('xcd20-rotor-0').rotation.y");await ev('new Promise(r=>setTimeout(r,150))');assert.equal(await ev("view.scene.getObjectByName('xcd20-rotor-0').rotation.y"),paused);
+ const exported=await ev('window.loadExport()');assert.equal(exported.stations.filter(Boolean).length,8);assert.deepEqual(exported.battery.dimensionsBodyM,[.2,.15,.08]);
+ assert.equal(await ev('view.gl.info.memory.geometries'),warmGeometries);assert.equal(ui.errors.length,0,JSON.stringify(ui.errors));
+ await writeFile(output+'/verification.json',JSON.stringify({passed:true,...stats,spinSigns:signs,exported},null,2));
+ console.log('PASS: actual editor XCD20 WebGL, 700/150 mm geometry, eight three-blade rotors, RPM animation and pause, stable resources, GLB re-import.',output);
+}finally{await ui.close();}

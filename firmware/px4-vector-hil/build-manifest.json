@@ -1,0 +1,22 @@
+{
+  "baseCommit": "73a4d3d36e",
+  "target": "cuav_7-nano_volirot",
+  "board": "CUAV 7 Nano",
+  "model": "MorphQuad (CA_AIRFRAME=16)",
+  "file": "cuav_7-nano_morphquad_vector_hil_20261117.px4",
+  "sha256": "0496db4fbd7664a6a2dfaa860e2b708be054de95da774e2d388459a6b2a79dd8",
+  "bytes": 1690130,
+  "flashed": false,
+  "parameters": {
+    "COM_RC_IN_MODE": 1,
+    "VEC_REF_EN": 1,
+    "VEC_HIL_TEST": 1
+  },
+  "limitsDegrees": {
+    "MANUAL": 45,
+    "ALTCTL": 45,
+    "POSCTL": 120
+  },
+  "currentWorkbenchUsesCustomInterface": false,
+  "note": "Optional development firmware, not required by current workbench; no board was flashed."
+}

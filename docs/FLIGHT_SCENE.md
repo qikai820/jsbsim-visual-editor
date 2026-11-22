@@ -101,7 +101,13 @@ jsbsim_realtime/build/native/test_scene_collision jsbsim_realtime/data/aviation 
 
 ## MorphQuad 视景模型
 
-模型名包含 `MorphQuad`（不区分大小写，也支持 `MorphQuad_bridge`、`MorphQuad_test` 等变体）时自动选择专用外形。H 形机架和桨位对应 `jsbsim_realtime/data/aviation/aircraft/MorphQuad/Propulsion.xml`：前右、前左、后左、后右依次对应 M1/M2、M3/M4、M5/M6、M7/M8，每组为上下共轴反转桨。水平桨位距机体中心各 0.225 m，云台中心在机体上方 0.04 m；桨径 0.1524 m，三叶。上下桨的可见间距、云台环、机身和支架为示意几何；现有动力学 XML 将同组两个推力器放在同一位置，视景间距不改变力臂或受力。参考尺寸沿用现有工程模型，未据实物 CAD 校准。
+模型名包含 `MorphQuad`（不区分大小写，也支持 `MorphQuad_bridge`、`MorphQuad_test` 等变体）时自动选择专用外形。通道顺序沿用 `jsbsim_realtime/data/aviation/aircraft/MorphQuad/Propulsion.xml`：前右、前左、后左、后右依次对应 M1/M2、M3/M4、M5/M6、M7/M8，每组为上下共轴反转桨。
+
+2026-11-18 细化版的公开尺寸来自[论文 v5](https://arxiv.org/html/2607.02764v5) 的机械设计章节及 Table S1：机体前后中心距 380 mm、左右中心距 406 mm，桨径 152.4 mm（三叶），含起落架高度 310 mm。论文旋翼中心相对质心的垂直坐标为 0；场景坐标为右/上/后，因此四组中心为 `(±0.203, 0, ±0.190)` m。当前 JSBSim XML 的水平力臂仍为 ±0.225 m，视景细化不改写动力学或控制参数。
+
+外观按论文 Figure 4/5 的照片与机械示意重建：双层碳纤增强 PLA 板、安装支柱与四脚支架、四个单环云台、正交内横梁、共轴双电机、偏置外轴舵机及皮带轮、空心轴走线，以及电池/束带、Jetson 风扇散热器、飞控板、八只 ESC、相机和线束。每个云台只含一个外环，内轴带动横梁、电机及两副桨一起转动。桨叶使用有弦长、后掠及名义桨距的三维曲面，上下桨具有相反手性；暂停时的 60° 初相差只用于看清共轴两层，不代表实机相位同步。
+
+环径/截面、板轮廓、电子设备包络、上下桨间距（70 mm）及名义桨距（沿用已有 6×3 模型）按照片或既有模型估计，未由实物 CAD 验证。尺寸集中在 `client/src/sim/sceneMorphQuad.ts`，刚体装配在 `sceneMorphQuadVisual.ts`；同一刚体内按材质合并网格，关节之间保持独立，资源随组件卸载释放。不依赖网络纹理。
 
 四组云台分别读取 `fcs/gimbal-outer-rad[0..3]`（α）及 `fcs/gimbal-inner-rad[0..3]`（β）。关节层级使用场景坐标 `Rx(-α) Rz(-β)`，使旋翼轴对应 `GimbalVectoring.xml` 中的机体推力方向 `(sin α cos β, sin β, -cos α cos β)`，保留超过 90° 和倒置时的符号。关节直接在 WebGL 帧循环读取各自的最新模型角；未采到的轴暂用零位且面板留空，过期样本保留最后角度并显示灰色。推力方向箭头只在两轴采样都新鲜时显示。
 
@@ -109,7 +115,7 @@ jsbsim_realtime/build/native/test_scene_collision jsbsim_realtime/data/aviation 
 
 MorphQuad 视景候选共 35 路信号：六路位姿、三路碰撞状态、两路地面属性、八路云台角、八路 RPM 和八路旋向。32 路订阅预算优先保留位姿、碰撞状态、地面属性、云台和 RPM，剩余旋向使用既有机型默认值；用户已有信号仍优先占用总通道额度，通道不足的属性显示为空。原生精简缓存与前端高速队列均接收八桨及四组云台，云台/RPM 包不会刷新机体位姿年龄。
 
-专项验证：`node tests/scene-morphquad.mjs`、`node tests/scene-monitor-subscription.mjs`、`node tests/flight-scene-native.mjs`。`flight-scene-ui.mjs` 另检查实际 WebGL 层级、通道桨位、四组反转桨、三叶桨、倒置推力方向、无需面板刷新即可更新的云台和过期保持，并生成 `/tmp/jsbsim-flight-scene-morphquad.png` 预览。
+专项验证：`node tests/scene-morphquad.mjs`、`node tests/scene-monitor-subscription.mjs`、`node tests/flight-scene-native.mjs`。`node --experimental-websocket tests/scene-morphquad-visual.mjs [输出目录]` 渲染实际编辑器组件，检查 380×406 mm 桨位、310 mm 高度、八副三叶桨、四组独立云台的推力方向、GPU 资源复用及渲染预算，并输出整体/俯视/倾转截图。`flight-scene-ui.mjs` 另检查完整视景中的通道桨位、四组反转桨、三叶桨、倒置推力方向、无需面板刷新即可更新的云台和过期保持，并生成 `/tmp/jsbsim-flight-scene-morphquad.png` 预览。
 
 ## 数据链路
 

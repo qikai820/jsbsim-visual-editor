@@ -3,14 +3,15 @@ import { SIGNAL_NODE_CLEARANCE, signalObstacles, signalRouteIsClear } from './si
 import { separateSignalTracks } from './separateSignalTracks';
 import { mergeSignalBranches } from './mergeSignalBranches';
 import type { SignalRoute } from './signalLayout';
+import { AvoidLib } from '../../../node_modules/libavoid-js/dist/index.js';
 import wasmUrl from '../../../node_modules/libavoid-js/dist/libavoid.wasm?url';
 
 let library: Promise<any> | undefined;
 function loadRouter() {
-  return library ??= import('../../../node_modules/libavoid-js/dist/index.js').then(async ({ AvoidLib }) => {
+  return library ??= (async () => {
     await AvoidLib.load(wasmUrl);
     return AvoidLib.getInstance();
-  }).catch(error => { library = undefined; throw error; });
+  })().catch(error => { library = undefined; throw error; });
 }
 
 type Point = { x: number; y: number };

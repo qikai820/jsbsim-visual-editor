@@ -13,6 +13,10 @@ export class Px4Connection {
   private pinning: Promise<void> = Promise.resolve();
   connected = false;
   lastHeartbeat = 0;
+  heartbeatMode?: number;
+  heartbeatGeneration = 0;
+  bootGeneration = 0;
+  bootTimeMs?: number;
   bytewise = true;
   onChange: () => void = () => {};
   onError: (error: string) => void = () => {};
@@ -22,7 +26,7 @@ export class Px4Connection {
   constructor(target: Target, private expectedHost?: string) {
     this.target = target;
     this.transport.onStatus = (connected, error) => {
-      this.connected = connected; if (!connected) { this.lastHeartbeat = 0; this.aborter.abort(); if (this.timer) clearInterval(this.timer); this.timer = undefined; }
+      this.connected = connected; if (!connected) { this.lastHeartbeat = 0; this.heartbeatMode = undefined; this.aborter.abort(); if (this.timer) clearInterval(this.timer); this.timer = undefined; }
       if (error) this.onError(error); this.onChange();
     };
     this.transport.onEndpoint = label => { this.endpoint = label; this.onChange(); };
@@ -40,9 +44,16 @@ export class Px4Connection {
         if (frame.id === 0) {
           if (frame.payload[5] !== 12) continue;
           if (!this.peer && peer && datagram) { this.pinning = this.transport.pinPeer(peer); void this.pinning.catch(e => this.onError(String(e))); }
-          this.peer = peer; this.lastHeartbeat = Date.now(); this.onChange();
+          if (this.lastHeartbeat && Date.now() - this.lastHeartbeat > 2500) this.heartbeatGeneration++;
+          this.peer = peer; this.lastHeartbeat = Date.now(); this.heartbeatMode = frame.payload[6]; this.onChange();
         }
         if (!this.lastHeartbeat) continue;
+        if (frame.id === 30) {
+          const bootTime = view(frame.payload).getUint32(0, true);
+          // Ignore small out-of-order samples and the natural uint32 uptime wrap.
+          if (this.bootTimeMs !== undefined && bootTime + 1000 < this.bootTimeMs && this.bootTimeMs - bootTime < 0xffff0000) this.bootGeneration++;
+          this.bootTimeMs = bootTime;
+        }
         if (frame.id === 148) {
           const v = view(frame.payload), flags = v.getBigUint64(0, true), version = v.getUint32(16, true);
           if ((flags & 16n) !== 0n) this.bytewise = true; else if ((flags & 131072n) !== 0n) this.bytewise = false;
@@ -54,10 +65,15 @@ export class Px4Connection {
     };
   }
   get alive() { return this.connected && this.lastHeartbeat > Date.now() - 5000; }
+  get armed() { return this.alive && this.heartbeatMode !== undefined ? !!(this.heartbeatMode & 128) : undefined; }
+  get hilEnabled() { return this.alive && this.heartbeatMode !== undefined ? !!(this.heartbeatMode & 32) : undefined; }
   get signal() { return this.aborter.signal; }
+  // A heartbeat can arrive before the native worker acknowledges its UDP
+  // reply target. Native operations must wait for that same pin as send().
+  get ready(): Promise<void> { return this.pinning; }
   subscribe = (fn: (frame: Frame) => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   async open(config: TransportConfig) {
-    this.aborter = new AbortController(); this.parser.reset(); this.peer = undefined; this.pinning = Promise.resolve();
+    this.aborter = new AbortController(); this.parser.reset(); this.peer = undefined; this.pinning = Promise.resolve(); this.lastHeartbeat = 0; this.heartbeatMode = undefined; this.bootTimeMs = undefined;
     await this.transport.open(config);
     if (this.signal.aborted) throw Error('连接已断开');
     this.timer = setInterval(() => {

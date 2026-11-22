@@ -1,0 +1,2552 @@
+<?xml version="1.0"?>
+<!-- flight-test-workspace:eyJ2ZXJzaW9uIjoxLCJuYW1lIjoiTW9ycGhRdWFkIOefoumHj+W8gOWFs+S4jiBBVVgg5Y+M6L206aqM5pS2IMK3IDEwbSAvIDXCsCIsImFpcmNyYWZ0IjoiTW9ycGhRdWFkIiwiaW5pdGlhbGl6ZSI6ImN1cnJlbnQtaW5zdGFuY2UiLCJkdXJhdGlvbiI6NDAwLCJyYXRlSHoiOjUwLCJ0aHJvdHRsZSI6MCwiY2xvY2siOiJyZWFsdGltZSIsIm9uRmluaXNoIjoibGFuZCIsIm9uQWJvcnQiOiJsYW5kIiwiYmxvY2tzIjpbeyJpZCI6ImJwcmVwYXJlX3N0YWdlIiwidHlwZSI6Im1hcmsiLCJwIjp7InRleHQiOiLpmLbmrrUgMS8577ya5pmu6YCa6L6T5YWl77yM5omL5Yqo5rK56Zeo6LW36aOe5LiO5o6n6auYIn19LHsiaWQiOiJicHJvYmVfcHJlcGFyZV9vZmYiLCJ0eXBlIjoiY2hhbm5lbCIsInAiOnsiY2hhbm5lbCI6InZlY3Rvci1zd2l0Y2giLCJhY3Rpb24iOiJzZXQiLCJ2YWx1ZSI6LTEwMH19LHsiaWQiOiJicHJvYmVfcHJlcGFyZV9sZXZlbF9vZmYiLCJ0eXBlIjoiY2hhbm5lbCIsInAiOnsiY2hhbm5lbCI6InJjOCIsImFjdGlvbiI6InNldCIsInZhbHVlIjotMTAwfX0seyJpZCI6ImJwcmVwYXJlX2lucHV0IiwidHlwZSI6ImlucHV0X21vZGUiLCJwIjp7ImlucHV0Ijoibm9ybWFsIn19LHsiaWQiOiJia25vd25fbGFuZGVkIiwidHlwZSI6IndhaXRfc3RhdGUiLCJwIjp7ImZpZWxkIjoibGFuZGVkIiwib3AiOiJnZSIsInZhbHVlIjowLCJ0aW1lb3V0Ijo1fX0seyJpZCI6ImJncm91bmQiLCJ0eXBlIjoiYnJhbmNoIiwicCI6eyJmaWVsZCI6ImxhbmRlZCIsIm9wIjoiZXEiLCJ2YWx1ZSI6MX0sInllcyI6W3siaWQiOiJicHJlcGFyZV9sb3ciLCJ0eXBlIjoidGhyb3R0bGUiLCJwIjp7InZhbHVlIjowfX0seyJpZCI6ImJwcmVwYXJlX21vZGUiLCJ0eXBlIjoibW9kZSIsInAiOnsibW9kZSI6Ik1BTlVBTCIsInRpbWVvdXQiOjh9fSx7ImlkIjoiYnByZXBhcmVfYXJtIiwidHlwZSI6ImFybSIsInAiOnsidGltZW91dCI6OH19LHsiaWQiOiJicHJlcGFyZV9zcG9vbCIsInR5cGUiOiJ3YWl0IiwicCI6eyJkdXJhdGlvbiI6Mn19XSwibm8iOlt7ImlkIjoiYmFpcmJvcm5lX2FybWVkIiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJhcm1lZCIsIm9wIjoiZXEiLCJ2YWx1ZSI6MSwidGltZW91dCI6MX19LHsiaWQiOiJiYWlyYm9ybmVfdGhyb3R0bGUiLCJ0eXBlIjoidGhyb3R0bGUiLCJwIjp7InZhbHVlIjo1MH19LHsiaWQiOiJiYWlyYm9ybmVfbW9kZSIsInR5cGUiOiJtb2RlIiwicCI6eyJtb2RlIjoiTUFOVUFMIiwidGltZW91dCI6OH19XX0seyJpZCI6ImJwcmVwYXJlX21hbnVhbF90YWtlb2ZmIiwidHlwZSI6Im1hbnVhbF90YWtlb2ZmIiwicCI6eyJ0YXJnZXQiOjEwLCJjbGltYiI6MC41LCJ0b2xlcmFuY2UiOjAuMywic2V0dGxlIjozLCJ0aW1lb3V0IjoxMjAsImhvdmVyIjo1MCwibWF4Ijo3NSwic2xldyI6MTB9fSx7ImlkIjoiYnByb2JlX3N0YXJ0IiwidHlwZSI6Im1hcmsiLCJwIjp7InRleHQiOiLpqozor4Hnn6Lph4/liIfmjaLvvJrlhbPpl63ml7YgQVVYIOaKkeWItu+8jOW8gOWQr+WQjiBBVVgyL1BpdGNoIOWSjCBBVVgxL1JvbGwgKzXCsOWIsOS9jeW5tuWbnuatoyJ9fSx7ImlkIjoiYnByb2JlX25ldXRyYWwiLCJ0eXBlIjoibmV1dHJhbCIsInAiOnt9fSx7ImlkIjoiYnByb2JlX2xldmVsX29mZiIsInR5cGUiOiJjaGFubmVsIiwicCI6eyJjaGFubmVsIjoicmM4IiwiYWN0aW9uIjoic2V0IiwidmFsdWUiOi0xMDB9fSx7ImlkIjoiYnByb2JlX29mZiIsInR5cGUiOiJjaGFubmVsIiwicCI6eyJjaGFubmVsIjoidmVjdG9yLXN3aXRjaCIsImFjdGlvbiI6InNldCIsInZhbHVlIjotMTAwfX0seyJpZCI6ImJwcm9iZV9wYXRoIiwidHlwZSI6ImlucHV0X21vZGUiLCJwIjp7ImlucHV0IjoidmVjdG9yIn19LHsiaWQiOiJicHJvYmVfdGhyb3R0bGUiLCJ0eXBlIjoidGhyb3R0bGUiLCJwIjp7InZhbHVlIjo1MH19LHsiaWQiOiJicHJvYmVfbW9kZSIsInR5cGUiOiJtb2RlIiwicCI6eyJtb2RlIjoiUE9TQ1RMIiwidGltZW91dCI6OH19LHsiaWQiOiJicHJvYmVfYnJha2UiLCJ0eXBlIjoid2FpdF9zdGF0ZSIsInAiOnsiZmllbGQiOiJncm91bmRzcGVlZC1tcHMiLCJvcCI6ImxlIiwidmFsdWUiOjAuMSwidGltZW91dCI6MzB9fSx7ImlkIjoiYnByb2JlX3NldHRsZSIsInR5cGUiOiJ3YWl0IiwicCI6eyJkdXJhdGlvbiI6Mn19LHsiaWQiOiJicHJvYmVfc3BlZWQiLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6Imdyb3VuZHNwZWVkLW1wcyIsIm9wIjoibGUiLCJ2YWx1ZSI6MC4xLCJ0aW1lb3V0IjoyfX0seyJpZCI6ImJwcm9iZV92ZXJpZnkiLCJ0eXBlIjoicGFyYWxsZWwiLCJwIjp7ImpvaW4iOiJhbnkiLCJ0aW1lb3V0IjozMH0sImxhbmVzIjpbW3siaWQiOiJicHJvYmVfaW5pdGlhbF96ZXJvIiwidHlwZSI6ImF0dGl0dWRlIiwicCI6eyJyb2xsIjowLCJwaXRjaCI6MCwiaG9sZCI6MiwidG9sZXJhbmNlIjoxLCJyYXRlIjoxMCwic2V0dGxlIjoxLCJ0aW1lb3V0IjoyNX19LHsiaWQiOiJicHJvYmVfaW5pdGlhbF96ZXJvX3JvbGxfbWF4IiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJyb2xsLWFicy1kZWciLCJvcCI6ImxlIiwidmFsdWUiOjEsInRpbWVvdXQiOjAuNX19LHsiaWQiOiJicHJvYmVfaW5pdGlhbF96ZXJvX3BpdGNoX21heCIsInR5cGUiOiJhc3NlcnQiLCJwIjp7ImZpZWxkIjoicGl0Y2gtYWJzLWRlZyIsIm9wIjoibGUiLCJ2YWx1ZSI6MSwidGltZW91dCI6MC41fX1dLFt7ImlkIjoiYnByb2JlX3ZlcmlmeV9oZWlnaHQiLCJ0eXBlIjoiYWx0aXR1ZGUiLCJwIjp7InRhcmdldCI6MTAsImR1cmF0aW9uIjo0MCwidG9sZXJhbmNlIjowLjIsImhvdmVyIjo1MCwibWluIjoyNSwibWF4Ijo3NSwic2xldyI6MjUsInJlc3BvbnNlIjo4LCJkYW1waW5nIjoxMiwidHJpbSI6MS41LCJkZWFkem9uZSI6Nn19XV19LHsiaWQiOiJicHJvYmVfYXV4Ml9vZmZfZGVtYW5kIiwidHlwZSI6ImNoYW5uZWwiLCJwIjp7ImNoYW5uZWwiOiJhdXgyIiwiYWN0aW9uIjoic2V0IiwidmFsdWUiOjQuMTY2NjY2NjY2NjY2NjY3fX0seyJpZCI6ImJwcm9iZV9vZmZfd2FpdCIsInR5cGUiOiJ3YWl0IiwicCI6eyJkdXJhdGlvbiI6M319LHsiaWQiOiJicHJvYmVfb2ZmX3BpdGNoIiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJwaXRjaC1hYnMtZGVnIiwib3AiOiJsZSIsInZhbHVlIjoxLCJ0aW1lb3V0IjowLjV9fSx7ImlkIjoiYnByb2JlX29mZl9yb2xsIiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJyb2xsLWFicy1kZWciLCJvcCI6ImxlIiwidmFsdWUiOjEsInRpbWVvdXQiOjAuNX19LHsiaWQiOiJicHJvYmVfYXV4Ml9yZWxlYXNlIiwidHlwZSI6ImNoYW5uZWwiLCJwIjp7ImNoYW5uZWwiOiJhdXgyIiwiYWN0aW9uIjoicmVsZWFzZSIsInZhbHVlIjowfX0seyJpZCI6ImJwcm9iZV9vbiIsInR5cGUiOiJjaGFubmVsIiwicCI6eyJjaGFubmVsIjoidmVjdG9yLXN3aXRjaCIsImFjdGlvbiI6InNldCIsInZhbHVlIjoxMDB9fSx7ImlkIjoiYnByb2JlX29uX3dhaXQiLCJ0eXBlIjoid2FpdCIsInAiOnsiZHVyYXRpb24iOjF9fSx7ImlkIjoiYnByb2JlX3Jlc3BvbnNlIiwidHlwZSI6InBhcmFsbGVsIiwicCI6eyJqb2luIjoiYW55IiwidGltZW91dCI6MTEwfSwibGFuZXMiOltbeyJpZCI6ImJwcm9iZV9waXRjaDUiLCJ0eXBlIjoiYXR0aXR1ZGUiLCJwIjp7InJvbGwiOjAsInBpdGNoIjo1LCJob2xkIjoyLCJ0b2xlcmFuY2UiOjEsInJhdGUiOjEwLCJzZXR0bGUiOjEsInRpbWVvdXQiOjI1fX0seyJpZCI6ImJwcm9iZV9waXRjaDVfcm9sbF9tYXgiLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6InJvbGwtYWJzLWRlZyIsIm9wIjoibGUiLCJ2YWx1ZSI6MSwidGltZW91dCI6MC41fX0seyJpZCI6ImJwcm9iZV9waXRjaDVfcGl0Y2hfbWluIiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJwaXRjaC1hYnMtZGVnIiwib3AiOiJnZSIsInZhbHVlIjo0LCJ0aW1lb3V0IjowLjV9fSx7ImlkIjoiYnByb2JlX3BpdGNoNV9waXRjaF9tYXgiLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6InBpdGNoLWFicy1kZWciLCJvcCI6ImxlIiwidmFsdWUiOjYsInRpbWVvdXQiOjAuNX19LHsiaWQiOiJicHJvYmVfcGl0Y2hfemVybyIsInR5cGUiOiJhdHRpdHVkZSIsInAiOnsicm9sbCI6MCwicGl0Y2giOjAsImhvbGQiOjIsInRvbGVyYW5jZSI6MSwicmF0ZSI6MTAsInNldHRsZSI6MSwidGltZW91dCI6MjV9fSx7ImlkIjoiYnByb2JlX3BpdGNoX3plcm9fcm9sbF9tYXgiLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6InJvbGwtYWJzLWRlZyIsIm9wIjoibGUiLCJ2YWx1ZSI6MSwidGltZW91dCI6MC41fX0seyJpZCI6ImJwcm9iZV9waXRjaF96ZXJvX3BpdGNoX21heCIsInR5cGUiOiJhc3NlcnQiLCJwIjp7ImZpZWxkIjoicGl0Y2gtYWJzLWRlZyIsIm9wIjoibGUiLCJ2YWx1ZSI6MSwidGltZW91dCI6MC41fX0seyJpZCI6ImJwcm9iZV9yb2xsNSIsInR5cGUiOiJhdHRpdHVkZSIsInAiOnsicm9sbCI6NSwicGl0Y2giOjAsImhvbGQiOjIsInRvbGVyYW5jZSI6MSwicmF0ZSI6MTAsInNldHRsZSI6MSwidGltZW91dCI6MjV9fSx7ImlkIjoiYnByb2JlX3JvbGw1X3JvbGxfbWluIiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJyb2xsLWFicy1kZWciLCJvcCI6ImdlIiwidmFsdWUiOjQsInRpbWVvdXQiOjAuNX19LHsiaWQiOiJicHJvYmVfcm9sbDVfcm9sbF9tYXgiLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6InJvbGwtYWJzLWRlZyIsIm9wIjoibGUiLCJ2YWx1ZSI6NiwidGltZW91dCI6MC41fX0seyJpZCI6ImJwcm9iZV9yb2xsNV9waXRjaF9tYXgiLCJ0eXBlIjoiYXNzZXJ0IiwicCI6eyJmaWVsZCI6InBpdGNoLWFicy1kZWciLCJvcCI6ImxlIiwidmFsdWUiOjEsInRpbWVvdXQiOjAuNX19LHsiaWQiOiJicHJvYmVfcm9sbF96ZXJvIiwidHlwZSI6ImF0dGl0dWRlIiwicCI6eyJyb2xsIjowLCJwaXRjaCI6MCwiaG9sZCI6MiwidG9sZXJhbmNlIjoxLCJyYXRlIjoxMCwic2V0dGxlIjoxLCJ0aW1lb3V0IjoyNX19LHsiaWQiOiJicHJvYmVfcm9sbF96ZXJvX3JvbGxfbWF4IiwidHlwZSI6ImFzc2VydCIsInAiOnsiZmllbGQiOiJyb2xsLWFicy1kZWciLCJvcCI6ImxlIiwidmFsdWUiOjEsInRpbWVvdXQiOjAuNX19LHsiaWQiOiJicHJvYmVfcm9sbF96ZXJvX3BpdGNoX21heCIsInR5cGUiOiJhc3NlcnQiLCJwIjp7ImZpZWxkIjoicGl0Y2gtYWJzLWRlZyIsIm9wIjoibGUiLCJ2YWx1ZSI6MSwidGltZW91dCI6MC41fX1dLFt7ImlkIjoiYnByb2JlX3Jlc3BvbnNlX2hlaWdodCIsInR5cGUiOiJhbHRpdHVkZSIsInAiOnsidGFyZ2V0IjoxMCwiZHVyYXRpb24iOjEyMCwidG9sZXJhbmNlIjowLjIsImhvdmVyIjo1MCwibWluIjoyNSwibWF4Ijo3NSwic2xldyI6MjUsInJlc3BvbnNlIjo4LCJkYW1waW5nIjoxMiwidHJpbSI6MS41LCJkZWFkem9uZSI6Nn19XV19LHsiaWQiOiJicHJvYmVfY29uZmlybWVkIiwidHlwZSI6Im1hcmsiLCJwIjp7InRleHQiOiLnn6Lph4/liIfmjaLpqozmlLbpgJrov4fvvJrlhbPmlq3mipHliLbjgIFBVVgyL1BpdGNoICs1wrDjgIFBVVgxL1JvbGwgKzXCsOWPiuWbnuato+Wdh+ehruiupCJ9fV19 -->
+<runscript name="MorphQuad 矢量开关与 AUX 双轴验收 · 10m / 5°">
+  <use aircraft="MorphQuad" initialize="current-instance"/>
+  <run start="0" end="400" dt="0.01">
+    <property value="0">test/runtime/ready</property>
+    <property value="0">test/runtime/complete</property>
+    <property value="0">test/runtime/failed</property>
+    <property value="0">test/rc/roll-norm</property>
+    <property value="0">test/rc/pitch-norm</property>
+    <property value="0">test/rc/yaw-norm</property>
+    <property value="0">test/rc/throttle-norm</property>
+    <property value="1">test/rc/enabled</property>
+    <property value="0">test/flow/sequence_1/done</property>
+    <property value="0">test/flow/sequence_1/cancelled</property>
+    <property value="0">test/flow/bprepare_stage_2/started</property>
+    <property value="0">test/flow/bprepare_stage_2/done</property>
+    <property value="0">test/flow/bprepare_stage_2/cancelled</property>
+    <property value="0">test/flow/bprepare_stage_2/deadline</property>
+    <property value="0">test/flow/bprobe_prepare_off_3/started</property>
+    <property value="0">test/flow/bprobe_prepare_off_3/done</property>
+    <property value="0">test/flow/bprobe_prepare_off_3/cancelled</property>
+    <property value="0">test/flow/bprobe_prepare_off_3/deadline</property>
+    <property value="0">test/channel/vector-switch/enabled</property>
+    <property value="0">test/channel/vector-switch/value-norm</property>
+    <property value="0">test/flow/bprobe_prepare_level_off_4/started</property>
+    <property value="0">test/flow/bprobe_prepare_level_off_4/done</property>
+    <property value="0">test/flow/bprobe_prepare_level_off_4/cancelled</property>
+    <property value="0">test/flow/bprobe_prepare_level_off_4/deadline</property>
+    <property value="0">test/channel/rc8/enabled</property>
+    <property value="0">test/channel/rc8/value-norm</property>
+    <property value="0">test/flow/bprepare_input_5/started</property>
+    <property value="0">test/flow/bprepare_input_5/done</property>
+    <property value="0">test/flow/bprepare_input_5/cancelled</property>
+    <property value="0">test/flow/bprepare_input_5/deadline</property>
+    <property value="0">test/rc/input-kind</property>
+    <property value="0">test/flow/bknown_landed_6/started</property>
+    <property value="0">test/flow/bknown_landed_6/done</property>
+    <property value="0">test/flow/bknown_landed_6/cancelled</property>
+    <property value="0">test/flow/bknown_landed_6/deadline</property>
+    <property value="0">test/flow/bground_7/started</property>
+    <property value="0">test/flow/bground_7/done</property>
+    <property value="0">test/flow/bground_7/cancelled</property>
+    <property value="0">test/flow/bground_7/deadline</property>
+    <property value="-1">test/flow/bground_7/choice</property>
+    <property value="0">test/flow/sequence_8/done</property>
+    <property value="0">test/flow/sequence_8/cancelled</property>
+    <property value="0">test/flow/bprepare_low_9/started</property>
+    <property value="0">test/flow/bprepare_low_9/done</property>
+    <property value="0">test/flow/bprepare_low_9/cancelled</property>
+    <property value="0">test/flow/bprepare_low_9/deadline</property>
+    <property value="0">test/flow/bprepare_mode_10/started</property>
+    <property value="0">test/flow/bprepare_mode_10/done</property>
+    <property value="0">test/flow/bprepare_mode_10/cancelled</property>
+    <property value="0">test/flow/bprepare_mode_10/deadline</property>
+    <property value="3">test/command/bprepare_mode_10/kind</property>
+    <property value="1">test/command/bprepare_mode_10/argument</property>
+    <property value="0">test/command/bprepare_mode_10/status</property>
+    <property value="0">test/command/bprepare_mode_10/request</property>
+    <property value="0">test/flow/bprepare_arm_11/started</property>
+    <property value="0">test/flow/bprepare_arm_11/done</property>
+    <property value="0">test/flow/bprepare_arm_11/cancelled</property>
+    <property value="0">test/flow/bprepare_arm_11/deadline</property>
+    <property value="1">test/command/bprepare_arm_11/kind</property>
+    <property value="0">test/command/bprepare_arm_11/argument</property>
+    <property value="0">test/command/bprepare_arm_11/status</property>
+    <property value="0">test/command/bprepare_arm_11/request</property>
+    <property value="0">test/flow/bprepare_spool_12/started</property>
+    <property value="0">test/flow/bprepare_spool_12/done</property>
+    <property value="0">test/flow/bprepare_spool_12/cancelled</property>
+    <property value="0">test/flow/bprepare_spool_12/deadline</property>
+    <property value="0">test/flow/sequence_13/done</property>
+    <property value="0">test/flow/sequence_13/cancelled</property>
+    <property value="0">test/flow/bairborne_armed_14/started</property>
+    <property value="0">test/flow/bairborne_armed_14/done</property>
+    <property value="0">test/flow/bairborne_armed_14/cancelled</property>
+    <property value="0">test/flow/bairborne_armed_14/deadline</property>
+    <property value="0">test/flow/bairborne_throttle_15/started</property>
+    <property value="0">test/flow/bairborne_throttle_15/done</property>
+    <property value="0">test/flow/bairborne_throttle_15/cancelled</property>
+    <property value="0">test/flow/bairborne_throttle_15/deadline</property>
+    <property value="0">test/flow/bairborne_mode_16/started</property>
+    <property value="0">test/flow/bairborne_mode_16/done</property>
+    <property value="0">test/flow/bairborne_mode_16/cancelled</property>
+    <property value="0">test/flow/bairborne_mode_16/deadline</property>
+    <property value="3">test/command/bairborne_mode_16/kind</property>
+    <property value="1">test/command/bairborne_mode_16/argument</property>
+    <property value="0">test/command/bairborne_mode_16/status</property>
+    <property value="0">test/command/bairborne_mode_16/request</property>
+    <property value="0">test/flow/bprepare_manual_takeoff_17/started</property>
+    <property value="0">test/flow/bprepare_manual_takeoff_17/done</property>
+    <property value="0">test/flow/bprepare_manual_takeoff_17/cancelled</property>
+    <property value="0">test/flow/bprepare_manual_takeoff_17/deadline</property>
+    <property value="15">test/input/bprepare_manual_takeoff_17/mask</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/roll-norm</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/pitch-norm</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/yaw-norm</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/throttle-norm</property>
+    <property value="10">test/input/bprepare_manual_takeoff_17/height-target-m</property>
+    <property value="0.3">test/input/bprepare_manual_takeoff_17/height-tolerance-m</property>
+    <property value="0.5">test/input/bprepare_manual_takeoff_17/height-hover-norm</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/height-min-norm</property>
+    <property value="0.75">test/input/bprepare_manual_takeoff_17/height-max-norm</property>
+    <property value="0.1">test/input/bprepare_manual_takeoff_17/height-slew-norm-s</property>
+    <property value="0.08">test/input/bprepare_manual_takeoff_17/height-kp</property>
+    <property value="0.2">test/input/bprepare_manual_takeoff_17/height-kd</property>
+    <property value="0.03">test/input/bprepare_manual_takeoff_17/height-ki</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/height-deadzone-norm</property>
+    <property value="0.5">test/input/bprepare_manual_takeoff_17/height-climb-max-mps</property>
+    <property value="3">test/input/bprepare_manual_takeoff_17/height-settle-s</property>
+    <property value="0">test/input/bprepare_manual_takeoff_17/enabled</property>
+    <property value="0">test/altitude/bprepare_manual_takeoff_17/status</property>
+    <property value="0">test/flow/bprobe_start_18/started</property>
+    <property value="0">test/flow/bprobe_start_18/done</property>
+    <property value="0">test/flow/bprobe_start_18/cancelled</property>
+    <property value="0">test/flow/bprobe_start_18/deadline</property>
+    <property value="0">test/flow/bprobe_neutral_19/started</property>
+    <property value="0">test/flow/bprobe_neutral_19/done</property>
+    <property value="0">test/flow/bprobe_neutral_19/cancelled</property>
+    <property value="0">test/flow/bprobe_neutral_19/deadline</property>
+    <property value="7">test/input/bprobe_neutral_19/mask</property>
+    <property value="0">test/input/bprobe_neutral_19/roll-norm</property>
+    <property value="0">test/input/bprobe_neutral_19/pitch-norm</property>
+    <property value="0">test/input/bprobe_neutral_19/yaw-norm</property>
+    <property value="0">test/input/bprobe_neutral_19/throttle-norm</property>
+    <property value="0">test/input/bprobe_neutral_19/enabled</property>
+    <property value="0">test/flow/bprobe_level_off_20/started</property>
+    <property value="0">test/flow/bprobe_level_off_20/done</property>
+    <property value="0">test/flow/bprobe_level_off_20/cancelled</property>
+    <property value="0">test/flow/bprobe_level_off_20/deadline</property>
+    <property value="0">test/flow/bprobe_off_21/started</property>
+    <property value="0">test/flow/bprobe_off_21/done</property>
+    <property value="0">test/flow/bprobe_off_21/cancelled</property>
+    <property value="0">test/flow/bprobe_off_21/deadline</property>
+    <property value="0">test/flow/bprobe_path_22/started</property>
+    <property value="0">test/flow/bprobe_path_22/done</property>
+    <property value="0">test/flow/bprobe_path_22/cancelled</property>
+    <property value="0">test/flow/bprobe_path_22/deadline</property>
+    <property value="0">test/flow/bprobe_throttle_23/started</property>
+    <property value="0">test/flow/bprobe_throttle_23/done</property>
+    <property value="0">test/flow/bprobe_throttle_23/cancelled</property>
+    <property value="0">test/flow/bprobe_throttle_23/deadline</property>
+    <property value="0">test/flow/bprobe_mode_24/started</property>
+    <property value="0">test/flow/bprobe_mode_24/done</property>
+    <property value="0">test/flow/bprobe_mode_24/cancelled</property>
+    <property value="0">test/flow/bprobe_mode_24/deadline</property>
+    <property value="3">test/command/bprobe_mode_24/kind</property>
+    <property value="3">test/command/bprobe_mode_24/argument</property>
+    <property value="0">test/command/bprobe_mode_24/status</property>
+    <property value="0">test/command/bprobe_mode_24/request</property>
+    <property value="0">test/flow/bprobe_brake_25/started</property>
+    <property value="0">test/flow/bprobe_brake_25/done</property>
+    <property value="0">test/flow/bprobe_brake_25/cancelled</property>
+    <property value="0">test/flow/bprobe_brake_25/deadline</property>
+    <property value="0">test/flow/bprobe_settle_26/started</property>
+    <property value="0">test/flow/bprobe_settle_26/done</property>
+    <property value="0">test/flow/bprobe_settle_26/cancelled</property>
+    <property value="0">test/flow/bprobe_settle_26/deadline</property>
+    <property value="0">test/flow/bprobe_speed_27/started</property>
+    <property value="0">test/flow/bprobe_speed_27/done</property>
+    <property value="0">test/flow/bprobe_speed_27/cancelled</property>
+    <property value="0">test/flow/bprobe_speed_27/deadline</property>
+    <property value="0">test/flow/bprobe_verify_28/started</property>
+    <property value="0">test/flow/bprobe_verify_28/done</property>
+    <property value="0">test/flow/bprobe_verify_28/cancelled</property>
+    <property value="0">test/flow/bprobe_verify_28/deadline</property>
+    <property value="0">test/flow/sequence_29/done</property>
+    <property value="0">test/flow/sequence_29/cancelled</property>
+    <property value="0">test/flow/bprobe_initial_zero_30/started</property>
+    <property value="0">test/flow/bprobe_initial_zero_30/done</property>
+    <property value="0">test/flow/bprobe_initial_zero_30/cancelled</property>
+    <property value="0">test/flow/bprobe_initial_zero_30/deadline</property>
+    <property value="7">test/input/bprobe_initial_zero_30/mask</property>
+    <property value="0">test/input/bprobe_initial_zero_30/roll-norm</property>
+    <property value="0">test/input/bprobe_initial_zero_30/pitch-norm</property>
+    <property value="0">test/input/bprobe_initial_zero_30/yaw-norm</property>
+    <property value="0">test/input/bprobe_initial_zero_30/throttle-norm</property>
+    <property value="0">test/input/bprobe_initial_zero_30/angle-roll-deg</property>
+    <property value="0">test/input/bprobe_initial_zero_30/angle-pitch-deg</property>
+    <property value="2">test/input/bprobe_initial_zero_30/angle-hold-s</property>
+    <property value="1">test/input/bprobe_initial_zero_30/angle-tolerance-deg</property>
+    <property value="10">test/input/bprobe_initial_zero_30/angle-rate-deg-s</property>
+    <property value="1">test/input/bprobe_initial_zero_30/angle-settle-s</property>
+    <property value="0">test/target/roll-deg</property>
+    <property value="0">test/target/pitch-deg</property>
+    <property value="0">test/input/bprobe_initial_zero_30/enabled</property>
+    <property value="0">test/attitude/bprobe_initial_zero_30/status</property>
+    <property value="0">test/flow/bprobe_initial_zero_roll_max_31/started</property>
+    <property value="0">test/flow/bprobe_initial_zero_roll_max_31/done</property>
+    <property value="0">test/flow/bprobe_initial_zero_roll_max_31/cancelled</property>
+    <property value="0">test/flow/bprobe_initial_zero_roll_max_31/deadline</property>
+    <property value="0">test/flow/bprobe_initial_zero_pitch_max_32/started</property>
+    <property value="0">test/flow/bprobe_initial_zero_pitch_max_32/done</property>
+    <property value="0">test/flow/bprobe_initial_zero_pitch_max_32/cancelled</property>
+    <property value="0">test/flow/bprobe_initial_zero_pitch_max_32/deadline</property>
+    <property value="0">test/flow/sequence_33/done</property>
+    <property value="0">test/flow/sequence_33/cancelled</property>
+    <property value="0">test/flow/bprobe_verify_height_34/started</property>
+    <property value="0">test/flow/bprobe_verify_height_34/done</property>
+    <property value="0">test/flow/bprobe_verify_height_34/cancelled</property>
+    <property value="0">test/flow/bprobe_verify_height_34/deadline</property>
+    <property value="8">test/input/bprobe_verify_height_34/mask</property>
+    <property value="0">test/input/bprobe_verify_height_34/roll-norm</property>
+    <property value="0">test/input/bprobe_verify_height_34/pitch-norm</property>
+    <property value="0">test/input/bprobe_verify_height_34/yaw-norm</property>
+    <property value="0">test/input/bprobe_verify_height_34/throttle-norm</property>
+    <property value="10">test/input/bprobe_verify_height_34/height-target-m</property>
+    <property value="0.2">test/input/bprobe_verify_height_34/height-tolerance-m</property>
+    <property value="0.5">test/input/bprobe_verify_height_34/height-hover-norm</property>
+    <property value="0.25">test/input/bprobe_verify_height_34/height-min-norm</property>
+    <property value="0.75">test/input/bprobe_verify_height_34/height-max-norm</property>
+    <property value="0.25">test/input/bprobe_verify_height_34/height-slew-norm-s</property>
+    <property value="0.08">test/input/bprobe_verify_height_34/height-kp</property>
+    <property value="0.12">test/input/bprobe_verify_height_34/height-kd</property>
+    <property value="0.015">test/input/bprobe_verify_height_34/height-ki</property>
+    <property value="0.06">test/input/bprobe_verify_height_34/height-deadzone-norm</property>
+    <property value="0">test/input/bprobe_verify_height_34/enabled</property>
+    <property value="0">test/flow/bprobe_aux2_off_demand_35/started</property>
+    <property value="0">test/flow/bprobe_aux2_off_demand_35/done</property>
+    <property value="0">test/flow/bprobe_aux2_off_demand_35/cancelled</property>
+    <property value="0">test/flow/bprobe_aux2_off_demand_35/deadline</property>
+    <property value="0">test/channel/aux2/enabled</property>
+    <property value="0">test/channel/aux2/value-norm</property>
+    <property value="0">test/flow/bprobe_off_wait_36/started</property>
+    <property value="0">test/flow/bprobe_off_wait_36/done</property>
+    <property value="0">test/flow/bprobe_off_wait_36/cancelled</property>
+    <property value="0">test/flow/bprobe_off_wait_36/deadline</property>
+    <property value="0">test/flow/bprobe_off_pitch_37/started</property>
+    <property value="0">test/flow/bprobe_off_pitch_37/done</property>
+    <property value="0">test/flow/bprobe_off_pitch_37/cancelled</property>
+    <property value="0">test/flow/bprobe_off_pitch_37/deadline</property>
+    <property value="0">test/flow/bprobe_off_roll_38/started</property>
+    <property value="0">test/flow/bprobe_off_roll_38/done</property>
+    <property value="0">test/flow/bprobe_off_roll_38/cancelled</property>
+    <property value="0">test/flow/bprobe_off_roll_38/deadline</property>
+    <property value="0">test/flow/bprobe_aux2_release_39/started</property>
+    <property value="0">test/flow/bprobe_aux2_release_39/done</property>
+    <property value="0">test/flow/bprobe_aux2_release_39/cancelled</property>
+    <property value="0">test/flow/bprobe_aux2_release_39/deadline</property>
+    <property value="0">test/flow/bprobe_on_40/started</property>
+    <property value="0">test/flow/bprobe_on_40/done</property>
+    <property value="0">test/flow/bprobe_on_40/cancelled</property>
+    <property value="0">test/flow/bprobe_on_40/deadline</property>
+    <property value="0">test/flow/bprobe_on_wait_41/started</property>
+    <property value="0">test/flow/bprobe_on_wait_41/done</property>
+    <property value="0">test/flow/bprobe_on_wait_41/cancelled</property>
+    <property value="0">test/flow/bprobe_on_wait_41/deadline</property>
+    <property value="0">test/flow/bprobe_response_42/started</property>
+    <property value="0">test/flow/bprobe_response_42/done</property>
+    <property value="0">test/flow/bprobe_response_42/cancelled</property>
+    <property value="0">test/flow/bprobe_response_42/deadline</property>
+    <property value="0">test/flow/sequence_43/done</property>
+    <property value="0">test/flow/sequence_43/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch5_44/started</property>
+    <property value="0">test/flow/bprobe_pitch5_44/done</property>
+    <property value="0">test/flow/bprobe_pitch5_44/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch5_44/deadline</property>
+    <property value="7">test/input/bprobe_pitch5_44/mask</property>
+    <property value="0">test/input/bprobe_pitch5_44/roll-norm</property>
+    <property value="0">test/input/bprobe_pitch5_44/pitch-norm</property>
+    <property value="0">test/input/bprobe_pitch5_44/yaw-norm</property>
+    <property value="0">test/input/bprobe_pitch5_44/throttle-norm</property>
+    <property value="0">test/input/bprobe_pitch5_44/angle-roll-deg</property>
+    <property value="5">test/input/bprobe_pitch5_44/angle-pitch-deg</property>
+    <property value="2">test/input/bprobe_pitch5_44/angle-hold-s</property>
+    <property value="1">test/input/bprobe_pitch5_44/angle-tolerance-deg</property>
+    <property value="10">test/input/bprobe_pitch5_44/angle-rate-deg-s</property>
+    <property value="1">test/input/bprobe_pitch5_44/angle-settle-s</property>
+    <property value="0">test/input/bprobe_pitch5_44/enabled</property>
+    <property value="0">test/attitude/bprobe_pitch5_44/status</property>
+    <property value="0">test/flow/bprobe_pitch5_roll_max_45/started</property>
+    <property value="0">test/flow/bprobe_pitch5_roll_max_45/done</property>
+    <property value="0">test/flow/bprobe_pitch5_roll_max_45/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch5_roll_max_45/deadline</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_min_46/started</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_min_46/done</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_min_46/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_min_46/deadline</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_max_47/started</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_max_47/done</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_max_47/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch5_pitch_max_47/deadline</property>
+    <property value="0">test/flow/bprobe_pitch_zero_48/started</property>
+    <property value="0">test/flow/bprobe_pitch_zero_48/done</property>
+    <property value="0">test/flow/bprobe_pitch_zero_48/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch_zero_48/deadline</property>
+    <property value="7">test/input/bprobe_pitch_zero_48/mask</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/roll-norm</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/pitch-norm</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/yaw-norm</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/throttle-norm</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/angle-roll-deg</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/angle-pitch-deg</property>
+    <property value="2">test/input/bprobe_pitch_zero_48/angle-hold-s</property>
+    <property value="1">test/input/bprobe_pitch_zero_48/angle-tolerance-deg</property>
+    <property value="10">test/input/bprobe_pitch_zero_48/angle-rate-deg-s</property>
+    <property value="1">test/input/bprobe_pitch_zero_48/angle-settle-s</property>
+    <property value="0">test/input/bprobe_pitch_zero_48/enabled</property>
+    <property value="0">test/attitude/bprobe_pitch_zero_48/status</property>
+    <property value="0">test/flow/bprobe_pitch_zero_roll_max_49/started</property>
+    <property value="0">test/flow/bprobe_pitch_zero_roll_max_49/done</property>
+    <property value="0">test/flow/bprobe_pitch_zero_roll_max_49/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch_zero_roll_max_49/deadline</property>
+    <property value="0">test/flow/bprobe_pitch_zero_pitch_max_50/started</property>
+    <property value="0">test/flow/bprobe_pitch_zero_pitch_max_50/done</property>
+    <property value="0">test/flow/bprobe_pitch_zero_pitch_max_50/cancelled</property>
+    <property value="0">test/flow/bprobe_pitch_zero_pitch_max_50/deadline</property>
+    <property value="0">test/flow/bprobe_roll5_51/started</property>
+    <property value="0">test/flow/bprobe_roll5_51/done</property>
+    <property value="0">test/flow/bprobe_roll5_51/cancelled</property>
+    <property value="0">test/flow/bprobe_roll5_51/deadline</property>
+    <property value="7">test/input/bprobe_roll5_51/mask</property>
+    <property value="0">test/input/bprobe_roll5_51/roll-norm</property>
+    <property value="0">test/input/bprobe_roll5_51/pitch-norm</property>
+    <property value="0">test/input/bprobe_roll5_51/yaw-norm</property>
+    <property value="0">test/input/bprobe_roll5_51/throttle-norm</property>
+    <property value="5">test/input/bprobe_roll5_51/angle-roll-deg</property>
+    <property value="0">test/input/bprobe_roll5_51/angle-pitch-deg</property>
+    <property value="2">test/input/bprobe_roll5_51/angle-hold-s</property>
+    <property value="1">test/input/bprobe_roll5_51/angle-tolerance-deg</property>
+    <property value="10">test/input/bprobe_roll5_51/angle-rate-deg-s</property>
+    <property value="1">test/input/bprobe_roll5_51/angle-settle-s</property>
+    <property value="0">test/input/bprobe_roll5_51/enabled</property>
+    <property value="0">test/attitude/bprobe_roll5_51/status</property>
+    <property value="0">test/flow/bprobe_roll5_roll_min_52/started</property>
+    <property value="0">test/flow/bprobe_roll5_roll_min_52/done</property>
+    <property value="0">test/flow/bprobe_roll5_roll_min_52/cancelled</property>
+    <property value="0">test/flow/bprobe_roll5_roll_min_52/deadline</property>
+    <property value="0">test/flow/bprobe_roll5_roll_max_53/started</property>
+    <property value="0">test/flow/bprobe_roll5_roll_max_53/done</property>
+    <property value="0">test/flow/bprobe_roll5_roll_max_53/cancelled</property>
+    <property value="0">test/flow/bprobe_roll5_roll_max_53/deadline</property>
+    <property value="0">test/flow/bprobe_roll5_pitch_max_54/started</property>
+    <property value="0">test/flow/bprobe_roll5_pitch_max_54/done</property>
+    <property value="0">test/flow/bprobe_roll5_pitch_max_54/cancelled</property>
+    <property value="0">test/flow/bprobe_roll5_pitch_max_54/deadline</property>
+    <property value="0">test/flow/bprobe_roll_zero_55/started</property>
+    <property value="0">test/flow/bprobe_roll_zero_55/done</property>
+    <property value="0">test/flow/bprobe_roll_zero_55/cancelled</property>
+    <property value="0">test/flow/bprobe_roll_zero_55/deadline</property>
+    <property value="7">test/input/bprobe_roll_zero_55/mask</property>
+    <property value="0">test/input/bprobe_roll_zero_55/roll-norm</property>
+    <property value="0">test/input/bprobe_roll_zero_55/pitch-norm</property>
+    <property value="0">test/input/bprobe_roll_zero_55/yaw-norm</property>
+    <property value="0">test/input/bprobe_roll_zero_55/throttle-norm</property>
+    <property value="0">test/input/bprobe_roll_zero_55/angle-roll-deg</property>
+    <property value="0">test/input/bprobe_roll_zero_55/angle-pitch-deg</property>
+    <property value="2">test/input/bprobe_roll_zero_55/angle-hold-s</property>
+    <property value="1">test/input/bprobe_roll_zero_55/angle-tolerance-deg</property>
+    <property value="10">test/input/bprobe_roll_zero_55/angle-rate-deg-s</property>
+    <property value="1">test/input/bprobe_roll_zero_55/angle-settle-s</property>
+    <property value="0">test/input/bprobe_roll_zero_55/enabled</property>
+    <property value="0">test/attitude/bprobe_roll_zero_55/status</property>
+    <property value="0">test/flow/bprobe_roll_zero_roll_max_56/started</property>
+    <property value="0">test/flow/bprobe_roll_zero_roll_max_56/done</property>
+    <property value="0">test/flow/bprobe_roll_zero_roll_max_56/cancelled</property>
+    <property value="0">test/flow/bprobe_roll_zero_roll_max_56/deadline</property>
+    <property value="0">test/flow/bprobe_roll_zero_pitch_max_57/started</property>
+    <property value="0">test/flow/bprobe_roll_zero_pitch_max_57/done</property>
+    <property value="0">test/flow/bprobe_roll_zero_pitch_max_57/cancelled</property>
+    <property value="0">test/flow/bprobe_roll_zero_pitch_max_57/deadline</property>
+    <property value="0">test/flow/sequence_58/done</property>
+    <property value="0">test/flow/sequence_58/cancelled</property>
+    <property value="0">test/flow/bprobe_response_height_59/started</property>
+    <property value="0">test/flow/bprobe_response_height_59/done</property>
+    <property value="0">test/flow/bprobe_response_height_59/cancelled</property>
+    <property value="0">test/flow/bprobe_response_height_59/deadline</property>
+    <property value="8">test/input/bprobe_response_height_59/mask</property>
+    <property value="0">test/input/bprobe_response_height_59/roll-norm</property>
+    <property value="0">test/input/bprobe_response_height_59/pitch-norm</property>
+    <property value="0">test/input/bprobe_response_height_59/yaw-norm</property>
+    <property value="0">test/input/bprobe_response_height_59/throttle-norm</property>
+    <property value="10">test/input/bprobe_response_height_59/height-target-m</property>
+    <property value="0.2">test/input/bprobe_response_height_59/height-tolerance-m</property>
+    <property value="0.5">test/input/bprobe_response_height_59/height-hover-norm</property>
+    <property value="0.25">test/input/bprobe_response_height_59/height-min-norm</property>
+    <property value="0.75">test/input/bprobe_response_height_59/height-max-norm</property>
+    <property value="0.25">test/input/bprobe_response_height_59/height-slew-norm-s</property>
+    <property value="0.08">test/input/bprobe_response_height_59/height-kp</property>
+    <property value="0.12">test/input/bprobe_response_height_59/height-kd</property>
+    <property value="0.015">test/input/bprobe_response_height_59/height-ki</property>
+    <property value="0.06">test/input/bprobe_response_height_59/height-deadzone-norm</property>
+    <property value="0">test/input/bprobe_response_height_59/enabled</property>
+    <property value="0">test/flow/bprobe_confirmed_60/started</property>
+    <property value="0">test/flow/bprobe_confirmed_60/done</property>
+    <property value="0">test/flow/bprobe_confirmed_60/cancelled</property>
+    <property value="0">test/flow/bprobe_confirmed_60/deadline</property>
+    <event name="bprepare_stage::阶段 1/9：普通输入，手动油门起飞与控高">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprepare_stage_2/cancelled eq 0
+</condition>test/runtime/ready eq 1
+test/flow/bprepare_stage_2/started eq 0
+</condition>
+      <set name="test/flow/bprepare_stage_2/started" value="1"/>
+      <set name="test/flow/bprepare_stage_2/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_prepare_off::vector-switch -100%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_prepare_off_3/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprepare_stage_2/done eq 1
+</condition>test/flow/bprobe_prepare_off_3/started eq 0
+</condition>
+      <set name="test/flow/bprobe_prepare_off_3/started" value="1"/>
+      <set name="test/channel/vector-switch/value-norm" value="-1"/>
+      <set name="test/channel/vector-switch/enabled" value="1"/>
+      <set name="test/flow/bprobe_prepare_off_3/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_prepare_level_off::rc8 -100%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_prepare_level_off_4/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_prepare_off_3/done eq 1
+</condition>test/flow/bprobe_prepare_level_off_4/started eq 0
+</condition>
+      <set name="test/flow/bprobe_prepare_level_off_4/started" value="1"/>
+      <set name="test/channel/rc8/value-norm" value="-1"/>
+      <set name="test/channel/rc8/enabled" value="1"/>
+      <set name="test/flow/bprobe_prepare_level_off_4/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_input::普通主杆">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprepare_input_5/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_prepare_level_off_4/done eq 1
+</condition>test/flow/bprepare_input_5/started eq 0
+</condition>
+      <set name="test/flow/bprepare_input_5/started" value="1"/>
+      <set name="test/rc/input-kind" value="1"/>
+      <set name="test/flow/bprepare_input_5/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bknown_landed::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bknown_landed_6/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprepare_input_5/done eq 1
+</condition>test/flow/bknown_landed_6/started eq 0
+</condition>
+      <set name="test/flow/bknown_landed_6/started" value="1"/>
+      <set name="test/flow/bknown_landed_6/deadline"><function><sum><property>simulation/sim-time-sec</property><value>5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bknown_landed::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bknown_landed_6/cancelled eq 0
+</condition>test/flow/bknown_landed_6/started eq 1
+test/flow/bknown_landed_6/done eq 0
+</condition>test/fc/landed ge 0
+</condition>
+      <set name="test/flow/bknown_landed_6/done" value="1"/>
+    </event>
+    <event name="bknown_landed::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bknown_landed_6/cancelled eq 0
+</condition>test/flow/bknown_landed_6/started eq 1
+test/flow/bknown_landed_6/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bknown_landed_6/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bground::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bknown_landed_6/done eq 1
+</condition>test/flow/bground_7/started eq 0
+</condition>
+      <set name="test/flow/bground_7/started" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bground::then">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/cancelled eq 0
+</condition>test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+</condition>test/flow/bground_7/choice eq -1
+test/fc/landed eq 1
+</condition>
+      <set name="test/flow/bground_7/choice" value="1"/>
+    </event>
+    <event name="bground::else">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/cancelled eq 0
+</condition>test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+</condition>test/flow/bground_7/choice eq -1
+test/fc/landed ne 1
+</condition>
+      <set name="test/flow/bground_7/choice" value="0"/>
+    </event>
+    <event name="bprepare_low::基准油门">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_low_9/cancelled eq 0
+</condition>test/flow/bground_7/choice eq 1
+test/flow/bprepare_low_9/started eq 0
+</condition>
+      <set name="test/flow/bprepare_low_9/started" value="1"/>
+      <set name="test/rc/throttle-norm" value="0"/>
+      <set name="test/flow/bprepare_low_9/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_mode::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_mode_10/cancelled eq 0
+</condition><condition logic="AND">test/flow/bground_7/choice eq 1
+test/flow/bprepare_low_9/done eq 1
+</condition>test/flow/bprepare_mode_10/started eq 0
+</condition>
+      <set name="test/flow/bprepare_mode_10/started" value="1"/>
+      <set name="test/command/bprepare_mode_10/request" value="1"/>
+      <set name="test/flow/bprepare_mode_10/deadline"><function><sum><property>simulation/sim-time-sec</property><value>8</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprepare_mode::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_mode_10/cancelled eq 0
+</condition>test/flow/bprepare_mode_10/started eq 1
+test/flow/bprepare_mode_10/done eq 0
+</condition>test/command/bprepare_mode_10/status eq 1
+</condition>
+      <set name="test/command/bprepare_mode_10/request" value="0"/>
+      <set name="test/flow/bprepare_mode_10/done" value="1"/>
+    </event>
+    <event name="bprepare_mode::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_mode_10/cancelled eq 0
+</condition>test/flow/bprepare_mode_10/started eq 1
+test/flow/bprepare_mode_10/done eq 0
+</condition>test/command/bprepare_mode_10/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_mode::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_mode_10/cancelled eq 0
+</condition>test/flow/bprepare_mode_10/started eq 1
+test/flow/bprepare_mode_10/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprepare_mode_10/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_arm::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_arm_11/cancelled eq 0
+</condition><condition logic="AND">test/flow/bground_7/choice eq 1
+test/flow/bprepare_mode_10/done eq 1
+</condition>test/flow/bprepare_arm_11/started eq 0
+</condition>
+      <set name="test/flow/bprepare_arm_11/started" value="1"/>
+      <set name="test/command/bprepare_arm_11/request" value="1"/>
+      <set name="test/flow/bprepare_arm_11/deadline"><function><sum><property>simulation/sim-time-sec</property><value>8</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprepare_arm::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_arm_11/cancelled eq 0
+</condition>test/flow/bprepare_arm_11/started eq 1
+test/flow/bprepare_arm_11/done eq 0
+</condition>test/command/bprepare_arm_11/status eq 1
+</condition>
+      <set name="test/command/bprepare_arm_11/request" value="0"/>
+      <set name="test/flow/bprepare_arm_11/done" value="1"/>
+    </event>
+    <event name="bprepare_arm::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_arm_11/cancelled eq 0
+</condition>test/flow/bprepare_arm_11/started eq 1
+test/flow/bprepare_arm_11/done eq 0
+</condition>test/command/bprepare_arm_11/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_arm::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_arm_11/cancelled eq 0
+</condition>test/flow/bprepare_arm_11/started eq 1
+test/flow/bprepare_arm_11/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprepare_arm_11/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_spool::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_spool_12/cancelled eq 0
+</condition><condition logic="AND">test/flow/bground_7/choice eq 1
+test/flow/bprepare_arm_11/done eq 1
+</condition>test/flow/bprepare_spool_12/started eq 0
+</condition>
+      <set name="test/flow/bprepare_spool_12/started" value="1"/>
+      <set name="test/flow/bprepare_spool_12/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprepare_spool::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+test/flow/bprepare_spool_12/cancelled eq 0
+</condition>test/flow/bprepare_spool_12/started eq 1
+test/flow/bprepare_spool_12/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprepare_spool_12/deadline
+</condition>
+      <set name="test/flow/bprepare_spool_12/done" value="1"/>
+    </event>
+    <event name="sequence_8::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_8/cancelled eq 0
+<condition logic="AND">test/flow/bground_7/choice eq 1
+test/flow/bprepare_spool_12/done eq 1
+</condition>test/flow/sequence_8/done eq 0
+</condition>
+      <set name="test/flow/sequence_8/done" value="1"/>
+    </event>
+    <event name="bairborne_armed::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_armed_14/cancelled eq 0
+</condition>test/flow/bground_7/choice eq 0
+test/flow/bairborne_armed_14/started eq 0
+</condition>
+      <set name="test/flow/bairborne_armed_14/started" value="1"/>
+      <set name="test/flow/bairborne_armed_14/deadline"><function><sum><property>simulation/sim-time-sec</property><value>1</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bairborne_armed::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_armed_14/cancelled eq 0
+</condition>test/flow/bairborne_armed_14/started eq 1
+test/flow/bairborne_armed_14/done eq 0
+</condition>test/fc/armed eq 1
+</condition>
+      <set name="test/flow/bairborne_armed_14/done" value="1"/>
+    </event>
+    <event name="bairborne_armed::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_armed_14/cancelled eq 0
+</condition>test/flow/bairborne_armed_14/started eq 1
+test/flow/bairborne_armed_14/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bairborne_armed_14/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bairborne_throttle::基准油门">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_throttle_15/cancelled eq 0
+</condition><condition logic="AND">test/flow/bground_7/choice eq 0
+test/flow/bairborne_armed_14/done eq 1
+</condition>test/flow/bairborne_throttle_15/started eq 0
+</condition>
+      <set name="test/flow/bairborne_throttle_15/started" value="1"/>
+      <set name="test/rc/throttle-norm" value="0.5"/>
+      <set name="test/flow/bairborne_throttle_15/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bairborne_mode::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_mode_16/cancelled eq 0
+</condition><condition logic="AND">test/flow/bground_7/choice eq 0
+test/flow/bairborne_throttle_15/done eq 1
+</condition>test/flow/bairborne_mode_16/started eq 0
+</condition>
+      <set name="test/flow/bairborne_mode_16/started" value="1"/>
+      <set name="test/command/bairborne_mode_16/request" value="1"/>
+      <set name="test/flow/bairborne_mode_16/deadline"><function><sum><property>simulation/sim-time-sec</property><value>8</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bairborne_mode::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_mode_16/cancelled eq 0
+</condition>test/flow/bairborne_mode_16/started eq 1
+test/flow/bairborne_mode_16/done eq 0
+</condition>test/command/bairborne_mode_16/status eq 1
+</condition>
+      <set name="test/command/bairborne_mode_16/request" value="0"/>
+      <set name="test/flow/bairborne_mode_16/done" value="1"/>
+    </event>
+    <event name="bairborne_mode::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_mode_16/cancelled eq 0
+</condition>test/flow/bairborne_mode_16/started eq 1
+test/flow/bairborne_mode_16/done eq 0
+</condition>test/command/bairborne_mode_16/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bairborne_mode::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+test/flow/bairborne_mode_16/cancelled eq 0
+</condition>test/flow/bairborne_mode_16/started eq 1
+test/flow/bairborne_mode_16/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bairborne_mode_16/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_13::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+test/flow/bground_7/cancelled eq 0
+test/flow/sequence_13/cancelled eq 0
+<condition logic="AND">test/flow/bground_7/choice eq 0
+test/flow/bairborne_mode_16/done eq 1
+</condition>test/flow/sequence_13/done eq 0
+</condition>
+      <set name="test/flow/sequence_13/done" value="1"/>
+    </event>
+    <event name="bground::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bground_7/cancelled eq 0
+</condition>test/flow/bground_7/started eq 1
+test/flow/bground_7/done eq 0
+</condition><condition logic="OR"><condition logic="AND">test/flow/bground_7/choice eq 1
+test/flow/sequence_8/done eq 1
+</condition><condition logic="AND">test/flow/bground_7/choice eq 0
+test/flow/sequence_13/done eq 1
+</condition></condition></condition>
+      <set name="test/flow/bground_7/done" value="1"/>
+    </event>
+    <event name="bprepare_manual_takeoff::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprepare_manual_takeoff_17/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bground_7/done eq 1
+</condition>test/flow/bprepare_manual_takeoff_17/started eq 0
+</condition>
+      <set name="test/flow/bprepare_manual_takeoff_17/started" value="1"/>
+      <set name="test/input/bprepare_manual_takeoff_17/enabled" value="1"/>
+      <set name="test/flow/bprepare_manual_takeoff_17/deadline"><function><sum><property>simulation/sim-time-sec</property><value>120</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprepare_manual_takeoff::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprepare_manual_takeoff_17/cancelled eq 0
+</condition>test/flow/bprepare_manual_takeoff_17/started eq 1
+test/flow/bprepare_manual_takeoff_17/done eq 0
+</condition>test/altitude/bprepare_manual_takeoff_17/status eq 1
+</condition>
+      <set name="test/rc/throttle-norm"><function><property>test/input/bprepare_manual_takeoff_17/throttle-norm</property></function></set>
+      <set name="test/input/bprepare_manual_takeoff_17/enabled" value="0"/>
+      <set name="test/flow/bprepare_manual_takeoff_17/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprepare_manual_takeoff::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprepare_manual_takeoff_17/cancelled eq 0
+</condition>test/flow/bprepare_manual_takeoff_17/started eq 1
+test/flow/bprepare_manual_takeoff_17/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprepare_manual_takeoff_17/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_start::验证矢量切换：关闭时 AUX 抑制，开启后 AUX2/Pitch 和 AUX1/Roll +5°到位并回正">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_start_18/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprepare_manual_takeoff_17/done eq 1
+</condition>test/flow/bprobe_start_18/started eq 0
+</condition>
+      <set name="test/flow/bprobe_start_18/started" value="1"/>
+      <set name="test/flow/bprobe_start_18/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_neutral::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_neutral_19/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_start_18/done eq 1
+</condition>test/flow/bprobe_neutral_19/started eq 0
+</condition>
+      <set name="test/flow/bprobe_neutral_19/started" value="1"/>
+      <set name="test/input/bprobe_neutral_19/enabled" value="1"/>
+      <set name="test/flow/bprobe_neutral_19/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.02</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_neutral::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_neutral_19/cancelled eq 0
+</condition>test/flow/bprobe_neutral_19/started eq 1
+test/flow/bprobe_neutral_19/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_neutral_19/deadline
+</condition>
+      <set name="test/input/bprobe_neutral_19/enabled" value="0"/>
+      <set name="test/flow/bprobe_neutral_19/done" value="1"/>
+    </event>
+    <event name="bprobe_level_off::rc8 -100%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_level_off_20/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_neutral_19/done eq 1
+</condition>test/flow/bprobe_level_off_20/started eq 0
+</condition>
+      <set name="test/flow/bprobe_level_off_20/started" value="1"/>
+      <set name="test/channel/rc8/value-norm" value="-1"/>
+      <set name="test/channel/rc8/enabled" value="1"/>
+      <set name="test/flow/bprobe_level_off_20/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_off::vector-switch -100%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_21/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_level_off_20/done eq 1
+</condition>test/flow/bprobe_off_21/started eq 0
+</condition>
+      <set name="test/flow/bprobe_off_21/started" value="1"/>
+      <set name="test/channel/vector-switch/value-norm" value="-1"/>
+      <set name="test/channel/vector-switch/enabled" value="1"/>
+      <set name="test/flow/bprobe_off_21/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_path::矢量 AUX">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_path_22/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_off_21/done eq 1
+</condition>test/flow/bprobe_path_22/started eq 0
+</condition>
+      <set name="test/flow/bprobe_path_22/started" value="1"/>
+      <set name="test/rc/input-kind" value="2"/>
+      <set name="test/flow/bprobe_path_22/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_throttle::基准油门">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_throttle_23/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_path_22/done eq 1
+</condition>test/flow/bprobe_throttle_23/started eq 0
+</condition>
+      <set name="test/flow/bprobe_throttle_23/started" value="1"/>
+      <set name="test/rc/throttle-norm" value="0.5"/>
+      <set name="test/flow/bprobe_throttle_23/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_mode::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_mode_24/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_throttle_23/done eq 1
+</condition>test/flow/bprobe_mode_24/started eq 0
+</condition>
+      <set name="test/flow/bprobe_mode_24/started" value="1"/>
+      <set name="test/command/bprobe_mode_24/request" value="1"/>
+      <set name="test/flow/bprobe_mode_24/deadline"><function><sum><property>simulation/sim-time-sec</property><value>8</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_mode::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_mode_24/cancelled eq 0
+</condition>test/flow/bprobe_mode_24/started eq 1
+test/flow/bprobe_mode_24/done eq 0
+</condition>test/command/bprobe_mode_24/status eq 1
+</condition>
+      <set name="test/command/bprobe_mode_24/request" value="0"/>
+      <set name="test/flow/bprobe_mode_24/done" value="1"/>
+    </event>
+    <event name="bprobe_mode::rejected">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_mode_24/cancelled eq 0
+</condition>test/flow/bprobe_mode_24/started eq 1
+test/flow/bprobe_mode_24/done eq 0
+</condition>test/command/bprobe_mode_24/status lt 0
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_mode::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_mode_24/cancelled eq 0
+</condition>test/flow/bprobe_mode_24/started eq 1
+test/flow/bprobe_mode_24/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_mode_24/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_brake::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_brake_25/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_mode_24/done eq 1
+</condition>test/flow/bprobe_brake_25/started eq 0
+</condition>
+      <set name="test/flow/bprobe_brake_25/started" value="1"/>
+      <set name="test/flow/bprobe_brake_25/deadline"><function><sum><property>simulation/sim-time-sec</property><value>30</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_brake::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_brake_25/cancelled eq 0
+</condition>test/flow/bprobe_brake_25/started eq 1
+test/flow/bprobe_brake_25/done eq 0
+</condition>test/fc/groundspeed-mps le 0.1
+</condition>
+      <set name="test/flow/bprobe_brake_25/done" value="1"/>
+    </event>
+    <event name="bprobe_brake::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_brake_25/cancelled eq 0
+</condition>test/flow/bprobe_brake_25/started eq 1
+test/flow/bprobe_brake_25/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_brake_25/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_settle::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_settle_26/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_brake_25/done eq 1
+</condition>test/flow/bprobe_settle_26/started eq 0
+</condition>
+      <set name="test/flow/bprobe_settle_26/started" value="1"/>
+      <set name="test/flow/bprobe_settle_26/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_settle::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_settle_26/cancelled eq 0
+</condition>test/flow/bprobe_settle_26/started eq 1
+test/flow/bprobe_settle_26/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_settle_26/deadline
+</condition>
+      <set name="test/flow/bprobe_settle_26/done" value="1"/>
+    </event>
+    <event name="bprobe_speed::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_speed_27/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_settle_26/done eq 1
+</condition>test/flow/bprobe_speed_27/started eq 0
+</condition>
+      <set name="test/flow/bprobe_speed_27/started" value="1"/>
+      <set name="test/flow/bprobe_speed_27/deadline"><function><sum><property>simulation/sim-time-sec</property><value>2</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_speed::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_speed_27/cancelled eq 0
+</condition>test/flow/bprobe_speed_27/started eq 1
+test/flow/bprobe_speed_27/done eq 0
+</condition>test/fc/groundspeed-mps le 0.1
+</condition>
+      <set name="test/flow/bprobe_speed_27/done" value="1"/>
+    </event>
+    <event name="bprobe_speed::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_speed_27/cancelled eq 0
+</condition>test/flow/bprobe_speed_27/started eq 1
+test/flow/bprobe_speed_27/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_speed_27/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_verify::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_speed_27/done eq 1
+</condition>test/flow/bprobe_verify_28/started eq 0
+</condition>
+      <set name="test/flow/bprobe_verify_28/started" value="1"/>
+      <set name="test/flow/bprobe_verify_28/deadline"><function><sum><property>simulation/sim-time-sec</property><value>30</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_initial_zero::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_30/cancelled eq 0
+</condition>test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_initial_zero_30/started eq 0
+</condition>
+      <set name="test/flow/bprobe_initial_zero_30/started" value="1"/>
+      <set name="test/target/roll-deg" value="0"/>
+      <set name="test/target/pitch-deg" value="0"/>
+      <set name="test/input/bprobe_initial_zero_30/enabled" value="1"/>
+      <set name="test/flow/bprobe_initial_zero_30/deadline"><function><sum><property>simulation/sim-time-sec</property><value>25</value></sum></function></set>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_initial_zero_30/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_initial_zero_30/angle-pitch-deg</property></notify>
+    </event>
+    <event name="bprobe_initial_zero::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_30/cancelled eq 0
+</condition>test/flow/bprobe_initial_zero_30/started eq 1
+test/flow/bprobe_initial_zero_30/done eq 0
+</condition>test/attitude/bprobe_initial_zero_30/status eq 1
+</condition>
+      <set name="test/input/bprobe_initial_zero_30/enabled" value="0"/>
+      <set name="test/flow/bprobe_initial_zero_30/done" value="1"/>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_initial_zero_30/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_initial_zero_30/angle-pitch-deg</property><property caption="held-s">test/attitude/held-s</property></notify>
+    </event>
+    <event name="bprobe_initial_zero::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_30/cancelled eq 0
+</condition>test/flow/bprobe_initial_zero_30/started eq 1
+test/flow/bprobe_initial_zero_30/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_initial_zero_30/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_initial_zero_roll_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_roll_max_31/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_initial_zero_30/done eq 1
+</condition>test/flow/bprobe_initial_zero_roll_max_31/started eq 0
+</condition>
+      <set name="test/flow/bprobe_initial_zero_roll_max_31/started" value="1"/>
+      <set name="test/flow/bprobe_initial_zero_roll_max_31/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_initial_zero_roll_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_roll_max_31/cancelled eq 0
+</condition>test/flow/bprobe_initial_zero_roll_max_31/started eq 1
+test/flow/bprobe_initial_zero_roll_max_31/done eq 0
+</condition>test/fc/roll-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_initial_zero_roll_max_31/done" value="1"/>
+    </event>
+    <event name="bprobe_initial_zero_roll_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_roll_max_31/cancelled eq 0
+</condition>test/flow/bprobe_initial_zero_roll_max_31/started eq 1
+test/flow/bprobe_initial_zero_roll_max_31/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_initial_zero_roll_max_31/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_initial_zero_pitch_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_pitch_max_32/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_initial_zero_roll_max_31/done eq 1
+</condition>test/flow/bprobe_initial_zero_pitch_max_32/started eq 0
+</condition>
+      <set name="test/flow/bprobe_initial_zero_pitch_max_32/started" value="1"/>
+      <set name="test/flow/bprobe_initial_zero_pitch_max_32/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_initial_zero_pitch_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_pitch_max_32/cancelled eq 0
+</condition>test/flow/bprobe_initial_zero_pitch_max_32/started eq 1
+test/flow/bprobe_initial_zero_pitch_max_32/done eq 0
+</condition>test/fc/pitch-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_initial_zero_pitch_max_32/done" value="1"/>
+    </event>
+    <event name="bprobe_initial_zero_pitch_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+test/flow/bprobe_initial_zero_pitch_max_32/cancelled eq 0
+</condition>test/flow/bprobe_initial_zero_pitch_max_32/started eq 1
+test/flow/bprobe_initial_zero_pitch_max_32/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_initial_zero_pitch_max_32/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_29::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_29/cancelled eq 0
+<condition logic="AND">test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_initial_zero_pitch_max_32/done eq 1
+</condition>test/flow/sequence_29/done eq 0
+</condition>
+      <set name="test/flow/sequence_29/done" value="1"/>
+    </event>
+    <event name="bprobe_verify_height::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_33/cancelled eq 0
+test/flow/bprobe_verify_height_34/cancelled eq 0
+</condition>test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_height_34/started eq 0
+</condition>
+      <set name="test/flow/bprobe_verify_height_34/started" value="1"/>
+      <set name="test/input/bprobe_verify_height_34/enabled" value="1"/>
+      <set name="test/flow/bprobe_verify_height_34/deadline"><function><sum><property>simulation/sim-time-sec</property><value>40</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_verify_height::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_33/cancelled eq 0
+test/flow/bprobe_verify_height_34/cancelled eq 0
+</condition>test/flow/bprobe_verify_height_34/started eq 1
+test/flow/bprobe_verify_height_34/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_verify_height_34/deadline
+</condition>
+      <set name="test/input/bprobe_verify_height_34/enabled" value="0"/>
+      <set name="test/flow/bprobe_verify_height_34/done" value="1"/>
+    </event>
+    <event name="sequence_33::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+test/flow/sequence_33/cancelled eq 0
+<condition logic="AND">test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_height_34/done eq 1
+</condition>test/flow/sequence_33/done eq 0
+</condition>
+      <set name="test/flow/sequence_33/done" value="1"/>
+    </event>
+    <event name="bprobe_verify::any">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+</condition>test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+</condition><condition logic="OR">test/flow/sequence_29/done eq 1
+test/flow/sequence_33/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_29/cancelled" value="1"/>
+      <set name="test/flow/bprobe_initial_zero_30/cancelled" value="1"/>
+      <set name="test/flow/bprobe_initial_zero_roll_max_31/cancelled" value="1"/>
+      <set name="test/flow/bprobe_initial_zero_pitch_max_32/cancelled" value="1"/>
+      <set name="test/input/bprobe_initial_zero_30/enabled" value="0"/>
+      <set name="test/flow/sequence_33/cancelled" value="1"/>
+      <set name="test/flow/bprobe_verify_height_34/cancelled" value="1"/>
+      <set name="test/input/bprobe_verify_height_34/enabled" value="0"/>
+      <set name="test/flow/bprobe_verify_28/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_verify::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_verify_28/cancelled eq 0
+</condition>test/flow/bprobe_verify_28/started eq 1
+test/flow/bprobe_verify_28/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_verify_28/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_aux2_off_demand::aux2 4.166666666666667%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_aux2_off_demand_35/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_verify_28/done eq 1
+</condition>test/flow/bprobe_aux2_off_demand_35/started eq 0
+</condition>
+      <set name="test/flow/bprobe_aux2_off_demand_35/started" value="1"/>
+      <set name="test/channel/aux2/value-norm" value="0.04166666666666667"/>
+      <set name="test/channel/aux2/enabled" value="1"/>
+      <set name="test/flow/bprobe_aux2_off_demand_35/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_off_wait::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_wait_36/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_aux2_off_demand_35/done eq 1
+</condition>test/flow/bprobe_off_wait_36/started eq 0
+</condition>
+      <set name="test/flow/bprobe_off_wait_36/started" value="1"/>
+      <set name="test/flow/bprobe_off_wait_36/deadline"><function><sum><property>simulation/sim-time-sec</property><value>3</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_off_wait::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_wait_36/cancelled eq 0
+</condition>test/flow/bprobe_off_wait_36/started eq 1
+test/flow/bprobe_off_wait_36/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_off_wait_36/deadline
+</condition>
+      <set name="test/flow/bprobe_off_wait_36/done" value="1"/>
+    </event>
+    <event name="bprobe_off_pitch::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_pitch_37/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_off_wait_36/done eq 1
+</condition>test/flow/bprobe_off_pitch_37/started eq 0
+</condition>
+      <set name="test/flow/bprobe_off_pitch_37/started" value="1"/>
+      <set name="test/flow/bprobe_off_pitch_37/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_off_pitch::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_pitch_37/cancelled eq 0
+</condition>test/flow/bprobe_off_pitch_37/started eq 1
+test/flow/bprobe_off_pitch_37/done eq 0
+</condition>test/fc/pitch-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_off_pitch_37/done" value="1"/>
+    </event>
+    <event name="bprobe_off_pitch::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_pitch_37/cancelled eq 0
+</condition>test/flow/bprobe_off_pitch_37/started eq 1
+test/flow/bprobe_off_pitch_37/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_off_pitch_37/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_off_roll::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_roll_38/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_off_pitch_37/done eq 1
+</condition>test/flow/bprobe_off_roll_38/started eq 0
+</condition>
+      <set name="test/flow/bprobe_off_roll_38/started" value="1"/>
+      <set name="test/flow/bprobe_off_roll_38/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_off_roll::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_roll_38/cancelled eq 0
+</condition>test/flow/bprobe_off_roll_38/started eq 1
+test/flow/bprobe_off_roll_38/done eq 0
+</condition>test/fc/roll-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_off_roll_38/done" value="1"/>
+    </event>
+    <event name="bprobe_off_roll::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_off_roll_38/cancelled eq 0
+</condition>test/flow/bprobe_off_roll_38/started eq 1
+test/flow/bprobe_off_roll_38/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_off_roll_38/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_aux2_release::aux2 释放">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_aux2_release_39/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_off_roll_38/done eq 1
+</condition>test/flow/bprobe_aux2_release_39/started eq 0
+</condition>
+      <set name="test/flow/bprobe_aux2_release_39/started" value="1"/>
+      <set name="test/channel/aux2/value-norm" value="0"/>
+      <set name="test/channel/aux2/enabled" value="0"/>
+      <set name="test/flow/bprobe_aux2_release_39/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_on::vector-switch 100%">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_on_40/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_aux2_release_39/done eq 1
+</condition>test/flow/bprobe_on_40/started eq 0
+</condition>
+      <set name="test/flow/bprobe_on_40/started" value="1"/>
+      <set name="test/channel/vector-switch/value-norm" value="1"/>
+      <set name="test/channel/vector-switch/enabled" value="1"/>
+      <set name="test/flow/bprobe_on_40/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_on_wait::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_on_wait_41/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_on_40/done eq 1
+</condition>test/flow/bprobe_on_wait_41/started eq 0
+</condition>
+      <set name="test/flow/bprobe_on_wait_41/started" value="1"/>
+      <set name="test/flow/bprobe_on_wait_41/deadline"><function><sum><property>simulation/sim-time-sec</property><value>1</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_on_wait::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_on_wait_41/cancelled eq 0
+</condition>test/flow/bprobe_on_wait_41/started eq 1
+test/flow/bprobe_on_wait_41/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_on_wait_41/deadline
+</condition>
+      <set name="test/flow/bprobe_on_wait_41/done" value="1"/>
+    </event>
+    <event name="bprobe_response::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_on_wait_41/done eq 1
+</condition>test/flow/bprobe_response_42/started eq 0
+</condition>
+      <set name="test/flow/bprobe_response_42/started" value="1"/>
+      <set name="test/flow/bprobe_response_42/deadline"><function><sum><property>simulation/sim-time-sec</property><value>110</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_44/cancelled eq 0
+</condition>test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch5_44/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch5_44/started" value="1"/>
+      <set name="test/target/roll-deg" value="0"/>
+      <set name="test/target/pitch-deg" value="5"/>
+      <set name="test/input/bprobe_pitch5_44/enabled" value="1"/>
+      <set name="test/flow/bprobe_pitch5_44/deadline"><function><sum><property>simulation/sim-time-sec</property><value>25</value></sum></function></set>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_pitch5_44/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_pitch5_44/angle-pitch-deg</property></notify>
+    </event>
+    <event name="bprobe_pitch5::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_44/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_44/started eq 1
+test/flow/bprobe_pitch5_44/done eq 0
+</condition>test/attitude/bprobe_pitch5_44/status eq 1
+</condition>
+      <set name="test/input/bprobe_pitch5_44/enabled" value="0"/>
+      <set name="test/flow/bprobe_pitch5_44/done" value="1"/>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_pitch5_44/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_pitch5_44/angle-pitch-deg</property><property caption="held-s">test/attitude/held-s</property></notify>
+    </event>
+    <event name="bprobe_pitch5::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_44/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_44/started eq 1
+test/flow/bprobe_pitch5_44/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch5_44/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5_roll_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_roll_max_45/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch5_44/done eq 1
+</condition>test/flow/bprobe_pitch5_roll_max_45/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch5_roll_max_45/started" value="1"/>
+      <set name="test/flow/bprobe_pitch5_roll_max_45/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5_roll_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_roll_max_45/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_roll_max_45/started eq 1
+test/flow/bprobe_pitch5_roll_max_45/done eq 0
+</condition>test/fc/roll-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_pitch5_roll_max_45/done" value="1"/>
+    </event>
+    <event name="bprobe_pitch5_roll_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_roll_max_45/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_roll_max_45/started eq 1
+test/flow/bprobe_pitch5_roll_max_45/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch5_roll_max_45/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5_pitch_min::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_pitch_min_46/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch5_roll_max_45/done eq 1
+</condition>test/flow/bprobe_pitch5_pitch_min_46/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch5_pitch_min_46/started" value="1"/>
+      <set name="test/flow/bprobe_pitch5_pitch_min_46/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5_pitch_min::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_pitch_min_46/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_pitch_min_46/started eq 1
+test/flow/bprobe_pitch5_pitch_min_46/done eq 0
+</condition>test/fc/pitch-abs-deg ge 4
+</condition>
+      <set name="test/flow/bprobe_pitch5_pitch_min_46/done" value="1"/>
+    </event>
+    <event name="bprobe_pitch5_pitch_min::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_pitch_min_46/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_pitch_min_46/started eq 1
+test/flow/bprobe_pitch5_pitch_min_46/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch5_pitch_min_46/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5_pitch_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_pitch_max_47/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch5_pitch_min_46/done eq 1
+</condition>test/flow/bprobe_pitch5_pitch_max_47/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch5_pitch_max_47/started" value="1"/>
+      <set name="test/flow/bprobe_pitch5_pitch_max_47/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch5_pitch_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_pitch_max_47/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_pitch_max_47/started eq 1
+test/flow/bprobe_pitch5_pitch_max_47/done eq 0
+</condition>test/fc/pitch-abs-deg le 6
+</condition>
+      <set name="test/flow/bprobe_pitch5_pitch_max_47/done" value="1"/>
+    </event>
+    <event name="bprobe_pitch5_pitch_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch5_pitch_max_47/cancelled eq 0
+</condition>test/flow/bprobe_pitch5_pitch_max_47/started eq 1
+test/flow/bprobe_pitch5_pitch_max_47/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch5_pitch_max_47/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch_zero::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_48/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch5_pitch_max_47/done eq 1
+</condition>test/flow/bprobe_pitch_zero_48/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch_zero_48/started" value="1"/>
+      <set name="test/target/roll-deg" value="0"/>
+      <set name="test/target/pitch-deg" value="0"/>
+      <set name="test/input/bprobe_pitch_zero_48/enabled" value="1"/>
+      <set name="test/flow/bprobe_pitch_zero_48/deadline"><function><sum><property>simulation/sim-time-sec</property><value>25</value></sum></function></set>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_pitch_zero_48/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_pitch_zero_48/angle-pitch-deg</property></notify>
+    </event>
+    <event name="bprobe_pitch_zero::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_48/cancelled eq 0
+</condition>test/flow/bprobe_pitch_zero_48/started eq 1
+test/flow/bprobe_pitch_zero_48/done eq 0
+</condition>test/attitude/bprobe_pitch_zero_48/status eq 1
+</condition>
+      <set name="test/input/bprobe_pitch_zero_48/enabled" value="0"/>
+      <set name="test/flow/bprobe_pitch_zero_48/done" value="1"/>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_pitch_zero_48/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_pitch_zero_48/angle-pitch-deg</property><property caption="held-s">test/attitude/held-s</property></notify>
+    </event>
+    <event name="bprobe_pitch_zero::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_48/cancelled eq 0
+</condition>test/flow/bprobe_pitch_zero_48/started eq 1
+test/flow/bprobe_pitch_zero_48/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch_zero_48/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch_zero_roll_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_roll_max_49/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch_zero_48/done eq 1
+</condition>test/flow/bprobe_pitch_zero_roll_max_49/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch_zero_roll_max_49/started" value="1"/>
+      <set name="test/flow/bprobe_pitch_zero_roll_max_49/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch_zero_roll_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_roll_max_49/cancelled eq 0
+</condition>test/flow/bprobe_pitch_zero_roll_max_49/started eq 1
+test/flow/bprobe_pitch_zero_roll_max_49/done eq 0
+</condition>test/fc/roll-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_pitch_zero_roll_max_49/done" value="1"/>
+    </event>
+    <event name="bprobe_pitch_zero_roll_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_roll_max_49/cancelled eq 0
+</condition>test/flow/bprobe_pitch_zero_roll_max_49/started eq 1
+test/flow/bprobe_pitch_zero_roll_max_49/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch_zero_roll_max_49/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch_zero_pitch_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_pitch_max_50/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch_zero_roll_max_49/done eq 1
+</condition>test/flow/bprobe_pitch_zero_pitch_max_50/started eq 0
+</condition>
+      <set name="test/flow/bprobe_pitch_zero_pitch_max_50/started" value="1"/>
+      <set name="test/flow/bprobe_pitch_zero_pitch_max_50/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_pitch_zero_pitch_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_pitch_max_50/cancelled eq 0
+</condition>test/flow/bprobe_pitch_zero_pitch_max_50/started eq 1
+test/flow/bprobe_pitch_zero_pitch_max_50/done eq 0
+</condition>test/fc/pitch-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_pitch_zero_pitch_max_50/done" value="1"/>
+    </event>
+    <event name="bprobe_pitch_zero_pitch_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_pitch_zero_pitch_max_50/cancelled eq 0
+</condition>test/flow/bprobe_pitch_zero_pitch_max_50/started eq 1
+test/flow/bprobe_pitch_zero_pitch_max_50/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_pitch_zero_pitch_max_50/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_51/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_pitch_zero_pitch_max_50/done eq 1
+</condition>test/flow/bprobe_roll5_51/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll5_51/started" value="1"/>
+      <set name="test/target/roll-deg" value="5"/>
+      <set name="test/target/pitch-deg" value="0"/>
+      <set name="test/input/bprobe_roll5_51/enabled" value="1"/>
+      <set name="test/flow/bprobe_roll5_51/deadline"><function><sum><property>simulation/sim-time-sec</property><value>25</value></sum></function></set>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_roll5_51/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_roll5_51/angle-pitch-deg</property></notify>
+    </event>
+    <event name="bprobe_roll5::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_51/cancelled eq 0
+</condition>test/flow/bprobe_roll5_51/started eq 1
+test/flow/bprobe_roll5_51/done eq 0
+</condition>test/attitude/bprobe_roll5_51/status eq 1
+</condition>
+      <set name="test/input/bprobe_roll5_51/enabled" value="0"/>
+      <set name="test/flow/bprobe_roll5_51/done" value="1"/>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_roll5_51/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_roll5_51/angle-pitch-deg</property><property caption="held-s">test/attitude/held-s</property></notify>
+    </event>
+    <event name="bprobe_roll5::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_51/cancelled eq 0
+</condition>test/flow/bprobe_roll5_51/started eq 1
+test/flow/bprobe_roll5_51/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll5_51/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5_roll_min::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_roll_min_52/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll5_51/done eq 1
+</condition>test/flow/bprobe_roll5_roll_min_52/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll5_roll_min_52/started" value="1"/>
+      <set name="test/flow/bprobe_roll5_roll_min_52/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5_roll_min::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_roll_min_52/cancelled eq 0
+</condition>test/flow/bprobe_roll5_roll_min_52/started eq 1
+test/flow/bprobe_roll5_roll_min_52/done eq 0
+</condition>test/fc/roll-abs-deg ge 4
+</condition>
+      <set name="test/flow/bprobe_roll5_roll_min_52/done" value="1"/>
+    </event>
+    <event name="bprobe_roll5_roll_min::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_roll_min_52/cancelled eq 0
+</condition>test/flow/bprobe_roll5_roll_min_52/started eq 1
+test/flow/bprobe_roll5_roll_min_52/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll5_roll_min_52/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5_roll_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_roll_max_53/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll5_roll_min_52/done eq 1
+</condition>test/flow/bprobe_roll5_roll_max_53/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll5_roll_max_53/started" value="1"/>
+      <set name="test/flow/bprobe_roll5_roll_max_53/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5_roll_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_roll_max_53/cancelled eq 0
+</condition>test/flow/bprobe_roll5_roll_max_53/started eq 1
+test/flow/bprobe_roll5_roll_max_53/done eq 0
+</condition>test/fc/roll-abs-deg le 6
+</condition>
+      <set name="test/flow/bprobe_roll5_roll_max_53/done" value="1"/>
+    </event>
+    <event name="bprobe_roll5_roll_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_roll_max_53/cancelled eq 0
+</condition>test/flow/bprobe_roll5_roll_max_53/started eq 1
+test/flow/bprobe_roll5_roll_max_53/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll5_roll_max_53/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5_pitch_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_pitch_max_54/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll5_roll_max_53/done eq 1
+</condition>test/flow/bprobe_roll5_pitch_max_54/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll5_pitch_max_54/started" value="1"/>
+      <set name="test/flow/bprobe_roll5_pitch_max_54/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll5_pitch_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_pitch_max_54/cancelled eq 0
+</condition>test/flow/bprobe_roll5_pitch_max_54/started eq 1
+test/flow/bprobe_roll5_pitch_max_54/done eq 0
+</condition>test/fc/pitch-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_roll5_pitch_max_54/done" value="1"/>
+    </event>
+    <event name="bprobe_roll5_pitch_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll5_pitch_max_54/cancelled eq 0
+</condition>test/flow/bprobe_roll5_pitch_max_54/started eq 1
+test/flow/bprobe_roll5_pitch_max_54/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll5_pitch_max_54/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll_zero::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_55/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll5_pitch_max_54/done eq 1
+</condition>test/flow/bprobe_roll_zero_55/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll_zero_55/started" value="1"/>
+      <set name="test/target/roll-deg" value="0"/>
+      <set name="test/target/pitch-deg" value="0"/>
+      <set name="test/input/bprobe_roll_zero_55/enabled" value="1"/>
+      <set name="test/flow/bprobe_roll_zero_55/deadline"><function><sum><property>simulation/sim-time-sec</property><value>25</value></sum></function></set>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_roll_zero_55/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_roll_zero_55/angle-pitch-deg</property></notify>
+    </event>
+    <event name="bprobe_roll_zero::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_55/cancelled eq 0
+</condition>test/flow/bprobe_roll_zero_55/started eq 1
+test/flow/bprobe_roll_zero_55/done eq 0
+</condition>test/attitude/bprobe_roll_zero_55/status eq 1
+</condition>
+      <set name="test/input/bprobe_roll_zero_55/enabled" value="0"/>
+      <set name="test/flow/bprobe_roll_zero_55/done" value="1"/>
+      <notify><property caption="angle-roll-deg">test/input/bprobe_roll_zero_55/angle-roll-deg</property><property caption="angle-pitch-deg">test/input/bprobe_roll_zero_55/angle-pitch-deg</property><property caption="held-s">test/attitude/held-s</property></notify>
+    </event>
+    <event name="bprobe_roll_zero::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_55/cancelled eq 0
+</condition>test/flow/bprobe_roll_zero_55/started eq 1
+test/flow/bprobe_roll_zero_55/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll_zero_55/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll_zero_roll_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_roll_max_56/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll_zero_55/done eq 1
+</condition>test/flow/bprobe_roll_zero_roll_max_56/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll_zero_roll_max_56/started" value="1"/>
+      <set name="test/flow/bprobe_roll_zero_roll_max_56/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll_zero_roll_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_roll_max_56/cancelled eq 0
+</condition>test/flow/bprobe_roll_zero_roll_max_56/started eq 1
+test/flow/bprobe_roll_zero_roll_max_56/done eq 0
+</condition>test/fc/roll-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_roll_zero_roll_max_56/done" value="1"/>
+    </event>
+    <event name="bprobe_roll_zero_roll_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_roll_max_56/cancelled eq 0
+</condition>test/flow/bprobe_roll_zero_roll_max_56/started eq 1
+test/flow/bprobe_roll_zero_roll_max_56/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll_zero_roll_max_56/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll_zero_pitch_max::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_pitch_max_57/cancelled eq 0
+</condition><condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll_zero_roll_max_56/done eq 1
+</condition>test/flow/bprobe_roll_zero_pitch_max_57/started eq 0
+</condition>
+      <set name="test/flow/bprobe_roll_zero_pitch_max_57/started" value="1"/>
+      <set name="test/flow/bprobe_roll_zero_pitch_max_57/deadline"><function><sum><property>simulation/sim-time-sec</property><value>0.5</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_roll_zero_pitch_max::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_pitch_max_57/cancelled eq 0
+</condition>test/flow/bprobe_roll_zero_pitch_max_57/started eq 1
+test/flow/bprobe_roll_zero_pitch_max_57/done eq 0
+</condition>test/fc/pitch-abs-deg le 1
+</condition>
+      <set name="test/flow/bprobe_roll_zero_pitch_max_57/done" value="1"/>
+    </event>
+    <event name="bprobe_roll_zero_pitch_max::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+test/flow/bprobe_roll_zero_pitch_max_57/cancelled eq 0
+</condition>test/flow/bprobe_roll_zero_pitch_max_57/started eq 1
+test/flow/bprobe_roll_zero_pitch_max_57/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_roll_zero_pitch_max_57/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_43::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_43/cancelled eq 0
+<condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_roll_zero_pitch_max_57/done eq 1
+</condition>test/flow/sequence_43/done eq 0
+</condition>
+      <set name="test/flow/sequence_43/done" value="1"/>
+    </event>
+    <event name="bprobe_response_height::start">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_58/cancelled eq 0
+test/flow/bprobe_response_height_59/cancelled eq 0
+</condition>test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_height_59/started eq 0
+</condition>
+      <set name="test/flow/bprobe_response_height_59/started" value="1"/>
+      <set name="test/input/bprobe_response_height_59/enabled" value="1"/>
+      <set name="test/flow/bprobe_response_height_59/deadline"><function><sum><property>simulation/sim-time-sec</property><value>120</value></sum></function></set>
+      <notify></notify>
+    </event>
+    <event name="bprobe_response_height::done">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_58/cancelled eq 0
+test/flow/bprobe_response_height_59/cancelled eq 0
+</condition>test/flow/bprobe_response_height_59/started eq 1
+test/flow/bprobe_response_height_59/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_response_height_59/deadline
+</condition>
+      <set name="test/input/bprobe_response_height_59/enabled" value="0"/>
+      <set name="test/flow/bprobe_response_height_59/done" value="1"/>
+    </event>
+    <event name="sequence_58::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+test/flow/sequence_58/cancelled eq 0
+<condition logic="AND">test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_height_59/done eq 1
+</condition>test/flow/sequence_58/done eq 0
+</condition>
+      <set name="test/flow/sequence_58/done" value="1"/>
+    </event>
+    <event name="bprobe_response::any">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+</condition>test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+</condition><condition logic="OR">test/flow/sequence_43/done eq 1
+test/flow/sequence_58/done eq 1
+</condition></condition>
+      <set name="test/flow/sequence_43/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch5_44/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch5_roll_max_45/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch5_pitch_min_46/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch5_pitch_max_47/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch_zero_48/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch_zero_roll_max_49/cancelled" value="1"/>
+      <set name="test/flow/bprobe_pitch_zero_pitch_max_50/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll5_51/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll5_roll_min_52/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll5_roll_max_53/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll5_pitch_max_54/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll_zero_55/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll_zero_roll_max_56/cancelled" value="1"/>
+      <set name="test/flow/bprobe_roll_zero_pitch_max_57/cancelled" value="1"/>
+      <set name="test/input/bprobe_pitch5_44/enabled" value="0"/>
+      <set name="test/input/bprobe_pitch_zero_48/enabled" value="0"/>
+      <set name="test/input/bprobe_roll5_51/enabled" value="0"/>
+      <set name="test/input/bprobe_roll_zero_55/enabled" value="0"/>
+      <set name="test/flow/sequence_58/cancelled" value="1"/>
+      <set name="test/flow/bprobe_response_height_59/cancelled" value="1"/>
+      <set name="test/input/bprobe_response_height_59/enabled" value="0"/>
+      <set name="test/flow/bprobe_response_42/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_response::timeout">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_response_42/cancelled eq 0
+</condition>test/flow/bprobe_response_42/started eq 1
+test/flow/bprobe_response_42/done eq 0
+</condition>simulation/sim-time-sec ge test/flow/bprobe_response_42/deadline
+</condition>
+      <set name="test/runtime/failed" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="bprobe_confirmed::矢量切换验收通过：关断抑制、AUX2/Pitch +5°、AUX1/Roll +5°及回正均确认">
+      <condition logic="AND"><condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+test/flow/bprobe_confirmed_60/cancelled eq 0
+</condition><condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_response_42/done eq 1
+</condition>test/flow/bprobe_confirmed_60/started eq 0
+</condition>
+      <set name="test/flow/bprobe_confirmed_60/started" value="1"/>
+      <set name="test/flow/bprobe_confirmed_60/done" value="1"/>
+      <notify></notify>
+    </event>
+    <event name="sequence_1::done">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/cancelled eq 0
+<condition logic="AND">test/runtime/ready eq 1
+test/flow/bprobe_confirmed_60/done eq 1
+</condition>test/flow/sequence_1/done eq 0
+</condition>
+      <set name="test/flow/sequence_1/done" value="1"/>
+    </event>
+    <event name="test::complete">
+      <condition logic="AND"><condition logic="AND">test/runtime/ready eq 1
+test/runtime/complete eq 0
+test/runtime/failed eq 0
+</condition>test/flow/sequence_1/done eq 1
+</condition>
+      <set name="test/runtime/complete" value="1"/>
+      <notify></notify>
+    </event>
+  </run>
+</runscript>
