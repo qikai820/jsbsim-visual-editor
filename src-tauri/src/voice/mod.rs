@@ -32,10 +32,21 @@ pub async fn voice_transcribe(app:tauri::AppHandle,id:u64,request_id:String)->Re
         let endpoint=http::url(&config.asr.base_url,if config.asr_protocol=="whispercpp"{"inference"}else{"audio/transcriptions"});
         let response=http::json_request(&config.asr,&endpoint,http::Body::Audio(&file.path,&config.asr.model,&config.language),config.timeout_seconds,&job)?;
         let text=response["text"].as_str().ok_or("语音服务缺少 text 字段")?.trim();
-        if text.is_empty(){return Err("未识别到讲话，请靠近麦克风后重试".into());}
+        if text.is_empty(){return Err(empty_transcription_message(&response));}
         if text.chars().count()>2000{return Err("识别文字过长，请分段操作".into());}
         Ok(text.to_string())
     }).await
+}
+fn empty_transcription_message(response:&Value)->String {
+    let level=response["audio_rms"].as_f64().filter(|value|value.is_finite()&&*value>=0.0&&*value<=32768.0)
+        .map(|rms|format!("（录音 RMS {rms:.1}）")).unwrap_or_default();
+    let message=match response["empty_reason"].as_str(){
+        Some("low_volume")=>"录音音量过低或静音，请在系统声音设置的“输入”中检查麦克风选择、静音和输入音量",
+        Some("vad_no_speech")=>"录到声音，但语音检测未找到讲话；请确认输入设备是麦克风而非输出监听，录音开始后连续说一句话",
+        Some("asr_empty")=>"录到声音，但模型未转写出文字；请检查输入设备和语音语言，并录制清晰完整的句子",
+        _=>"识别服务未返回文字；请检查系统麦克风输入和音量，录音开始后再讲话",
+    };
+    format!("{message}{level}")
 }
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
@@ -46,13 +57,18 @@ pub async fn voice_interpret(app:tauri::AppHandle,text:String,context:Value,requ
     super::run_blocking(move||{
         let config=load(&app)?;config.require_enabled()?;
         if text.trim().is_empty()||text.chars().count()>2000||context.to_string().len()>60_000{return Err("指令为空或上下文过长".into());}
-        let body=http::chat_body(&config,&text,&context);
-        let endpoint=http::url(&config.llm.base_url,if config.llm_protocol=="ollama"{"api/chat"}else{"chat/completions"});
-        let response=http::json_request(&config.llm,&endpoint,http::Body::Json(&body),config.timeout_seconds,&job)?;
-        let decision=protocol::parse_decision(http::content(&config,&response)?)?;
+        let decision=interpret_decision(&config,&text,&context,&job)?;
         let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_millis()as u64;
         Ok(Plan{id:request_id,created_at_ms:now,expires_at_ms:now+60_000,reply:decision.reply,actions:decision.actions})
     }).await
+}
+fn interpret_decision(config:&Config,text:&str,context:&Value,job:&http::Job)->Result<protocol::Decision,String>{
+    job.check()?;
+    if let Some(decision)=protocol::local_cancellation(text){return Ok(decision);}
+    let body=http::chat_body(config,text,context);
+    let endpoint=http::url(&config.llm.base_url,if config.llm_protocol=="ollama"{"api/chat"}else{"chat/completions"});
+    let response=http::json_request(&config.llm,&endpoint,http::Body::Json(&body),config.timeout_seconds,job)?;
+    protocol::parse_decision(http::content(config,&response)?)
 }
 #[tauri::command]
 pub async fn voice_probe(config:Config,request_id:String)->Result<Value,String>{
@@ -78,6 +94,12 @@ fn probe_summary(config:&Config,llm:Result<Value,String>,asr:Result<Value,String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn empty_transcription_explains_capture_and_vad_separately(){
+        assert!(empty_transcription_message(&json!({"empty_reason":"low_volume","audio_rms":0})).contains("静音"));
+        assert!(empty_transcription_message(&json!({"empty_reason":"vad_no_speech","audio_rms":500})).contains("语音检测"));
+        assert!(empty_transcription_message(&json!({"empty_reason":"asr_empty"})).contains("模型未转写"));
+        assert!(!empty_transcription_message(&json!({"empty_reason":"untrusted details","audio_rms":-1})).contains("untrusted"));
+    }
     #[test] fn probe_checks_ready_model_and_searches_past_display_limit() {
         let c=Config::default();let mut models=(0..110).map(|n|json!({"name":format!("other-{n}")})).collect::<Vec<_>>();models.push(json!({"name":c.llm.model}));
         let response=probe_summary(&c,Ok(json!({"models":models})),Ok(json!({"ready":false,"model":"small"})));
@@ -107,11 +129,7 @@ mod tests {
         assert_eq!(summary["asr"]["ok"],true,"ASR 检查失败：{}",summary["asr"]["message"]);
         println!("[测试] PASS：small ASR 与 {} 指令模型就绪。",c.llm.model);
         let context=json!({"binding":{"instance":"01","selectedModel":"","busy":false},"simulation":{"connected":false},"models":[],"scripts":[],"test":{"status":"idle"},"catalogErrors":[]});
-        let interpret=|text:&str| {
-            let body=http::chat_body(&c,text,&context);
-            let response=http::json_request(&c.llm,&http::url(&c.llm.base_url,"api/chat"),http::Body::Json(&body),c.timeout_seconds,&job).expect("真实大模型请求失败");
-            protocol::parse_decision(http::content(&c,&response).expect("模型返回空内容")).expect("模型输出未通过上位机严格校验")
-        };
+        let interpret=|text:&str| interpret_decision(&c,text,&context,&job).expect("指令解析失败");
         for (text,expected) in [("查询当前仿真状态","status"),("有哪些模型","list_models"),("取消操作，什么也不要执行","")] {
             let decision=interpret(text);
             let actions=serde_json::to_value(&decision.actions).unwrap();
@@ -137,7 +155,7 @@ mod tests {
             let file=audio::finish(recording.id).expect("录音失败");
             let response=http::json_request(&c.asr,&http::url(&c.asr.base_url,"audio/transcriptions"),http::Body::Audio(&file.path,&c.asr.model,&c.language),c.timeout_seconds,&job).expect("真实音频转写失败");
             let text=response["text"].as_str().unwrap_or("").trim();
-            assert!(!text.is_empty(),"未识别到讲话，请检查系统默认输入设备；配置已保存");
+            assert!(!text.is_empty(),"{}；配置已保存",empty_transcription_message(&response));
             println!("[麦克风] 识别文字：{text}");
             let decision=interpret(text);
             assert_eq!(serde_json::to_value(&decision.actions).unwrap(),json!([{"type":"status"}]),"请按提示说查询当前仿真状态；其他动作不会执行");

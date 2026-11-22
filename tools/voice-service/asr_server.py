@@ -59,6 +59,30 @@ def audio_info(data):
     return duration, energy
 
 
+def pcm_audio(data):
+    """Decode our validated PCM WAV without faster-whisper's av.open wrapper.
+
+    PyAV 19 removed the metadata_errors argument used by faster-whisper 1.2.1.
+    Feeding normalized 16 kHz samples also avoids decoding the WAV twice in AV.
+    """
+    import numpy as np
+    with wave.open(io.BytesIO(data), 'rb') as audio:
+        rate = audio.getframerate()
+        channels = audio.getnchannels()
+        frames = audio.readframes(audio.getnframes())
+    samples = np.frombuffer(frames, dtype='<i2').astype(np.float32) / 32768.0
+    if channels == 2:
+        samples = samples.reshape(-1, 2).mean(axis=1)
+    if rate != 16000:
+        import av
+        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format='fltp', layout='mono')
+        frame.sample_rate = rate
+        resampler = av.AudioResampler(format='fltp', layout='mono', rate=16000)
+        converted = resampler.resample(frame) + resampler.resample(None)
+        samples = np.concatenate([part.to_ndarray().ravel() for part in converted]) if converted else np.empty(0, dtype=np.float32)
+    return np.ascontiguousarray(samples, dtype=np.float32)
+
+
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
@@ -116,19 +140,28 @@ class Handler(BaseHTTPRequestHandler):
             if not language or len(language) > 12 or not language.replace('-', '').isalpha():
                 raise ValueError('Invalid language')
             duration, energy = audio_info(fields['file'])
+            reason = None
             if energy < 80:
                 text = ''
+                reason = 'low_volume'
             else:
-                segments, _ = self.server.transcriber.transcribe(
-                    io.BytesIO(fields['file']), language=language, beam_size=3,
+                segments, info = self.server.transcriber.transcribe(
+                    pcm_audio(fields['file']), language=language, beam_size=3,
                     vad_filter=True, condition_on_previous_text=False)
                 text = ''.join(segment.text for segment in segments).strip()
-            self.reply(200, {'text': text, 'duration': duration})
+                if not text:
+                    reason = 'vad_no_speech' if getattr(info, 'duration_after_vad', None) == 0 else 'asr_empty'
+            result = {'text': text, 'duration': duration, 'audio_rms': round(energy, 1)}
+            if reason:
+                result['empty_reason'] = reason
+                labels = {'low_volume': '录音音量过低或静音', 'vad_no_speech': '语音检测未找到讲话', 'asr_empty': '模型未转写出文字'}
+                print(f'[ASR] {labels[reason]}；RMS={energy:.1f}，时长={duration:.1f}秒', flush=True)
+            self.reply(200, result)
         except (ValueError, OSError) as error:
             self.reply(400, {'error': str(error)})
         except Exception as error:
             print('[ASR] inference failed: ' + type(error).__name__, file=sys.stderr, flush=True)
-            self.reply(500, {'error': 'Speech recognition failed; check the local service console'})
+            self.reply(500, {'error': f'Speech recognition failed ({type(error).__name__}); check the local service console'})
         finally:
             self.server.inference_lock.release()
 

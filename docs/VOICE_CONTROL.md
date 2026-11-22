@@ -54,6 +54,10 @@ bash scripts/voice-service.sh asr --check-proxy
 bash scripts/voice-service.sh asr --model /absolute/path/faster-whisper-small --name small
 ```
 
+识别服务直接将已校验的 PCM WAV 转换为 16 kHz 单声道浮点采样，再送给模型；
+避免 faster-whisper 1.2.1 与 PyAV 19 在 `metadata_errors` 解码参数上的不兼容。
+更新服务代码后，需要在 ASR 终端按 Ctrl+C 并重新启动，已有模型无需重新下载。
+
 使用 CUDA 时，需先具备 faster-whisper 所需的 CUDA/cuDNN 运行库，再选择
 `--device cuda --compute-type float16`。上位机不直接驱动 GPU 或 NPU；推理设备由各服务决定。
 本次没有自动下载大模型权重或变更系统推理环境。
@@ -143,6 +147,7 @@ node tests/voice-actions.mjs
 node tests/voice-runtime.mjs
 python3 tests/voice-asr-service.py
 .toolchains/voice/bin/python tests/voice-proxy.py
+.toolchains/voice/bin/python tests/voice-asr-audio.py
 node --experimental-websocket tests/voice-assistant-ui.mjs
 npm run build
 ```

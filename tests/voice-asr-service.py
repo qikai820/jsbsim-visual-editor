@@ -6,6 +6,7 @@ import struct
 import json
 import threading
 from types import SimpleNamespace
+from unittest.mock import patch, sentinel
 import wave
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ class Transcriber:
     def __init__(self): self.calls=0
     def transcribe(self,*args,**kwargs):
         self.calls+=1
+        assert args[0] is sentinel.pcm_audio
         assert kwargs['language']=='zh' and kwargs['vad_filter'] is True
         return iter([SimpleNamespace(text='暂停'),SimpleNamespace(text='仿真')]),None
 
@@ -56,13 +58,20 @@ server.api_key=''
 headers={'Content-Type':'multipart/form-data; boundary=test'}
 status,result=request('POST','/v1/audio/transcriptions',form([('file',data),('model',b'small'),('language',b'zh')]),headers)
 assert status==200 and result['text']=='' and transcriber.calls==0,'silence must not invoke the model'
+assert result['empty_reason']=='low_volume' and result['audio_rms']==0
 
 spoken=io.BytesIO()
 with wave.open(spoken,'wb') as writer:
     writer.setnchannels(1);writer.setsampwidth(2);writer.setframerate(16000)
     writer.writeframes(struct.pack('<hh',1000,-1000)*800)
-status,result=request('POST','/v1/audio/transcriptions',form([('file',spoken.getvalue()),('model',b'small'),('language',b'zh')]),headers)
+with patch.object(service,'pcm_audio',return_value=sentinel.pcm_audio) as decode:
+    status,result=request('POST','/v1/audio/transcriptions',form([('file',spoken.getvalue()),('model',b'small'),('language',b'zh')]),headers)
+    decode.assert_called_once_with(spoken.getvalue())
 assert status==200 and result['text']=='暂停仿真' and transcriber.calls==1
+for info,reason in [(None,'asr_empty'),(SimpleNamespace(duration_after_vad=0),'vad_no_speech')]:
+    with patch.object(service,'pcm_audio',return_value=sentinel.pcm_audio), patch.object(transcriber,'transcribe',return_value=(iter([]),info)):
+        status,result=request('POST','/v1/audio/transcriptions',form([('file',spoken.getvalue())]),headers)
+        assert status==200 and result['empty_reason']==reason and result['audio_rms']==1000
 assert request('POST','/v1/audio/transcriptions',form([('file',data),('model',b'wrong')]),headers)[0]==400
 assert request('POST','/v1/audio/transcriptions',form([('file',data[:-20])]),headers)[0]==400
 assert request('POST','/v1/audio/transcriptions',b'broken',headers)[0]==400

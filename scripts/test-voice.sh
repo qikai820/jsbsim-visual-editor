@@ -12,6 +12,9 @@ if [[ "$voice_test_mode" != ui ]]; then
   python3 tests/voice-asr-service.py
   if [[ -x .toolchains/voice/bin/python ]]; then
     .toolchains/voice/bin/python tests/voice-proxy.py
+    if .toolchains/voice/bin/python -c 'import av, numpy' >/dev/null 2>&1; then
+      .toolchains/voice/bin/python tests/voice-asr-audio.py
+    fi
   else
     python3 tests/voice-proxy.py
   fi
