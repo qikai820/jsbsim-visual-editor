@@ -15,6 +15,20 @@ try {
  await writeFile("/tmp/default-scene.collision", original);
  const tree=newSceneDocument();tree.georeference={latitude:0,longitude:0,altitude:0};tree.objects=tree.objects.filter(o=>o.builtin==="tree").slice(0,1);tree.objects[0].position=[10,0,0];tree.objects[0].scale=[1,1,1];await writeFile("/tmp/tree-scene.collision",exportSceneCollision(tree,new Map()));
  const parsed=parse(original);assert.equal(parsed.values.length,parsed.count*9);
+ // A vertical ray just inside a side wall hits the pitched roof below the ridge.
+ const hangarDoc=newSceneDocument();hangarDoc.georeference=doc.georeference;
+ hangarDoc.objects=hangarDoc.objects.filter(o=>o.builtin==='hangar');hangarDoc.objects[0].position=[0,0,0];
+ const {Ray,Vector3}=await import('three');
+ const shell=parse(exportSceneCollision(hangarDoc,new Map())).values;
+ const roofHeight=x=>{
+   const ray=new Ray(new Vector3(x,12,0),new Vector3(0,-1,0)),hit=new Vector3();let max=-Infinity;
+   for(let i=0;i<shell.length;i+=9){
+     const [a,b,c]=[0,3,6].map(offset=>new Vector3().fromArray(shell,i+offset));
+     if(ray.intersectTriangle(a,b,c,false,hit))max=Math.max(max,hit.y);
+   }
+   return max;
+ };
+ assert.ok(Math.abs(roofHeight(0)-8)<1e-6);assert.ok(Math.abs(roofHeight(10)-(8-1.85*10/11))<1e-6);
  // Apron is a real editable surface; the parked reference aircraft is opt-in.
  const parking=newSceneDocument();parking.georeference=doc.georeference;
  parking.objects=parking.objects.filter(o=>o.builtin==='apron'||o.builtin==='f35');

@@ -40,7 +40,10 @@ try {
       if(command==='plugin:event|listen'){const n=++id;if(!window.__events.has(args.event))window.__events.set(args.event,new Map());window.__events.get(args.event).set(n,callbacks.get(args.handler));return n}
       if(command==='plugin:event|unlisten'){window.__events.get(args.event)?.delete(args.eventId);return}
       if(command==='ftp_list_xml_parent')return{exists:true,files:window.__noGround?['reset.xml']:['initfile.xml','reset.xml']};
-      if(command==='ftp_download_xml')return{path:args.path,content:window.__noGround?'<initialize/>':'<initialize><elevation unit="M">'+(args.path.includes('/voliro_t/')?582.57:0)+'</elevation><altitude unit="M">0.5</altitude></initialize>'};
+      if(command==='ftp_download_xml'){
+        if(window.__f450Ground && args.path.includes('/F450/'))return{path:args.path,content:'<initialize><latitude type="geodetic" unit="DEG">44.725801</latitude><longitude unit="DEG">-93.075866</longitude><altitude unit="M">0</altitude><elevation unit="M">285.2111</elevation></initialize>'};
+        return{path:args.path,content:window.__noGround?'<initialize/>':'<initialize><elevation unit="M">'+(args.path.includes('/voliro_t/')?582.57:0)+'</elevation><altitude unit="M">0.5</altitude></initialize>'};
+      }
       if(command==='ftp_download_sim_config'){
         window.__configReads=(window.__configReads||0)+1;
         if(args.path.includes('/broken.json'))throw Error('fixture: model config unavailable');
@@ -100,6 +103,12 @@ try {
   await evaluate(`document.querySelector('[data-aircraft="02"]').click()`);
   await until(`document.body.innerText.includes('已从 F450 的初始状态自动获取')`);
   assert.deepEqual(await evaluate(geoFields),['0','0','0'],'valid zero coordinates are model values');
+  await evaluate(`window.__f450Ground=true;document.querySelector('[data-aircraft="01"]').click()`);
+  await until(`document.body.innerText.includes('已从 voliro_t 的初始状态自动获取')`);
+  await evaluate(`document.querySelector('[data-aircraft="02"]').click()`);
+  await until(`document.body.innerText.includes('已从 F450 的初始状态自动获取')`);
+  assert.deepEqual((await evaluate(geoFields)).map(Number),[44.725801,-93.075866,285.2111],
+    'zero JSON coordinates retain the ground script location and elevation');
   await evaluate(`document.querySelector('[data-aircraft="03"]').click()`);
   await until(`window.__releaseConfig && document.body.innerText.includes('正在从 slow 读取初始位置')`);
   assert.deepEqual(await evaluate(geoFields),['','',''],'pending config is never represented by zero coordinates');
@@ -170,15 +179,15 @@ try {
   }
   // Compare rendered instances against the selected tree's complete transform,
   // rather than checking only the inspector or the invisible editing pivot.
-  assert.ok(await evaluate(`(()=>{const s=${rootState},o=s.scene.getObjectByName('scene-object-builtin-tree-1'),mesh=s.scene.getObjectByName('scene-tree-trunks'),actual=mesh.matrix.clone();mesh.getMatrixAt(0,actual);actual.premultiply(mesh.matrixWorld);const local=mesh.matrix.clone().makeScale(.24,3,.24);local.setPosition(0,1.5,0);const expected=o.matrixWorld.clone().multiply(local);return actual.elements.every((n,i)=>Math.abs(n-expected.elements[i])<1e-4)})()`),'tree instance follows position, rotation and nonuniform scale');
-  const treeMatrix = await evaluate(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(1,a);return a.elements})()`);
-  const firstTreeX = await evaluate(`(()=>{const m=(${rootState}).scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(0,a);return a.elements[12]})()`);
+  assert.ok(await evaluate(`(()=>{const s=${rootState},o=s.scene.getObjectByName('scene-object-builtin-tree-1'),mesh=s.scene.getObjectByName('scene-trees-0'),actual=mesh.matrix.clone();mesh.getMatrixAt(0,actual);actual.premultiply(mesh.matrixWorld);const expected=o.matrixWorld;return actual.elements.every((n,i)=>Math.abs(n-expected.elements[i])<1e-4)})()`),'tree instance follows position, rotation and nonuniform scale');
+  const treeMatrix = await evaluate(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-trees-0'),a=m.matrix.clone();m.getMatrixAt(1,a);return a.elements})()`);
+  const firstTreeX = await evaluate(`(()=>{const m=(${rootState}).scene.getObjectByName('scene-trees-0'),a=m.matrix.clone();m.getMatrixAt(0,a);return a.elements[12]})()`);
   await setNumber('位置 X',-85);
-  await until(`(()=>{const m=(${rootState}).scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(0,a);return Math.abs(a.elements[12]-(${firstTreeX + 5}))<1e-4})()`);
-  assert.deepEqual(await evaluate(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(1,a);return a.elements})()`),treeMatrix,'editing one tree does not move its neighbour');
+  await until(`(()=>{const m=(${rootState}).scene.getObjectByName('scene-trees-0'),a=m.matrix.clone();m.getMatrixAt(0,a);return Math.abs(a.elements[12]-(${firstTreeX + 5}))<1e-4})()`);
+  assert.deepEqual(await evaluate(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-trees-0'),a=m.matrix.clone();m.getMatrixAt(1,a);return a.elements})()`),treeMatrix,'editing one tree does not move its neighbour');
   builtinCases[2][1][0]=-85;
   await evaluate(`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示物体').querySelector('input').click()`);
-  await until(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-tree-trunks'),a=m.matrix.clone();m.getMatrixAt(0,a);return a.elements[0]===0&&a.elements[5]===0&&a.elements[10]===0})()`);
+  await until(`(()=>{const s=${rootState},m=s.scene.getObjectByName('scene-trees-0'),a=m.matrix.clone();m.getMatrixAt(0,a);return a.elements[0]===0&&a.elements[5]===0&&a.elements[10]===0})()`);
   await evaluate(`[...document.querySelectorAll('.scene-editor-check')].find(label=>label.textContent.trim()==='显示物体').querySelector('input').click()`);
   await selectObject('builtin-tree-32');await clickText('删除物体');
   assert.equal(await evaluate(`document.querySelectorAll('[data-scene-source=builtin]').length`),36);

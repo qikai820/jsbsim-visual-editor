@@ -1,5 +1,6 @@
-import { BoxGeometry, CylinderGeometry, Euler, IcosahedronGeometry, Matrix4, Mesh, Object3D, PlaneGeometry, Vector3, type BufferGeometry } from 'three';
+import { CylinderGeometry, Euler, IcosahedronGeometry, Matrix4, Mesh, Object3D, PlaneGeometry, Vector3, type BufferGeometry } from 'three';
 import { sceneObjectVisible, validateSceneDocument, type SceneDocument } from './sceneDocument';
+import { createHangarGeometry } from './sceneHangar';
 import { F35_MODEL_KEY } from './sceneF35';
 /** Bake exactly the editable object transforms. Shadows are deliberately absent. */
 export function exportSceneCollision(document: SceneDocument, models: Map<string, Object3D>): string {
@@ -38,8 +39,9 @@ export function exportSceneCollision(document: SceneDocument, models: Map<string
     else if (object.builtin === 'apron') primitive(new PlaneGeometry(40, 44), [0, 0, 0], [1, 1, 1], [-Math.PI / 2, 0, 0]);
     else if (object.builtin === 'hangar') {
       primitive(new PlaneGeometry(30, 22), [0, .018, 18], [1, 1, 1], [-Math.PI / 2, 0, 0]);
-      primitive(new BoxGeometry(22, 8, 16), [0, 4, 0]); primitive(new BoxGeometry(13, 6, .1), [0, 3, 8.05]);
+      primitive(createHangarGeometry(), [0, 0, 0]);
     } else if (object.builtin === 'tree') {
+      // Keep the lightweight trunk and crown collision proxy for foliage.
       const i = object.seed!;
       primitive(new CylinderGeometry(.65, 1, 1, 5), [0, 1.5, 0], [.24, 3, .24], [0, i * 2.4, 0]);
       for (let lobe = 0; lobe < 3; lobe++) primitive(new IcosahedronGeometry(1, 0), [(lobe - 1) * .65, lobe === 1 ? 5.2 : 4.1, Math.sin(i + lobe) * .5], [1.9, lobe === 1 ? 2.4 : 1.8, 1.8], [0, i * 2.4, 0]);

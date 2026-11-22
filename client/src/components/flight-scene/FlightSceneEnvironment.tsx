@@ -1,24 +1,44 @@
-import { memo, useEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { memo, useEffect, useMemo } from 'react';
 import { Grid } from '@react-three/drei';
-import { BackSide, BufferGeometry, Color, Float32BufferAttribute, Mesh } from 'three';
+import { BackSide, BufferGeometry, Color, Float32BufferAttribute } from 'three';
 import type { SceneSurfaceTextures } from './sceneSurfaceTextures';
 
-// Cool grey haze follows the photographic panorama's horizon rather than the
-// brighter blue of the old procedural sky.
-export const SCENE_FOG = { color: '#929ba3', near: 180, far: 1450 };
+export const SCENE_FOG = { color: '#9eabb6', near: 180, far: 1450 };
+const hazeColor = new Color(SCENE_FOG.color).convertLinearToSRGB();
 
 export function SceneSky({ maps }: { maps: SceneSurfaceTextures }) {
-  const dome = useRef<Mesh>(null);
-  const uniforms = useMemo(() => ({ map: { value: maps.sky } }), [maps]);
-  useFrame(({ camera }) => { dome.current?.position.copy(camera.position); });
+  const uniforms = useMemo(() => ({ map: { value: maps.sky }, haze: { value: hazeColor } }), [maps]);
   // Render after opaque scenery, at far depth: hidden sky pixels fail the depth
   // test before sampling the panorama. Transparent rotors/trails still follow.
-  return <mesh ref={dome} scale={2200} rotation={[0, Math.PI, 0]} renderOrder={1}>
+  // Align the photographed sun with the airfield's directional light.
+  return <mesh rotation={[0, Math.PI - .065, 0]} frustumCulled={false} renderOrder={1}>
     <sphereGeometry args={[1, 24, 16]} />
     <shaderMaterial uniforms={uniforms} side={BackSide} depthWrite={false} toneMapped={false}
-      vertexShader={'varying vec2 skyUv;void main(){skyUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);gl_Position.z=gl_Position.w;}'}
-      fragmentShader={'uniform sampler2D map;varying vec2 skyUv;void main(){gl_FragColor=vec4(texture2D(map,skyUv).rgb,1.);}'} />
+      vertexShader={`varying vec3 skyDirection;
+        varying float longitudeHint;
+        void main() {
+          skyDirection = position;
+          longitudeHint = uv.x;
+          // A direction has no translation, so camera motion produces no sky parallax.
+          vec3 worldDirection = mat3(modelMatrix) * position;
+          gl_Position = projectionMatrix * vec4(mat3(viewMatrix) * worldDirection, 1.);
+          gl_Position.z = gl_Position.w;
+        }`}
+      fragmentShader={`uniform sampler2D map;
+        uniform vec3 haze;
+        varying vec3 skyDirection;
+        varying float longitudeHint;
+        void main() {
+          vec3 ray = normalize(skyDirection);
+          float u = atan(ray.z, -ray.x + 1e-7) * .15915494;
+          // Keep neighbouring samples on the same side of the wrap for mip selection.
+          u += floor(longitudeHint - u + .5);
+          float v = .5 + asin(clamp(ray.y, -1., 1.)) * .31830989;
+          vec3 sky = texture2D(map, vec2(u, v)).rgb;
+          float luminance = dot(sky, vec3(.2126, .7152, .0722));
+          sky += .20 * (sky - luminance) + .22 * sky * (1. - sky);
+          gl_FragColor = vec4(mix(haze, sky, smoothstep(-.012, .16, ray.y)), 1.);
+        }`} />
   </mesh>;
 }
 
@@ -45,21 +65,51 @@ function Hills() {
 
 function Grass({ maps }: { maps: SceneSurfaceTextures }) {
   const uniforms = useMemo(() => ({
-    map: { value: maps.grass }, repeat: { value: maps.grass.repeat },
-    haze: { value: new Color(SCENE_FOG.color).convertLinearToSRGB() },
+    map: { value: maps.grass }, turfMap: { value: maps.turf }, repeat: { value: maps.grass.repeat },
+    haze: { value: hazeColor },
     hazeNear: { value: SCENE_FOG.near }, hazeFar: { value: SCENE_FOG.far },
   }), [maps]);
-  // The horizontal field has fixed daylight. Its texture already contains the
-  // surface appearance, so one sample plus haze replaces per-pixel lighting and
-  // repeated RGB conversions. The aircraft retain their lit materials.
+  // Both sampling scales and the dry patches are anchored in field metres so
+  // mowing and ground cover remain stationary while the camera moves.
   return <mesh rotation={[-Math.PI / 2, 0, 0]}>
     <planeGeometry args={[4000, 4000]} />
     <shaderMaterial uniforms={uniforms} toneMapped={false} polygonOffset polygonOffsetFactor={1} polygonOffsetUnits={4}
-      vertexShader={`varying vec2 surfaceUv;varying float depth;uniform vec2 repeat;
-        void main(){surfaceUv=uv*repeat;vec4 view=modelViewMatrix*vec4(position,1.);depth=-view.z;gl_Position=projectionMatrix*view;}`}
-      fragmentShader={`uniform sampler2D map;uniform vec3 haze;uniform float hazeNear;uniform float hazeFar;
-        varying vec2 surfaceUv;varying float depth;
-        void main(){vec3 grass=texture2D(map,surfaceUv).rgb;gl_FragColor=vec4(mix(grass,haze,smoothstep(hazeNear,hazeFar,depth)),1.);}`} />
+      vertexShader={`varying vec2 field;
+        varying vec3 toCamera;
+        void main() {
+          field = position.xy;
+          toCamera = cameraPosition - (modelMatrix * vec4(position, 1.)).xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
+        }`}
+      fragmentShader={`uniform sampler2D map, turfMap; uniform vec2 repeat; uniform vec3 haze; uniform float hazeNear, hazeFar;
+        varying vec2 field; varying vec3 toCamera;
+        float hash(vec2 p) {
+          vec3 q = fract(vec3(p.xyx) * .1031);
+          q += dot(q, q.yzx + 33.33);
+          return fract((q.x + q.y) * q.z);
+        }
+        float growthNoise(vec2 p) {
+          vec2 i = floor(p), t = fract(p);
+          t = t * t * (3. - 2. * t);
+          return mix(mix(hash(i), hash(i + vec2(1,0)), t.x),
+                     mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), t.x), t.y);
+        }
+        void main() {
+          float distanceToCamera = length(toCamera);
+          vec2 rotatedField = mat2(.8, -.6, .6, .8) * field;
+          float broadGrowth = growthNoise(field * .022 + vec2(8.7, -4.1));
+          float localGrowth = growthNoise(rotatedField * .14);
+          float cover = mix(.24, .95, smoothstep(.22, .78, mix(broadGrowth, localGrowth, .42)));
+          vec3 dryGrass = texture2D(map, field * (repeat / 4000.)).rgb * vec3(1.10, 1.12, 1.10);
+          vec2 turfUv = rotatedField / 1.4 + vec2(.17, .39);
+          vec3 greenGrass = texture2D(turfMap, turfUv).rgb * vec3(1.06, 1.06, 1.14);
+          vec3 grass = mix(dryGrass, greenGrass, cover);
+          // Uneven growth breaks up the contrast of the mowing passes.
+          float mowing = .014 * sin(field.x * .74 + .18 * sin(field.y * .033));
+          grass *= .88 + .24 * broadGrowth + .13 * localGrowth
+            + mowing * cover * (1. - smoothstep(60., 220., distanceToCamera));
+          gl_FragColor = vec4(mix(grass, haze, smoothstep(hazeNear, hazeFar, distanceToCamera)), 1.);
+        }`} />
   </mesh>;
 }
 

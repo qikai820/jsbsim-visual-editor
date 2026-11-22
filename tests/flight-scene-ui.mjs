@@ -57,7 +57,12 @@ try {
   await send('Page.navigate', { url: `${base}/${name}.html` });
   await until(`document.querySelector('.scene-empty') && window.__events.get('scene-frames')?.size===1`);
   await until(`(${assetStates}).length===6 && (${assetStates}).every(asset=>asset.state==='ready')`);
+  assert.equal(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.capabilities.isWebGL2`), true, 'scenery shader checks must exercise GLSL ES 3.00 as used on desktop');
   assert.deepEqual(await evaluate(`(${assetStates}).map(asset=>asset.asset).sort()`), ['asphalt_02','concrete_floor_01','concrete_floor_01','concrete_floor_01','grass_ground','kloppenheim_03_puresky'], 'all photographic surfaces including the apron are loaded from the bundle');
+  await until(`(()=>{const scene=window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene;
+    const loaded=new Set();scene.traverse(o=>{for(const map of [o.material?.map,o.material?.uniforms?.turfMap?.value]){
+      if(map?.userData.airfield?.state==='ready')loaded.add(map.userData.airfield.asset)
+    }});return ['foliage','hangar','turf'].every(key=>loaded.has(key))})()`);
   assert.equal(await evaluate(`document.querySelector('[data-testid=flight-scene]').dataset.mode`), 'live');
   // Telemetry/FPS refreshes must leave native layer controls untouched. Even
   // assigning the same checked value invalidates their paint in desktop WebKit.
@@ -193,11 +198,13 @@ try {
   await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();s.camera.position.set(120,52,110);s.controls.target.set(10,-9,-95);s.controls.update()})()`);
   await new Promise(r => setTimeout(r, 400));
   const rendering = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();return {calls:s.gl.info.render.calls,triangles:s.gl.info.render.triangles,textures:s.gl.info.memory.textures,geometries:s.gl.info.memory.geometries,shadows:s.gl.shadowMap.enabled}})()`);
-  assert.ok(rendering.calls <= 240, `eight-aircraft draw budget: ${JSON.stringify(rendering)}`);
+  // Four instanced tree meshes plus one shadow batch replace the three old
+  // tree batches. The hangar shell also combines the former wall and door.
+  const treeTriangleDelta = 32 * (896 - 80);
+  assert.ok(rendering.calls <= 241, `eight-aircraft draw budget: ${JSON.stringify(rendering)}`);
   // F-35 contributes 190514 triangles; the detailed MorphQuad adds ~20k.
-  // Material batching retains the existing draw-call and texture caps.
-  assert.ok(rendering.triangles < 226000, `eight-aircraft plus detailed F-35/MorphQuad triangle budget: ${JSON.stringify(rendering)}`);
-  assert.ok(rendering.textures >= 33 && rendering.textures <= 34, 'seven environment maps, 25 F-35 maps, one neutral PBR light probe and at most one carbon map');
+  assert.ok(rendering.triangles < 226000 + treeTriangleDelta, `eight-aircraft plus detailed F-35/MorphQuad triangle budget: ${JSON.stringify(rendering)}`);
+  assert.ok(rendering.textures >= 36 && rendering.textures <= 37, 'ten environment maps, 25 F-35 maps, one neutral PBR light probe and at most one carbon map');
   assert.equal(rendering.shadows, false, 'scenery never enables a shadow-map render pass');
   const surfaceIds = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map?.value)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`);
   await screenshot('/tmp/jsbsim-flight-scene-scenery.png');
@@ -207,7 +214,7 @@ try {
   await evaluate(`document.querySelector('.scene-layer-list input').click()`);
   await new Promise(r => setTimeout(r, 300));
   assert.deepEqual(await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState(),ids=new Set();s.scene.traverse(o=>{if(o.material?.map)ids.add(o.material.map.uuid);if(o.material?.uniforms?.map?.value)ids.add(o.material.uniforms.map.value.uuid)});return [...ids].sort()})()`), surfaceIds, 'layer changes and inspector refresh reuse the same surface maps');
-  assert.ok(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures<=34`), 'layers reuse the bundled environment, F-35 maps and light probe');
+  assert.ok(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures<=37`), 'layers reuse the bundled environment, F-35 maps and light probe');
   await new Promise(r => setTimeout(r, 250));
   const gridOff = (await send('Page.captureScreenshot', { format: 'png', clip: viewportClip })).data;
   assert.ok(gridOn !== gridOff, 'grid switch changes the rendered viewport pixels');
@@ -218,7 +225,7 @@ try {
   const runningRendering = await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();return {calls:s.gl.info.render.calls,triangles:s.gl.info.render.triangles}})()`);
   // Photo shell/pods and lofted MSC blades add detail; keep the draw-call cap.
   // Nine F-35 materials, transparent canopy passes, its shadow and the apron.
-  assert.ok(runningRendering.calls <= 255 && runningRendering.triangles < 228000, `running eight-aircraft plus detailed F-35/MorphQuad budget: ${JSON.stringify(runningRendering)}`);
+  assert.ok(runningRendering.calls <= 256 && runningRendering.triangles < 228000 + treeTriangleDelta, `running eight-aircraft plus detailed F-35/MorphQuad budget: ${JSON.stringify(runningRendering)}`);
   await evaluate(`document.querySelector('.scene-camera-tabs button:nth-child(2)').click()`);
   assert.equal(await evaluate(`window.__calls.filter(c=>c.command==='sim_instance_control').length`), callsBefore, 'demo pause/resume never sends flight-control commands');
   await screenshot('/tmp/jsbsim-flight-scene-1600.png');
@@ -313,7 +320,7 @@ try {
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().scene.getObjectByName('scene-f35-airframe')`);
   await evaluate(`(()=>{const s=window.__sceneRoots.get(document.querySelector('canvas')).store.getState();s.camera.position.set(-17,12,16);s.controls.target.set(-35,1.8,-8);s.controls.update()})()`);
   await until(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures>=33`);
-  assert.ok(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures<=34`), 'missing ground photographs preserve the procedural field and loaded F-35 materials');
+  assert.ok(await evaluate(`window.__sceneRoots.get(document.querySelector('canvas')).store.getState().gl.info.memory.textures<=37`), 'missing ground photographs preserve the procedural field and loaded F-35 materials');
   await send('Network.setBlockedURLs', { urls: ['https://*.polyhaven.com/*', 'https://*.polyhaven.org/*'] });
   await send('Page.navigate', { url: `${base}/?workspace=scene` });
   await connectRoots();

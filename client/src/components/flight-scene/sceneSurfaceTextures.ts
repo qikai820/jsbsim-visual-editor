@@ -75,6 +75,26 @@ function noiseLayer(cells: number, rng: () => number) {
   };
 }
 
+function airfieldAtlases() {
+  const leaf = canvas(1024, 1024), hangar = canvas(1024, 1024);
+  const rng = random(587);
+  // A small twig silhouette remains usable while the bundled atlas decodes.
+  for (let i = 0; i < 4; i++) {
+    const x = i % 2 * 512, y = Math.floor(i / 2) * 496, ctx = leaf.ctx;
+    ctx.fillStyle = ['#536039', '#697840', '#4a5b34', '#586c42'][i];
+    for (let j = 0; j < 80; j++) {
+      const a = rng() * Math.PI * 2, radius = Math.sqrt(rng());
+      ctx.beginPath(); ctx.ellipse(x + 256 + Math.cos(a) * radius * 193, y + 233 + Math.sin(a) * radius * 177,
+        22 + 22 * rng(), 12 + 13 * rng(), a, 0, Math.PI * 2); ctx.fill();
+    }
+    hangar.ctx.fillStyle = ['#848b83', '#87918e', '#69757b', '#78827b'][i];
+    hangar.ctx.fillRect(x, Math.floor(i / 2) * 512, 512, 512);
+  }
+  leaf.ctx.fillStyle = 'white'; leaf.ctx.fillRect(0, 994, 1024, 30);
+  hangar.ctx.fillStyle = '#596161'; hangar.ctx.fillRect(30, 128, 370, 384);
+  return { foliage: texture(leaf.image), hangar: texture(hangar.image) };
+}
+
 export function createSceneSurfaceTextures() {
   const rng = random(4817);
   const grass = canvas(512, 512), pixels = grass.ctx.createImageData(512, 512);
@@ -115,17 +135,20 @@ export function createSceneSurfaceTextures() {
   shadow.ctx.fillStyle = gradient; shadow.ctx.fillRect(0, 0, 64, 64);
 
   const sky = canvas(1024, 512), skyGradient = sky.ctx.createLinearGradient(0, 0, 0, 256);
-  skyGradient.addColorStop(0, '#6194bf'); skyGradient.addColorStop(1, '#929ba3');
+  skyGradient.addColorStop(0, '#638fb8'); skyGradient.addColorStop(1, '#9eabb6');
   sky.ctx.fillStyle = skyGradient; sky.ctx.fillRect(0, 0, 1024, 512);
 
-  // About 12.7 MiB with mipmaps, including the 1K panorama and apron. The fallback grass
-  // uses a 64 m tile; the photograph switches to its measured 2.51 m width.
+  // The fallback grass uses a 64 m tile; the photograph switches to its measured 2.51 m width.
   const ground = texture(grass.image, 4000 / 64);
   // The baked ground shader samples and outputs display RGB directly.
-  ground.colorSpace = NoColorSpace;
-  const background = texture(sky.image); background.colorSpace = NoColorSpace;
+  ground.colorSpace = NoColorSpace; ground.anisotropy = 4;
+  const turfFallback = canvas(1024, 1024);
+  turfFallback.ctx.drawImage(grass.image, 0, 0, turfFallback.image.width, turfFallback.image.height);
+  const turf = texture(turfFallback.image);
+  turf.wrapS = turf.wrapT = RepeatWrapping; turf.colorSpace = NoColorSpace; turf.anisotropy = 8;
+  const background = texture(sky.image); background.wrapS = RepeatWrapping; background.colorSpace = NoColorSpace;
   const runway = texture(asphalt.image); runway.anisotropy = 2;
-  return { grass: ground, runway, concrete: texture(concrete.image), pad: texture(pad.image), apron: texture(apron.image), shadow: texture(shadow.image), sky: background };
+  return { ...airfieldAtlases(), grass: ground, turf, runway, concrete: texture(concrete.image), pad: texture(pad.image), apron: texture(apron.image), shadow: texture(shadow.image), sky: background };
 }
 
 export type SceneSurfaceTextures = ReturnType<typeof createSceneSurfaceTextures>;
@@ -142,20 +165,26 @@ export function loadSceneSurfaceTextures(maps: SceneSurfaceTextures) {
   let active = true;
   const images: HTMLImageElement[] = [];
   const context = (map: CanvasTexture) => (map.image as HTMLCanvasElement).getContext('2d')!;
-  function load(file: string, asset: string, targets: CanvasTexture[], paint: (image: HTMLImageElement) => void) {
+  function load(file: string, asset: string, targets: CanvasTexture[], paint: (image: HTMLImageElement) => void, folder = 'polyhaven') {
+    const source = folder === 'polyhaven' ? 'polyHaven' : folder;
     const image = new Image(); images.push(image);
-    for (const map of targets) map.userData.polyHaven = { asset, state: 'loading' };
+    for (const map of targets) map.userData[source] = { asset, state: 'loading' };
     image.onload = () => {
       if (!active) return;
       try {
         paint(image);
-        for (const map of targets) { map.needsUpdate = true; map.userData.polyHaven.state = 'ready'; }
+        for (const map of targets) { map.needsUpdate = true; map.userData[source].state = 'ready'; }
       } catch {
-        for (const map of targets) map.userData.polyHaven.state = 'fallback';
+        for (const map of targets) map.userData[source].state = 'fallback';
       }
     };
-    image.onerror = () => { if (active) for (const map of targets) map.userData.polyHaven.state = 'fallback'; };
-    image.src = `${import.meta.env.BASE_URL}scenery/polyhaven/${file}`;
+    image.onerror = () => { if (active) for (const map of targets) map.userData[source].state = 'fallback'; };
+    image.src = `${import.meta.env.BASE_URL}scenery/${folder}/${file}`;
+  }
+  for (const key of ['foliage', 'hangar', 'turf'] as const) {
+    load(`${key}.webp`, key, [maps[key]], image => {
+      const ctx = context(maps[key]); ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height); ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    }, 'airfield');
   }
   load('sky.jpg', 'kloppenheim_03_puresky', [maps.sky], image => context(maps.sky).drawImage(image, 0, 0, 1024, 512));
   load('grass.jpg', 'grass_ground', [maps.grass], image => {
