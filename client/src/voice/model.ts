@@ -19,6 +19,48 @@ export type VoiceContext = {
   px4Config: unknown;
   catalogErrors: string[]; capturedAtMs: number;
 };
+
+export function voiceInterpretationContext(context: VoiceContext) {
+  const { external, local, connected, running, paused, state, model, script } = context.simulation;
+  const { name, status, pendingDraft, sourceError } = context.test;
+  return {
+    binding: context.binding,
+    simulation: { external, local, connected, running, paused, state, model, script },
+    models: context.models, scripts: context.scripts, catalogErrors: context.catalogErrors,
+    test: { name, status, pendingDraft, hasSourceError: Boolean(sourceError) },
+    px4Configured: Boolean(context.px4Config),
+  };
+}
+
+const localReadCommands = {
+  status: /^(?:(?:查询|查看|查|看|看看)?(?:一下)?(?:(?:现在|当前|目前)的?)?(?:仿真|模拟)?(?:运行)?状态|(?:查询|查看|看看|看一下)?(?:当前|现在)?(?:仿真|模拟)(?:还在运行吗|运行了吗|有没有在运行|运行情况|状态如何|状态怎么样|是什么状态))$/,
+  list_models: /^(?:(?:当前|现在)?有哪些(?:可用的?)?(?:仿真)?模型|(?:列出|查看|查询|显示)(?:当前|所有)?(?:可用的?)?(?:仿真)?模型(?:列表|目录)?)$/,
+  list_scripts: /^(?:(?:当前|现在)?有哪些(?:可用的?)?(?:仿真)?脚本|(?:列出|查看|查询|显示)(?:当前|所有)?(?:可用的?)?(?:仿真)?脚本(?:列表|目录)?)$/,
+  show_scene: /^(?:打开|显示)(?:三维|3d)?(?:仿真)?视景$/,
+  show_logs: /^(?:打开|显示)(?:日志中心|仿真日志|日志)$/,
+  open_toolbox: /^(?:打开|显示)px4工具箱$/,
+};
+export type LocalVoiceReadAction = keyof typeof localReadCommands;
+
+const localControlCommands = {
+  pause: /^(?:暂停(?:当前)?仿真|(?:把|将)(?:当前)?仿真暂停)$/,
+  resume: /^(?:(?:继续|恢复)(?:当前)?仿真|(?:把|将)(?:当前)?仿真恢复)$/,
+  stop: /^(?:停止(?:当前)?仿真|(?:把|将)(?:当前)?仿真停掉)$/,
+  restart: /^(?:重新加载|重启)(?:当前)?仿真$/,
+};
+export type LocalVoiceAction = LocalVoiceReadAction | keyof typeof localControlCommands;
+const localCommands = { ...localReadCommands, ...localControlCommands };
+
+export function isLocalVoiceRead(action: LocalVoiceAction): action is LocalVoiceReadAction {
+  return Object.prototype.hasOwnProperty.call(localReadCommands, action);
+}
+
+export function matchLocalVoiceAction(text: string): LocalVoiceAction | undefined {
+  const command = text.normalize('NFKC').toLowerCase().replace(/\s/g, '').replace(/[。.!?！？]+$/, '')
+    .replace(/^(?:请你帮我|请帮我|请你|麻烦你|麻烦|帮我|给我|请)/, '').replace(/一下$/, '').replace(/访真/g, '仿真');
+  return (Object.keys(localCommands) as LocalVoiceAction[]).find(action => localCommands[action].test(command));
+}
+
 const simple = ['status','list_models','list_scripts','pause','resume','stop','restart','open_toolbox','show_scene','show_logs','stop_test','start_px4','stop_px4'];
 const identifier = (s: unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 128 && !s.startsWith('.') && !s.includes('..') && /^[\w.-]+$/.test(s);
 export function validateAction(value: unknown): asserts value is VoiceAction {

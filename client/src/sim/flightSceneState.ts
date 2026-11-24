@@ -4,6 +4,7 @@ import { rotorCount, rotorRpmKey } from './sceneRotors';
 import { ScenePlaybackClock } from './scenePlayback';
 import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
 import { SCENE_WIND_KEYS, type SceneWind } from './sceneWind';
+import { PLATFORM_SIGNAL_KEYS, readMovingPlatform, type PlatformReading } from './sceneMovingPlatform';
 
 export type ScenePacket = Record<string, unknown>;
 export type SceneOrigin = { latitude: number; longitude: number; altitude: number };
@@ -23,8 +24,9 @@ export type ScenePose = {
   thrustSampleAt: number | null; groundSampleAt: number | null;
   wind: SceneWind | null; windSampleAt: number | null;
   tiltSource: 'monitor' | 'tree' | null;
+  platformAvailable?: boolean; platformEnabled?: boolean; platformEnabledAt?: number | null; platform?: PlatformReading | null;
 };
-type SceneAircraft = { latest: ScenePose; samples: ScenePose[]; trail: ScenePose[]; history: ScenePose[];
+type SceneAircraft = { latest: ScenePose; samples: ScenePose[]; trail: ScenePose[]; history: ScenePose[]; groundOrigin?: SceneOrigin;
   retired: string[]; source: 'scene' | 'fallback'; telemetryTime?: number; playback: ScenePlaybackClock };
 export const SCENE_COLORS = ['#3b82f6', '#12b9b1', '#e7a43a', '#a77beb', '#ee718b', '#63a878', '#6f91c6', '#bf946d'];
 export const STALE_MS = 2000;
@@ -37,7 +39,7 @@ export const bodyToSceneBasis = () => basis.clone();
 export const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const number = (...values: unknown[]) => values.find(finite) as number | undefined;
 const canonical = (path: string) => path.replace(/\[0\]/g, '').replace(/^\/(?:\d+\/)?jsbsim\//, '/');
-const scenePropertyKeys = new Set([...sceneSignalKeys('voliro_t'), ...sceneSignalKeys('F450'), ...sceneSignalKeys('MorphQuad')].map(key => canonical('/' + key)));
+const scenePropertyKeys = new Set([...sceneSignalKeys('voliro_t'), ...sceneSignalKeys('F450'), ...sceneSignalKeys('MorphQuad'), ...PLATFORM_SIGNAL_KEYS].map(key => canonical('/' + key)));
 
 export interface ScenePropertyReading { value: number; age: number; source: 'monitor' | 'tree' }
 /** Keep measured values separate from freshness; a rotating tree is not a 2 s stream. */
@@ -61,6 +63,18 @@ export function sceneProperty(packet: ScenePacket, path: string): number | undef
   return reading && reading.age < STALE_MS ? reading.value : undefined;
 }
 export const propertyAgeMs = (sampleAt: number | null | undefined, now = performance.now()) => sampleAt == null ? null : Math.max(0, now - sampleAt);
+
+export function captureGroundOrigin(entry: SceneAircraft | undefined, now: number): SceneOrigin | undefined {
+  if (!entry || entry.groundOrigin) return entry?.groundOrigin;
+  const pose = entry.latest;
+  if ((pose.state !== 'running' && pose.state !== 'paused') || now - pose.receivedAt >= STALE_MS
+    || (propertyAgeMs(pose.groundSampleAt, now) ?? Infinity) >= STALE_MS) return undefined;
+  const altitude = pose.ground ?? (pose.agl === null ? null : pose.altitude - pose.agl);
+  if (altitude === null) return undefined;
+  // Fix the datum at the first measured ground in this run.
+  entry.groundOrigin = { latitude: pose.latitude, longitude: pose.longitude, altitude };
+  return entry.groundOrigin;
+}
 
 // Legacy POSIX compact packets expose geocentric latitude. Convert the direction
 // to WGS84 geodetic latitude using radial sea-level altitude (local-scene use).
@@ -126,6 +140,10 @@ export function decodeScenePose(packet: ScenePacket, now: number): ScenePose | n
   }) : [];
   return {
     id: String(idNumber).padStart(2, '0'), model,
+    platformAvailable: scenePropertyReading(packet, 'moving-platform/enabled') ? true : undefined,
+    platformEnabled: sceneProperty(packet, 'moving-platform/enabled') === undefined ? undefined : sceneProperty(packet, 'moving-platform/enabled')! >= .5,
+    platformEnabledAt: scenePropertyReading(packet, 'moving-platform/enabled') ? now - scenePropertyReading(packet, 'moving-platform/enabled')!.age : null,
+    platform: readMovingPlatform(key => scenePropertyReading(packet, key), now),
     generation: String(packet.tree_generation ?? ''), time: time!, capture: number(packet.capture_monotonic_us, packet.scene_sequence),
     poseSource: 'telemetry', epoch: number(packet.scene_epoch),
     receivedAt: now - Math.max(0, number(packet.age_ms) ?? 0), state: String(packet.state ?? 'running'),
@@ -168,7 +186,7 @@ export function sceneAttitude(pose: Pick<ScenePose, 'roll' | 'pitch' | 'yaw'>): 
 export class FlightSceneFeed {
   readonly aircraft = new Map<string, SceneAircraft>();
   private monitor = new Map<string, { generation: string; revision: unknown; sequence: number; poseSequence: number; restart: boolean;
-    values: Map<string, { value: number; seen: number; time: number; sequence: number }> }>();
+    platformAvailable?: boolean; values: Map<string, { value: number; seen: number; time: number; sequence: number }> }>();
   origin: SceneOrigin | null = null;
   /** Existing desktop binaries already provide the lossless monitor queue. */
   ingestMonitor(frame: ScenePacket, now = performance.now()): boolean {
@@ -184,6 +202,7 @@ export class FlightSceneFeed {
     const same = previous?.generation === generation && previous.revision === monitor.revision;
     if (same && previous.sequence >= monitor.sequence) return false;
     const cache = same ? previous : { generation, revision: monitor.revision, sequence: -1, poseSequence: -1,
+      platformAvailable: undefined as boolean | undefined,
       restart: !!entry && Number.isSafeInteger(monitor.revision) && now - entry.latest.receivedAt >= STALE_MS
         && frame.timestamp < entry.latest.time - 1,
       values: new Map<string, { value: number; seen: number; time: number; sequence: number }>() };
@@ -192,6 +211,14 @@ export class FlightSceneFeed {
       const key = canonical(path.startsWith('/') ? path : '/' + path);
       const owner = path.match(/^\/(\d+)\//)?.[1];
       if (owner && Number(owner) !== Number(id) || !scenePropertyKeys.has(key)) continue;
+      // An explicit missing-property reply completes the one-channel discovery
+      // probe. It is separate from disabled and never fabricates a zero value.
+      if (key === '/moving-platform/enabled' && Array.isArray(tuple) && tuple.length >= 3
+        && (number(frame.age_ms) ?? 0) < STALE_MS) {
+        if (finite(tuple[0]) && finite(tuple[1]) && tuple[1] <= frame.timestamp + .001
+          && (frame.timestamp - tuple[1]) * 1000 < STALE_MS) cache.platformAvailable = true;
+        else if (tuple[0] === null && tuple[1] === null) cache.platformAvailable = false;
+      }
       if (!Array.isArray(tuple) || tuple.length < 3 || !finite(tuple[0]) || !finite(tuple[1]) || tuple[1] > frame.timestamp + .001) {
         if ((SCENE_POSE_KEYS as readonly string[]).some(path => '/' + path === key)) cache.values.delete(key);
         continue;
@@ -235,7 +262,9 @@ export class FlightSceneFeed {
   }
   private withMonitor(pose: ScenePose, now: number): ScenePose {
     const cache = this.monitor.get(pose.id);
-    if (!cache || cache.generation !== `${pose.model}:${pose.generation}` || !cache.values.size) return pose;
+    if (!cache || cache.generation !== `${pose.model}:${pose.generation}`) return pose;
+    pose = { ...pose, platformAvailable: cache.platformAvailable ?? pose.platformAvailable };
+    if (!cache.values.size) return pose;
     const properties = Object.fromEntries([...cache.values].map(([key, sample]) => [key, sample.value]));
     const fast = decodeScenePose({ instance_id: pose.id, model: pose.model, tree_generation: pose.generation,
       timestamp: pose.time, latitude_deg: pose.latitude, longitude_deg: pose.longitude, altitude_m: pose.altitude,
@@ -248,7 +277,11 @@ export class FlightSceneFeed {
     const ground = prefer(fast.groundSampleAt, pose.groundSampleAt);
     const scene = prefer(fast.sceneStatusSampleAt ?? null, pose.sceneStatusSampleAt ?? null);
     const wind = fast.windSampleAt !== null && (pose.windSampleAt === null || fast.windSampleAt >= pose.windSampleAt);
-    return { ...pose, ...(scene ? { sceneStatusSampleAt: fast.sceneStatusSampleAt, sceneLoaded: fast.sceneLoaded, sceneRevision: fast.sceneRevision, sceneContacts: fast.sceneContacts } : {}), ...(tilt ? { tilt: fast.tilt, tiltSampleAt: fast.tiltSampleAt, tiltSource: fast.tiltSource } : {}),
+    const platformEnabledFromMonitor = fast.platformEnabled !== undefined && (fast.platformEnabledAt ?? -Infinity) >= (pose.platformEnabledAt ?? -Infinity);
+    const platformEnabled = platformEnabledFromMonitor ? fast.platformEnabled : pose.platformEnabled;
+    return { ...pose, platformEnabled, platformEnabledAt: platformEnabledFromMonitor ? fast.platformEnabledAt : pose.platformEnabledAt,
+      platform: platformEnabled === false ? null : fast.platform && (!pose.platform || fast.platform.sampleAt >= pose.platform.sampleAt) ? fast.platform : pose.platform,
+      ...(scene ? { sceneStatusSampleAt: fast.sceneStatusSampleAt, sceneLoaded: fast.sceneLoaded, sceneRevision: fast.sceneRevision, sceneContacts: fast.sceneContacts } : {}), ...(tilt ? { tilt: fast.tilt, tiltSampleAt: fast.tiltSampleAt, tiltSource: fast.tiltSource } : {}),
       ...(thrust ? { thrust: fast.thrust, thrustSampleAt: fast.thrustSampleAt } : {}),
       ...(ground ? { ground: fast.ground ?? pose.ground, agl: fast.agl ?? pose.agl, groundSampleAt: fast.groundSampleAt } : {}),
       ...(wind ? { wind: fast.wind, windSampleAt: fast.windSampleAt } : {}),
@@ -293,6 +326,11 @@ export class FlightSceneFeed {
     if (previous && !changed && !rewound && pose.wind === null) {
       pose = { ...pose, wind: previous.wind, windSampleAt: previous.windSampleAt };
     }
+    if (previous && !changed && !rewound) pose = { ...pose,
+      platformAvailable: pose.platformAvailable ?? previous.platformAvailable,
+      platformEnabled: pose.platformEnabled ?? previous.platformEnabled,
+      platformEnabledAt: pose.platformEnabledAt ?? previous.platformEnabledAt,
+      platform: pose.platformEnabled === false ? null : pose.platform ?? previous.platform };
     pose = this.withMonitor(pose, now);
     if (previous && !changed && !rewound) {
       if (pose.capture !== undefined && previous.capture !== undefined && pose.capture < previous.capture) return false;
@@ -308,6 +346,7 @@ export class FlightSceneFeed {
             groundSampleAt: pose.groundSampleAt, tiltSource: pose.tiltSource,
             rpm: pose.rpm, rpmSampleAt: pose.rpmSampleAt, rpmSense: pose.rpmSense,
             gimbals: pose.gimbals,
+            platformAvailable: pose.platformAvailable, platformEnabled: pose.platformEnabled, platformEnabledAt: pose.platformEnabledAt, platform: pose.platform,
             wind: pose.wind, windSampleAt: pose.windSampleAt,
             rpmModelVersion: pose.rpmModelVersion, rpmTailCalibrated: pose.rpmTailCalibrated }, now);
         }

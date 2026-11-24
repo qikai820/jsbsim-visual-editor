@@ -230,6 +230,7 @@ pub fn select(options: Options, source: u8) -> Result<SourceStatus, String> {
     }
     let _busy = BusyGuard;
     let _gate = gate()?;
+    if crate::px4_firmware::busy() { return Err("PX4 固件升级进行中，不能切换主输入".into()); }
     if running() {
         return Err("仿真测试运行中不能切换主输入".into());
     }

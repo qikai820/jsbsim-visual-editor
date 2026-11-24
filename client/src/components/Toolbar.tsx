@@ -1,3 +1,4 @@
+import { modelStorage } from '../utils/modelStorage';
 import { windProfileError } from '../sim/windProfile';
 import { useEffect, useRef, useState } from 'react';
 import { cachedEditBaseline, changedModelPaths, compactModelBaseline, mainXmlPath, readRemoteBaseline, remoteBaselineKey, restoreModelBaseline, type ModelProject } from '../utils/modelChanges';
@@ -95,7 +96,7 @@ function modelSyncFingerprint(project: ModelProject): string {
 }
 
 function setRemoteBaseline(model: string, value: string) {
-  localStorage.setItem(remoteBaselineKey(model), JSON.stringify(compactModelBaseline(JSON.parse(value))));
+  modelStorage.setItem(remoteBaselineKey(model), JSON.stringify(compactModelBaseline(JSON.parse(value))));
   window.dispatchEvent(new Event('jsbsim-remote-baseline-changed'));
 }
 
@@ -296,7 +297,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   // handleOpenRemoteModel records the exact FTP directory selected by the
   // user/script. This remains authoritative even when parsing replaces the
   // project aircraft name with the human-readable fdm_config name.
-  const remoteModelDirectory = localStorage.getItem('jsbsim-remote-model') || '';
+  const remoteModelDirectory = modelStorage.getItem('jsbsim-remote-model') || '';
   const [showXml, setShowXml] = useState(false);
   const [showXmlSourceBrowser, setShowXmlSourceBrowser] = useState(false);
   const [pendingImport, setPendingImport] = useState<PendingModelImport | null>(null);
@@ -342,7 +343,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     saveToolbarAppearance(appearance);
   };
   const [librarySimulationModel, setLibrarySimulationModel] = useState('');
-  const [recentProjects, setRecentProjects] = useState<Array<{ filename: string; path: string; openedAt: string }>>(() => JSON.parse(localStorage.getItem('jsbsim-recent-projects') || '[]'));
+  const [recentProjects, setRecentProjects] = useState<Array<{ filename: string; path: string; openedAt: string }>>(() => JSON.parse(modelStorage.getItem('jsbsim-recent-projects') || '[]'));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directoryInputRef = useRef<HTMLInputElement>(null);
   const fileMenuRef = useRef<HTMLDivElement>(null);
@@ -377,7 +378,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     let canceled = false;
     const timer = setTimeout(() => {
       void prepareModelXml(currentProject, editBaseline, syncModel, { generateXml, generateSubfile,
-        originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' }).then(documents => {
+        originalMainSource: modelStorage.getItem('jsbsim-raw-xml') || '' }).then(documents => {
         if (canceled) return;
         const paths = [...documents.filter(file => file.dirty).map(file => file.path), ...environmentPending];
         if (needsInitialUpload) paths.push(mainXmlPath(currentProject, syncModel));
@@ -397,7 +398,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     if (pendingPreparation.revision === pendingRevision && !pendingPreparation.error) return pendingPreparation.paths;
     if (!editBaseline) return pendingPaths;
     const documents = await prepareModelXml(currentProject, editBaseline, syncModel, { generateXml, generateSubfile,
-      originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' });
+      originalMainSource: modelStorage.getItem('jsbsim-raw-xml') || '' });
     if (modelSyncFingerprint(useFlowStore.getState()) !== modelSyncFingerprint(currentProject)) {
       throw new Error('核对期间模型已变化，请重新操作。');
     }
@@ -443,13 +444,13 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   useEffect(() => {
     // Remove summaries persisted by older versions. They describe a previous
     // import and must never appear as a result of launching the editor.
-    localStorage.removeItem('jsbsim-imported-subfiles');
+    modelStorage.removeItem('jsbsim-imported-subfiles');
   }, []);
 
   const rememberProject = (filename: string, path: string) => {
     setRecentProjects(current => {
       const next = [{ filename, path, openedAt: new Date().toISOString() }, ...current.filter(item => item.filename !== filename)].slice(0, 6);
-      localStorage.setItem('jsbsim-recent-projects', JSON.stringify(next));
+      modelStorage.setItem('jsbsim-recent-projects', JSON.stringify(next));
       return next;
     });
   };
@@ -527,16 +528,16 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       // Store the edited source as the canonical import snapshot. This keeps
       // the model identity used by the UI, the upload directory and fdm_config
       // aligned instead of recreating the former dflyer/quadrotor_x mismatch.
-      localStorage.setItem('jsbsim-project', JSON.stringify(data));
-      localStorage.setItem('jsbsim-raw-xml', mainXml);
-      localStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
-      localStorage.setItem('jsbsim-import-assets', JSON.stringify(pending.assets));
-      if (pending.sourceDirectory?.startsWith('/')) localStorage.setItem('jsbsim-import-directory', pending.sourceDirectory);
-      else localStorage.removeItem('jsbsim-import-directory');
+      modelStorage.setItem('jsbsim-project', JSON.stringify(data));
+      modelStorage.setItem('jsbsim-raw-xml', mainXml);
+      modelStorage.setItem('jsbsim-reference-files', JSON.stringify(refFiles));
+      modelStorage.setItem('jsbsim-import-assets', JSON.stringify(pending.assets));
+      if (pending.sourceDirectory?.startsWith('/')) modelStorage.setItem('jsbsim-import-directory', pending.sourceDirectory);
+      else modelStorage.removeItem('jsbsim-import-directory');
       // The directory chosen in the import dialog is the remote pathname.
       // The XML's fdm_config name can intentionally remain different.
-      localStorage.setItem('jsbsim-remote-model', modelName);
-      localStorage.removeItem(remoteBaselineKey(modelName));
+      modelStorage.setItem('jsbsim-remote-model', modelName);
+      modelStorage.removeItem(remoteBaselineKey(modelName));
       if (refFiles.length > 0) {
         console.log(`[Import] Associated ${refFiles.length} XML file(s): ${refFiles.map(file => file.name).join(', ')}`);
       }
@@ -621,7 +622,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   };
 
   const handleSave = async () => {
-    const model = localStorage.getItem('jsbsim-remote-model') || aircraft.name || 'aircraft';
+    const model = modelStorage.getItem('jsbsim-remote-model') || aircraft.name || 'aircraft';
     const safeModel = model.replace(/[^a-zA-Z0-9_.-]/g, '_');
     const filename = `${safeModel}.project.json`;
     let targetPath = filename;
@@ -636,21 +637,21 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         format: 'jsbsim-model-project', version: 3, model, savedAt: new Date().toISOString(),
         project: { aircraft, nodes, edges, subFiles, xmlFiles, xmlEditBaseline: editBaseline ? compactModelBaseline(editBaseline) : undefined, monitoring: useSignalMonitorStore.getState().project },
         files: {
-          main: { name: `${model}.xml`, xml: localStorage.getItem('jsbsim-raw-xml') || '' },
-          references: JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]'),
-          assets: JSON.parse(localStorage.getItem('jsbsim-import-assets') || '[]'),
-          assetSource: localStorage.getItem('jsbsim-import-directory') || '',
+          main: { name: `${model}.xml`, xml: modelStorage.getItem('jsbsim-raw-xml') || '' },
+          references: JSON.parse(modelStorage.getItem('jsbsim-reference-files') || '[]'),
+          assets: JSON.parse(modelStorage.getItem('jsbsim-import-assets') || '[]'),
+          assetSource: modelStorage.getItem('jsbsim-import-directory') || '',
           subFiles,
           xmlFiles,
         },
         layout: { nodes: nodes.map(node => ({ id: node.id, position: node.position })) },
         userSettings: {
-          pinnedProperties: JSON.parse(localStorage.getItem('jsbsim-pinned-properties') || '[]'),
-          unitSystem: localStorage.getItem('jsbsim-unit-system') || 'imperial',
-          paletteCollapsed: localStorage.getItem('jsbsim-palette-collapsed') === 'true',
-          paletteWidth: Number(localStorage.getItem('jsbsim-palette-width') || 250),
-          hudPosition: JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'),
-          logPosition: JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'),
+          pinnedProperties: JSON.parse(modelStorage.getItem('jsbsim-pinned-properties') || '[]'),
+          unitSystem: modelStorage.getItem('jsbsim-unit-system') || 'imperial',
+          paletteCollapsed: modelStorage.getItem('jsbsim-palette-collapsed') === 'true',
+          paletteWidth: Number(modelStorage.getItem('jsbsim-palette-width') || 250),
+          hudPosition: JSON.parse(modelStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'),
+          logPosition: JSON.parse(modelStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'),
         },
       };
       const saved = await saveProject(filename, project);
@@ -669,19 +670,19 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     const main = snapshot.xmlFiles?.find(file => file.category === 'main');
     const directory = main?.path.match(/^aircraft\/([^/]+)\//)?.[1];
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(model) || directory && directory !== model ||
-        !main && snapshot.aircraft.name !== model && localStorage.getItem('jsbsim-remote-model') !== model) {
+        !main && snapshot.aircraft.name !== model && modelStorage.getItem('jsbsim-remote-model') !== model) {
       throw new Error(`当前模型与目标目录 ${model} 不匹配，请先加载对应模型。`);
     }
     const saved = readRemoteBaseline(model);
     const baseline = saved || state.xmlEditBaseline || snapshot;
     const documents = await prepareModelXml(snapshot, baseline, model, { generateXml, generateSubfile,
-      originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' });
+      originalMainSource: modelStorage.getItem('jsbsim-raw-xml') || '' });
     const candidates = new Map(documents.filter(file => force || !saved && ['main', 'hardware'].includes(file.category || '') || file.dirty)
       .map(file => [file.path, file]));
     let assets: Array<{ name: string; size: number }> = [];
     let assetSource = '';
     if (!saved) {
-      const references: ImportFile[] = JSON.parse(localStorage.getItem('jsbsim-reference-files') || '[]');
+      const references: ImportFile[] = JSON.parse(modelStorage.getItem('jsbsim-reference-files') || '[]');
       if (!Array.isArray(references)) throw new Error('关联文件清单格式无效');
       for (const reference of references) {
         const name = String(reference.name || '').replace(/\\/g, '/');
@@ -692,8 +693,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         const prepared = documents.find(file => file.path === path) || documents.find(file => file.path === name);
         candidates.set(path, { path, content: prepared?.content || reference.xml, dirty: true, category: prepared?.category });
       }
-      assets = JSON.parse(localStorage.getItem('jsbsim-import-assets') || '[]');
-      assetSource = localStorage.getItem('jsbsim-import-directory') || '';
+      assets = JSON.parse(modelStorage.getItem('jsbsim-import-assets') || '[]');
+      assetSource = modelStorage.getItem('jsbsim-import-directory') || '';
       if (!Array.isArray(assets) || assets.some(file => !file.name ||
           !file.name.split('/').every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(part) && part !== '..') ||
           !Number.isSafeInteger(file.size) || file.size < 0) || assets.length && !assetSource.startsWith('/')) {
@@ -791,8 +792,8 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       for (const file of cleanFiles) if (!liveFiles.some(item => item.path === file.path)) liveFiles.push(file);
       useFlowStore.setState({ xmlEditBaseline: baseline, xmlFiles: liveFiles });
       const main = cleanFiles.find(file => file.category === 'main');
-      if (main) localStorage.setItem('jsbsim-raw-xml', main.currentXml);
-      localStorage.setItem('jsbsim-remote-model', model);
+      if (main) modelStorage.setItem('jsbsim-raw-xml', main.currentXml);
+      modelStorage.setItem('jsbsim-remote-model', model);
       onAssignInstanceModel?.(activeInstance, model);
       setRemoteBaseline(model, projectFingerprint(baseline));
       onLog?.(`[${new Date().toLocaleTimeString()}] ${uploaded ? `已写入并回读确认 ${verified.size} 个 XML` : '本机 XML 与仿真机一致'}：${model}`);
@@ -830,7 +831,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       // replacement. Never load the incoming graph merely to preview it.
       const local = snapshot.nodes.length || snapshot.xmlFiles?.length
         ? await prepareModelXml(snapshot, readRemoteBaseline(syncModel) || state.xmlEditBaseline || snapshot, syncModel,
-          { generateXml, generateSubfile, originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' }) : [];
+          { generateXml, generateSubfile, originalMainSource: modelStorage.getItem('jsbsim-raw-xml') || '' }) : [];
       const hardware = new Map<string, string>();
       const onSource = (path: string, content: string) => { hardware.set(path, content); };
       const data = await withEnvironment(await withPwmCaptures(await withSerialSensors(await loadAircraft(model), model, onSource), model, onSource), model);
@@ -865,23 +866,23 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const previous = useFlowStore.getState(), monitoring = useSignalMonitorStore.getState().project;
       const keys = ['jsbsim-project', 'jsbsim-raw-xml', 'jsbsim-reference-files', 'jsbsim-remote-model',
         'jsbsim-import-assets', 'jsbsim-import-directory', 'jsbsim-cache-version', remoteBaselineKey(model)];
-      const cache = keys.map(key => [key, localStorage.getItem(key)] as const);
+      const cache = keys.map(key => [key, modelStorage.getItem(key)] as const);
       try {
         loadProject(data);
         const saved = projectFingerprint(useFlowStore.getState());
-        localStorage.setItem('jsbsim-project', saved);
-        localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
-        localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
-        localStorage.setItem('jsbsim-remote-model', model);
-        localStorage.setItem('jsbsim-cache-version', '2');
-        localStorage.removeItem('jsbsim-import-assets');
-        localStorage.removeItem('jsbsim-import-directory');
+        modelStorage.setItem('jsbsim-project', saved);
+        modelStorage.setItem('jsbsim-raw-xml', data.sourceXml);
+        modelStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
+        modelStorage.setItem('jsbsim-remote-model', model);
+        modelStorage.setItem('jsbsim-cache-version', '2');
+        modelStorage.removeItem('jsbsim-import-assets');
+        modelStorage.removeItem('jsbsim-import-directory');
         setRemoteBaseline(model, saved);
       } catch (error) {
         useFlowStore.setState(previous);
         useSignalMonitorStore.getState().load(monitoring);
         for (const [key, value] of cache) {
-          try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch { /* best effort after a storage failure */ }
+          try { if (value === null) modelStorage.removeItem(key); else modelStorage.setItem(key, value); } catch { /* best effort after a storage failure */ }
         }
         throw error;
       }
@@ -906,10 +907,10 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const restored = restoreModelBaseline(state, editBaseline);
       // Persist before replacing the canvas so a storage failure leaves the
       // editable model intact. Keep monitor settings with the cached project.
-      localStorage.setItem('jsbsim-project', JSON.stringify({ ...restored,
+      modelStorage.setItem('jsbsim-project', JSON.stringify({ ...restored,
         xmlEditBaseline: cachedEditBaseline(restored, editBaseline), monitoring: useSignalMonitorStore.getState().project }));
       const main = restored.xmlFiles?.find(file => file.category === 'main');
-      if (main) localStorage.setItem('jsbsim-raw-xml', main.originalXml);
+      if (main) modelStorage.setItem('jsbsim-raw-xml', main.originalXml);
       state.restoreModelContent(restored);
       setSyncError('');
       onLog?.(`[${new Date().toLocaleTimeString()}] 已取消本地模型更改：${syncModel}`);
@@ -926,7 +927,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       const state = useFlowStore.getState();
       const baseline = readRemoteBaseline(syncModel) || state.xmlEditBaseline || state;
       setXmlSourceDocuments(await prepareModelXml(state, baseline, syncModel, { generateXml, generateSubfile,
-        originalMainSource: localStorage.getItem('jsbsim-raw-xml') || '' }));
+        originalMainSource: modelStorage.getItem('jsbsim-raw-xml') || '' }));
       setShowXmlSourceBrowser(true);
       setSyncError('');
     } catch (error: any) { setSyncError(error.message || String(error)); }
@@ -950,19 +951,19 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     // separately or the next save would still target the closed model.
     setAircraft({ name: 'New Aircraft', version: '2.0', release: 'PRODUCTION' });
     clearImportedSubFiles();
-    localStorage.removeItem('jsbsim-project');
-    localStorage.removeItem('jsbsim-raw-xml');
-    localStorage.removeItem('jsbsim-reference-files');
-    localStorage.removeItem('jsbsim-import-assets');
-    localStorage.removeItem('jsbsim-import-directory');
+    modelStorage.removeItem('jsbsim-project');
+    modelStorage.removeItem('jsbsim-raw-xml');
+    modelStorage.removeItem('jsbsim-reference-files');
+    modelStorage.removeItem('jsbsim-import-assets');
+    modelStorage.removeItem('jsbsim-import-directory');
     Object.keys(localStorage)
       .filter(key => key.startsWith('jsbsim-remote-baseline:'))
-      .forEach(key => localStorage.removeItem(key));
+      .forEach(key => modelStorage.removeItem(key));
     onLog?.(`[${new Date().toLocaleTimeString()}] 已关闭模型: ${closedName || '未命名'}`);
   };
 
   const handleLoad = async (requestedFilename?: string) => {
-    const model = localStorage.getItem('jsbsim-remote-model') || aircraft.name || 'aircraft';
+    const model = modelStorage.getItem('jsbsim-remote-model') || aircraft.name || 'aircraft';
     const filename = requestedFilename || `${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}.project.json`;
       try {
         const data = await loadProjectApi(filename);
@@ -972,19 +973,19 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         const content = data.project || data;
       loadProject({ ...content, preserveLayout: true });
       clearImportedSubFiles();
-      if (data.files?.main?.xml) localStorage.setItem('jsbsim-raw-xml', data.files.main.xml);
-      if (data.files?.references) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.files.references));
-      localStorage.setItem('jsbsim-import-assets', JSON.stringify(data.files?.assets || []));
-      if (data.files?.assetSource) localStorage.setItem('jsbsim-import-directory', data.files.assetSource);
-      else localStorage.removeItem('jsbsim-import-directory');
-      if (data.model) localStorage.setItem('jsbsim-remote-model', data.model);
+      if (data.files?.main?.xml) modelStorage.setItem('jsbsim-raw-xml', data.files.main.xml);
+      if (data.files?.references) modelStorage.setItem('jsbsim-reference-files', JSON.stringify(data.files.references));
+      modelStorage.setItem('jsbsim-import-assets', JSON.stringify(data.files?.assets || []));
+      if (data.files?.assetSource) modelStorage.setItem('jsbsim-import-directory', data.files.assetSource);
+      else modelStorage.removeItem('jsbsim-import-directory');
+      if (data.model) modelStorage.setItem('jsbsim-remote-model', data.model);
       if (data.userSettings) {
-        localStorage.setItem('jsbsim-pinned-properties', JSON.stringify(data.userSettings.pinnedProperties || []));
-        localStorage.setItem('jsbsim-unit-system', data.userSettings.unitSystem || 'imperial');
-        localStorage.setItem('jsbsim-palette-collapsed', String(!!data.userSettings.paletteCollapsed));
-        localStorage.setItem('jsbsim-palette-width', String(data.userSettings.paletteWidth || 250));
-        localStorage.setItem('jsbsim-hud-position', JSON.stringify(data.userSettings.hudPosition || { x: 0, y: 0 }));
-        localStorage.setItem('jsbsim-log-position', JSON.stringify(data.userSettings.logPosition || { x: 0, y: 0 }));
+        modelStorage.setItem('jsbsim-pinned-properties', JSON.stringify(data.userSettings.pinnedProperties || []));
+        modelStorage.setItem('jsbsim-unit-system', data.userSettings.unitSystem || 'imperial');
+        modelStorage.setItem('jsbsim-palette-collapsed', String(!!data.userSettings.paletteCollapsed));
+        modelStorage.setItem('jsbsim-palette-width', String(data.userSettings.paletteWidth || 250));
+        modelStorage.setItem('jsbsim-hud-position', JSON.stringify(data.userSettings.hudPosition || { x: 0, y: 0 }));
+        modelStorage.setItem('jsbsim-log-position', JSON.stringify(data.userSettings.logPosition || { x: 0, y: 0 }));
         window.dispatchEvent(new CustomEvent('jsbsim-project-settings-loaded', { detail: data.userSettings }));
       }
       const openedPath = data._projectPath || filename;
@@ -994,7 +995,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
       if (requestedFilename) {
         setRecentProjects(current => {
           const next = current.filter(item => item.filename !== requestedFilename);
-          localStorage.setItem('jsbsim-recent-projects', JSON.stringify(next));
+          modelStorage.setItem('jsbsim-recent-projects', JSON.stringify(next));
           return next;
         });
       }
@@ -1013,7 +1014,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     clearAll();
     // Commit the selected directory before loadProject updates the parsed
     // display name, preventing a render from briefly reusing the prior model.
-    localStorage.setItem('jsbsim-remote-model', model);
+    modelStorage.setItem('jsbsim-remote-model', model);
     // The file name and JSBSim's internal <fileheader> name are allowed to
     // differ (for example c172r.xml may contain the internal name c172).
     // The requested remote path is therefore the model identity; do not
@@ -1028,9 +1029,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
     // previous aircraft into the newly selected aircraft directory.
     const snapshot = projectFingerprint(useFlowStore.getState());
     setRemoteBaseline(model, snapshot);
-    localStorage.setItem('jsbsim-project', snapshot);
-    localStorage.setItem('jsbsim-raw-xml', data.sourceXml || '');
-    localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
+    modelStorage.setItem('jsbsim-project', snapshot);
+    modelStorage.setItem('jsbsim-raw-xml', data.sourceXml || '');
+    modelStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles || []));
     onAssignInstanceModel?.(bindInstance, model);
     onLog?.(`[${new Date().toLocaleTimeString()}] 已从 NuttX 加载模型: ${model}`);
   };
@@ -1038,7 +1039,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   const handleSelectInstance = async (id: string, binding?: string) => {
     if (loading || !onSelectInstance || !/^0[1-8]$/.test(id)) return;
     const model = binding ?? instanceSlots[id] ?? '';
-    const currentModel = localStorage.getItem('jsbsim-remote-model') || loadedModelDirectory;
+    const currentModel = modelStorage.getItem('jsbsim-remote-model') || loadedModelDirectory;
     const replacesCanvas = !model || model !== currentModel || !hasLoadedModel;
     if (replacesCanvas) {
       let changes: string[];
@@ -1052,12 +1053,12 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         } else {
           clearAll();
           setAircraft({ name: 'New Aircraft', version: '2.0', release: 'PRODUCTION' });
-          localStorage.removeItem('jsbsim-remote-model');
-          localStorage.removeItem('jsbsim-project');
-          localStorage.removeItem('jsbsim-raw-xml');
-          localStorage.removeItem('jsbsim-reference-files');
-          localStorage.removeItem('jsbsim-import-assets');
-          localStorage.removeItem('jsbsim-import-directory');
+          modelStorage.removeItem('jsbsim-remote-model');
+          modelStorage.removeItem('jsbsim-project');
+          modelStorage.removeItem('jsbsim-raw-xml');
+          modelStorage.removeItem('jsbsim-reference-files');
+          modelStorage.removeItem('jsbsim-import-assets');
+          modelStorage.removeItem('jsbsim-import-directory');
           setLibrarySimulationModel('');
         }
         onModelContextChange?.();
@@ -1106,8 +1107,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
   return (
     <>
       <div className={`toolbar ${workspace === 'scene' ? 'toolbar-scene' : ''}`} style={{ backgroundColor: toolbarBackground(toolbarAppearance) }} data-tauri-drag-region onPointerDown={event => { void startWindowDrag(event); }}>
-        <div className="toolbar-left" data-tauri-drag-region>
-        </div>
+        <div className="toolbar-content" data-tauri-drag-region>
         <div className="toolbar-center" data-tauri-drag-region>
           <div className="file-menu-anchor" ref={workspaceMenuRef}>
             <button type="button" className={`file-menu-trigger workspace-menu-trigger ${showWorkspaceMenu ? 'active' : ''}`}
@@ -1174,9 +1174,9 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               <div className="file-menu-dropdown" role="menu">
                 <button role="menuitem" onClick={() => {
                   clearAll();
-                  localStorage.removeItem('jsbsim-project');
-                  localStorage.removeItem('jsbsim-raw-xml');
-                  Object.keys(localStorage).filter(k => k.startsWith('jsbsim-remote-baseline:')).forEach(k => localStorage.removeItem(k));
+                  modelStorage.removeItem('jsbsim-project');
+                  modelStorage.removeItem('jsbsim-raw-xml');
+                  Object.keys(localStorage).filter(k => k.startsWith('jsbsim-remote-baseline:')).forEach(k => modelStorage.removeItem(k));
                   setShowFileMenu(false);
                 }}>📄 {isZh ? '新建' : 'New'}</button>
                 <button role="menuitem" onClick={() => { setShowWizard(true); setShowFileMenu(false); }}>🪄 {isZh ? '创建向导' : 'New Wizard'}</button>
@@ -1236,7 +1236,7 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
               <button role="menuitem" onClick={() => { setShowVoiceAssistant(true); setShowToolsMenu(false); }}>🎙 {isZh ? '大模型语音操作' : 'AI Voice Control'}</button>
               <button role="menuitem" disabled={plotJugglerOpening} onClick={() => void openPlotJuggler()}>📈 PlotJuggler · {isZh ? '实时曲线' : 'Live'}</button>
               <button role="menuitem" className="telemetry-record-menuitem" onClick={() => { setShowTelemetryRecorder(true); setShowToolsMenu(false); }}>● {isZh ? '遥测记录' : 'Telemetry Recording'}{telemetryRecording ? (isZh ? ' · 记录中' : ' · Recording') : ''}</button>
-              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试 / 软件飞控' : 'PX4 Toolbox · Parameters / Logs / Messages / NSH / Tests / SITL'}</button>
+              <button role="menuitem" onClick={() => { setShowPx4Toolbox(true); setShowToolsMenu(false); }}>⚙ {isZh ? 'PX4 工具箱 · 参数 / 日志 / 打印 / NSH / 仿真测试 / 软件飞控 / 固件升级' : 'PX4 Toolbox · Parameters / Logs / Messages / NSH / Tests / SITL / Firmware'}</button>
               <button role="menuitem" onClick={() => { setShowUsbFiles(true); setShowToolsMenu(false); }}>🗂 {isZh ? '仿真机文件管理' : 'Simulator Files'}</button>
               <button role="menuitem" onClick={() => { setShowNshConsole(true); setShowToolsMenu(false); }}>⌨ {isZh ? 'NuttX NSH 控制台' : 'NuttX NSH Console'}</button>
               <button role="menuitem" onClick={() => { setShowSerialAssistant(true); setShowToolsMenu(false); }}>⌁ {isZh ? '串口与网口助手（本机）' : 'Serial & Network Assistant (Local)'}</button>
@@ -1261,10 +1261,11 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
         <div className="toolbar-right">
           <button aria-label={isZh ? '大模型语音操作' : 'AI Voice Control'} title={isZh ? '语音与文字控制上位机' : 'Voice and text control'} onClick={() => setShowVoiceAssistant(value => !value)}>🎙 {isZh ? '语音' : 'Voice'}</button>
           {mcpStatus?.enabled && <button className="toolbar-mcp" title={`${isZh ? 'MCP 已启用，共用上位机连接' : 'MCP enabled, using desktop connection'}\n${mcpStatus.endpointFile ?? ''}${mcpStatus.audit.length ? '\n' + mcpStatus.audit[mcpStatus.audit.length - 1].tool : ''}`} onClick={() => setShowPx4Toolbox(true)}>MCP</button>}
-          {isTauri && <WindowControls zh={isZh}/>}
           <input ref={fileInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} />
           <input ref={directoryInputRef} type="file" accept=".xml" multiple onChange={handleImportXml} style={{ display: 'none' }} {...({ webkitdirectory: '', directory: '' } as any)} />
         </div>
+        </div>
+        {isTauri && <WindowControls zh={isZh}/>}
       </div>
 
       <Px4ToolboxWindowHost visible={showPx4Toolbox} visited={px4ToolboxVisited}
@@ -1450,21 +1451,21 @@ export default function Toolbar({ onShow3D, jsbsimLogs = [], onLog, onToggleJsbs
             const data = modelName ? await withEnvironment(await withPwmCaptures(await withSerialSensors(loaded, modelName), modelName), modelName) : loaded;
             if (signal.aborted) return;
             loadProject(data);
-            if (data.sourceXml) localStorage.setItem('jsbsim-raw-xml', data.sourceXml);
-            if (data.referenceFiles) localStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles));
-            localStorage.removeItem('jsbsim-import-assets');
-            localStorage.removeItem('jsbsim-import-directory');
+            if (data.sourceXml) modelStorage.setItem('jsbsim-raw-xml', data.sourceXml);
+            if (data.referenceFiles) modelStorage.setItem('jsbsim-reference-files', JSON.stringify(data.referenceFiles));
+            modelStorage.removeItem('jsbsim-import-assets');
+            modelStorage.removeItem('jsbsim-import-directory');
             const loadedModel = String(data?.model || data?.aircraft?.name || '').trim();
             if (loadedModel) {
               setLibrarySimulationModel(loadedModel);
-              localStorage.setItem('jsbsim-remote-model', loadedModel);
+              modelStorage.setItem('jsbsim-remote-model', loadedModel);
               onAssignInstanceModel?.(activeInstance, loadedModel);
               if (data.sourceXml) setRemoteBaseline(loadedModel, projectFingerprint(useFlowStore.getState()));
             }
             // Persist to localStorage
             try {
-              localStorage.setItem('jsbsim-project', projectFingerprint(useFlowStore.getState()));
-              localStorage.setItem('jsbsim-cache-version', '2');
+              modelStorage.setItem('jsbsim-project', projectFingerprint(useFlowStore.getState()));
+              modelStorage.setItem('jsbsim-cache-version', '2');
             } catch (e) { /* ignore */ }
           }}
           onSelectForSimulation={(model) => {

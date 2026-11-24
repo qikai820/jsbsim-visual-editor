@@ -1,0 +1,28 @@
+{
+  "name": "移动平台工作船",
+  "author": "Kenney",
+  "license": "CC0-1.0",
+  "source": "https://kenney.nl/assets/watercraft-kit",
+  "download": "https://raw.githubusercontent.com/shorepine/kenney/3694c6879e487c108f55677be7dd2ca75b07cc3b/3d/watercraft/ship-cargo-c.glb",
+  "mirrorCommit": "3694c6879e487c108f55677be7dd2ca75b07cc3b",
+  "sourceSha256": "dafbf1e0543e65585af2846932f66e2ac6561dab303174aa71b7fc61807f8677",
+  "paletteSha256": "311138350e74e35c5497a1bd8076a01740b7c302bed11027639fa553459a68de",
+  "file": "vessel.glb",
+  "sha256": "50c6b814a680f181a6bd6e1592181171c705335f9463943d09979cf327b6f517",
+  "bytes": 40576,
+  "changes": [
+    "Embedded palette PNG; geometry preserved.",
+    "Runtime adds a parameterized landing deck and guide rods."
+  ],
+  "assembled": {
+    "file": "moving-platform.glb",
+    "sha256": "1ebe85deef45dabbc77f48f9ef2c6574e9a6a08cb9d8ba2a1756ff8ecd5e16d5",
+    "bytes": 93668,
+    "deckLengthM": 4,
+    "deckWidthM": 3,
+    "rodLengthM": 1.5,
+    "rodSpacingM": 0.36,
+    "contactMode": 2,
+    "generator": "createMovingPlatformModel / three.js GLTFExporter; tests/moving-platform-scene-ui.mjs"
+  }
+}

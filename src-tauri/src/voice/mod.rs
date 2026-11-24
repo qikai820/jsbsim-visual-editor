@@ -107,6 +107,33 @@ mod tests {
         let wrong=probe_summary(&c,Err("no LLM".into()),Ok(json!({"ready":true,"model":"tiny"})));assert_eq!(wrong["asr"]["ok"],false);
     }
 
+    #[test]
+    #[ignore = "requires an explicitly selected config path and a live local Piper service"]
+    fn configure_and_test_local_tts() {
+        let path=PathBuf::from(std::env::var_os("JSBSIM_VOICE_TTS_SETUP_CONFIG").expect("需要明确指定语音配置路径"));
+        let mut c=config::load(&path).expect("读取现有语音配置失败；未覆盖配置");
+        c.require_enabled().expect("请先完成语音输入配置");
+        c.speak_replies=true;
+        c.tts=config::Api{base_url:"http://127.0.0.1:8179/v1".into(),api_key:String::new(),model:"piper-zh-cn".into()};
+        c.tts_voice="huayan".into();
+        c.validate().unwrap();
+        let job=http::Job::begin(format!("local-tts-setup-{}",std::process::id())).unwrap();
+        let health=http::json_request(&c.tts,"http://127.0.0.1:8179/health",http::Body::None,8,&job).expect("本地 TTS 服务未就绪");
+        assert_eq!(health["ready"],true);assert_eq!(health["model"],c.tts.model);assert_eq!(health["voices"],json!([c.tts_voice]));
+        let started=std::time::Instant::now();
+        let body=json!({"model":c.tts.model,"input":"中文语音播报已启用，可以查询仿真状态。","voice":c.tts_voice,"response_format":"wav"});
+        let bytes=http::request(&c.tts,&http::url(&c.tts.base_url,"audio/speech"),http::Body::Json(&body),c.timeout_seconds,&job).expect("中文语音合成失败");
+        assert!(bytes.len()>44&&&bytes[..4]==b"RIFF"&&&bytes[8..12]==b"WAVE","TTS 未返回有效 WAV 音频");
+        println!("[测试] PASS：原生 HTTP → 本地中文 TTS → WAV（{} 字节，{:.2} 秒）。",bytes.len(),started.elapsed().as_secs_f64());
+        if let Some(output)=std::env::var_os("JSBSIM_VOICE_TTS_SETUP_WAV") {
+            std::fs::write(output,&bytes).expect("保存播报示例失败");
+        }
+        config::save(&path,&c).expect("保存播报配置失败");
+        let stored=config::load(&path).unwrap();
+        assert!(stored.speak_replies&&stored.tts.model=="piper-zh-cn"&&stored.tts_voice=="huayan");
+        println!("[配置] 中文播报已启用并保存（权限 0600）：{}",path.display());
+    }
+
     // Explicitly invoked by setup-local-voice.sh in the user's own terminal.
     // Reuses production HTTP, schema, parser, recorder and private config writer.
     #[test]

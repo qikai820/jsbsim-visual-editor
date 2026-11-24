@@ -1,4 +1,5 @@
 use serde::Serialize;
+use tauri::Manager;
 use crate::px4_metadata::{decode, MAX_METADATA};
 use std::{
     collections::BTreeMap,
@@ -261,6 +262,7 @@ fn write_chunk(id: u64, offset: u64, bytes: &[u8]) -> Result<(), String> {
         }
     }
     job.ranges = merged;
+    crate::mcp_logs::saved(id, job.ranges.iter().map(|(a,z)|z-a).sum());
     Ok(())
 }
 fn finish(id: u64) -> Result<UlogSummary, String> {
@@ -279,6 +281,7 @@ fn finish(id: u64) -> Result<UlogSummary, String> {
     }
     std::fs::rename(&job.part, &job.destination).map_err(|e| e.to_string())?;
     summary.path = job.destination.to_string_lossy().into();
+    crate::mcp_logs::complete(id, summary.path.clone());
     summary.name = job
         .destination
         .file_name()
@@ -371,6 +374,27 @@ pub async fn px4_log_begin(
     path.set_extension("ulg");
     crate::run_blocking(move || begin(path, size).map(Some)).await
 }
+#[tauri::command]
+pub async fn px4_log_begin_managed(app:tauri::AppHandle, log_id:u16, size:u64, time:u32, session_id:u64, system:u8, component:u8, hardware_uid:String)->Result<u64,String>{
+    if log_id==65535 || session_id==0 || system==0 || component==0 || hardware_uid.is_empty() || hardware_uid.len()>32 || !hardware_uid.bytes().all(|b|b.is_ascii_hexdigit()) {return Err("日志来源无效".into());}
+    let dir=app.path().app_data_dir().map_err(|e|e.to_string())?.join("px4-logs");
+    crate::run_blocking(move||{
+        if crate::mcp_logs::active(){return Err("已有日志下载正在进行".into());}
+        std::fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
+        // Create a unique owned directory; no caller-controlled destination or overwrite.
+        let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
+        let dir=dir.join(format!("{stamp}-{}-{session_id}",std::process::id()));
+        std::fs::create_dir(&dir).map_err(|e|e.to_string())?;
+        let id=begin(dir.join(format!("px4_log_{log_id}.ulg")),size)?;
+        let receipt=crate::mcp_logs::Transfer{job_id:id,log_id,size,time,session_id,system,component,hardware_uid,started_at_unix_ms:crate::mcp_logs::now(),updated_at_unix_ms:crate::mcp_logs::now(),elapsed_seconds:0.,bytes_per_second:0.,remaining_seconds:None,status:"downloading".into(),received:0,saved_bytes:0,path:None,error:None};
+        if let Err(error)=crate::mcp_logs::start(receipt){downloads().lock().map_err(|e|e.to_string())?.remove(&id);return Err(error);}
+        Ok(id)
+    }).await
+}
+#[tauri::command]
+pub fn px4_log_transfer_received(id:u64,received:u64){crate::mcp_logs::progress(id,received);}
+#[tauri::command]
+pub fn px4_log_transfer_error(id:u64,error:String,cancelled:bool){crate::mcp_logs::fail(id,error,cancelled);}
 #[tauri::command]
 pub async fn px4_log_write(id: u64, offset: u64, bytes: Vec<u8>) -> Result<(), String> {
     crate::run_blocking(move || write_chunk(id, offset, &bytes)).await

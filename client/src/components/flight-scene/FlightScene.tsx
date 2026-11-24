@@ -1,7 +1,7 @@
 import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { listenSceneFrames, listenTelemetry, simInstanceControl } from '../../utils/tauriApi';
-import { FlightSceneFeed, demoPackets, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode, type ScenePose } from '../../sim/flightSceneState';
+import { captureGroundOrigin, FlightSceneFeed, demoPackets, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode, type ScenePose } from '../../sim/flightSceneState';
 import { listenSceneMonitor, mergeSceneMonitorKeys, sceneMonitorKeys, type SceneMonitorTarget } from '../../sim/sceneSignals';
 import { canonicalMonitorProperty } from '../../sim/monitorIdentity';
 import { loadSceneDisplay, SCENE_DISPLAY_KEY, sceneValueKeys, type SceneDisplay } from '../../sim/sceneInstruments';
@@ -10,10 +10,12 @@ import { useSignalMonitorStore } from '../../store/signalMonitorStore';
 import { rotorCount, rotorLabel, rotorReading } from '../../sim/sceneRotors';
 import { isMorphQuad, MORPHQUAD_ARMS } from '../../sim/sceneMorphQuad';
 import { windReading } from '../../sim/sceneWind';
+import { PLATFORM_SIGNAL_KEYS } from '../../sim/sceneMovingPlatform';
 import FlightSceneCanvas, { type SceneLayers } from './FlightSceneCanvas';
 import SceneEditorPanel from './SceneEditorPanel';
 import { useSceneEditor } from './useSceneEditor';
 import { useSceneModelOrigin } from './useSceneModelOrigin';
+import { preloadMovingPlatformAsset } from './useMovingPlatformAsset';
 import { sessionIsActive, setTestDisplay, useFlightTestStore } from '../../flight-test/session';
 import { SceneFlightTestPanel, SceneFlightTestStatus } from './SceneFlightTest';
 import './flightScene.css';
@@ -129,6 +131,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   useEffect(() => { if (!editor.enabled) setPanel(current => current === 'editor' ? null : current); }, [editor.enabled]);
   const viewMode = editor.enabled ? 'free' : mode;
   const demoTime = useRef(0);
+  useEffect(() => { void preloadMovingPlatformAsset().catch(() => {}); }, []);
   const groundPlane = useRef<{ feed: FlightSceneFeed; altitude: number | null }>({ feed, altitude: null });
   useEffect(() => {
     const listener = () => setVisible(!document.hidden);
@@ -158,11 +161,15 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const now = performance.now();
   const entry = feed.aircraft.get(selected), pose = entry?.latest;
   const selectedModel = pose?.model || slots[selected] || '';
-  const modelOrigin = useSceneModelOrigin(selectedModel, !demo, editor.applyModelOrigin);
+  const platformEnabled = pose?.platformEnabled === true;
+  const platformProbe = !!selectedModel && pose?.platformAvailable !== false && pose?.platformEnabled === undefined;
+  const monitorExtras = useMemo(() => [...customKeys, ...(platformEnabled ? PLATFORM_SIGNAL_KEYS : platformProbe ? ['moving-platform/enabled'] : [])], [platformEnabled, platformProbe, customSignature]);
+  const monitorSignature = monitorExtras.join('\n');
+  const modelOrigin = useSceneModelOrigin(selectedModel, !demo, editor.applyModelOrigin, captureGroundOrigin(entry, now));
   useEffect(() => {
-    onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel, extraKeys: customSignature ? customSignature.split('\n') : [] });
+    onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel, extraKeys: monitorSignature ? monitorSignature.split('\n') : [] });
     return () => onMonitorTargetChange?.(null);
-  }, [onMonitorTargetChange, demo, selected, selectedModel, customSignature]);
+  }, [onMonitorTargetChange, demo, selected, selectedModel, monitorSignature]);
   const online = [...feed.aircraft.values()].filter(item => fresh(item.latest, now)).length;
   const ids = [...new Set([...Object.keys(slots).filter(id => slots[id]), ...feed.aircraft.keys()])].sort();
   const selectedFresh = fresh(pose, now);
@@ -213,7 +220,8 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const openInstruments = (hud = false, index = valueSelected) => { setFocus(false); setHudSettings(hud); setValueSelected(index); setPanel('instruments'); };
   const userProject = useSignalMonitorStore.getState().project;
   const userKeys = [...Object.values(userProject.labels).flatMap(label => label.bindings), ...userProject.scopes.flatMap(scope => scope.channels)].map(binding => binding.key);
-  const subscribed = new Set(mergeSceneMonitorKeys(userKeys, sceneMonitorKeys(selectedModel, customKeys)).map(canonicalMonitorProperty));
+  const subscribed = new Set(mergeSceneMonitorKeys(userKeys, sceneMonitorKeys(selectedModel, monitorExtras)).map(canonicalMonitorProperty));
+  const platformChannelsAvailable = PLATFORM_SIGNAL_KEYS.every(key => subscribed.has(canonicalMonitorProperty(key)));
   const unavailableKeys = demo ? [] : customKeys.filter(key => !subscribed.has(canonicalMonitorProperty(key)));
   const rightOpen = !focus && (panel === 'telemetry' || panel === 'instruments' || editor.enabled && panel === 'editor');
   const testVisible = testDisplay !== 'hidden' && !focus && !editor.enabled && !['aircraft', 'layers', 'settings'].includes(panel ?? '');
@@ -275,6 +283,7 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
       </aside>
       <main className="scene-main"><div className="scene-viewport" data-test-open={testVisible}>
         <SceneBoundary resetKey={cameraVersion}>{visible && <FlightSceneCanvas feed={feed} revision={revision} selected={selected} onSelect={setSelected} mode={viewMode} layers={layers} onFps={setFps} groundAltitude={groundPlane.current.altitude} cameraVersion={cameraVersion} editor={editor} />}</SceneBoundary>
+        {platformEnabled && <div style={{ position: 'absolute', left: 12, top: 48, color: '#d4e9ed', background: '#17303cdd', padding: '6px 10px', borderRadius: 5, fontSize: 12 }} role="status">移动平台 · {!platformChannelsAvailable ? '订阅通道不足，请减少观察信号' : pose?.platform ? (propertyAgeMs(pose.platform.sampleAt, now) ?? Infinity) < STALE_MS ? '仿真遥测' : '数据已过期 · 保持最后位姿' : '等待完整位姿和尺寸'} · Kenney CC0</div>}
         <div className="scene-viewport-caption">◉ {editor.enabled ? '场景编辑' : `${MODES.find(m => m[0] === mode)?.[1]}视角`} <span>{selected} · {pose?.model || slots[selected] || '等待数据'}</span></div>
         <div className="scene-viewport-tools"><span>N ↑</span><button title="重新定位相机" aria-label="重新定位相机" onClick={() => setCameraVersion(v => v + 1)}>◎</button></div>
         <SceneFlightTestPanel hidden={!testVisible} selected={selected} model={selectedModel} onSelectInstance={setSelected} />

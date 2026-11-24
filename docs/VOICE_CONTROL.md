@@ -103,6 +103,34 @@ bash scripts/setup-local-voice.sh --test-mic
 部分第三方识别服务没有健康检查接口，检查失败不等于转写接口一定不可用，应实际录音确认。
 语音播报按 `response_format=wav` 请求音频，模型和音色名称按所接服务填写。
 
+### 本机中文播报（Piper）
+
+附带的 `tts_server.py` 提供上位机使用的 `/v1/audio/speech` 接口，只返回 WAV。
+Piper 使用独立的 `.toolchains/tts` 环境，不更改识别服务依赖。
+
+```sh
+bash scripts/voice-service.sh install-tts
+# 预先下载同名 .onnx 与 .onnx.json 文件后启动：
+bash scripts/voice-service.sh tts --model /absolute/path/zh_CN-huayan-medium.onnx
+```
+
+中文模型使用 [Piper Huayan medium](https://huggingface.co/rhasspy/piper-voices/tree/main/zh/zh_CN/huayan/medium)。
+在“服务配置”中勾选“播报操作结果”，填写基础地址 `http://127.0.0.1:8179/v1`、
+模型 `piper-zh-cn`、音色 `huayan`，保存后生效。模型加载后在本机合成，不保存文本或音频。
+接口限制输入为 1000 字以内、WAV 为 4 MiB 以内；上位机每次播报截取前 400 字。
+也可设置 `VOICE_TTS_API_KEY`，并在上位机的语音合成配置中填写相同 Key。
+
+已部署本地服务时，可以通过原生 HTTP 与配置保存代码验证并启用播报：
+
+```sh
+JSBSIM_VOICE_TTS_SETUP_CONFIG="$HOME/.config/com.jsbsim.visual-editor/voice-assistant.json" \
+  cargo test --manifest-path src-tauri/Cargo.toml --test voice_assistant --offline \
+  voice::tests::configure_and_test_local_tts -- --ignored --exact --nocapture
+```
+
+该检查先合成一句中文，确认收到 WAV 后才保存播报配置；现有识别、指令模型和麦克风设置保留。
+外部修改配置后关闭并重新打开语音面板。系统输出静音或音量为零时，需要先在声音设置中调整。
+
 ## 可执行范围
 
 | 示例 | 操作 |
@@ -114,6 +142,9 @@ bash scripts/setup-local-voice.sh --test-mic
 | 用 F450_PX4_lan.xml 启动 F450_PX4 | 校验脚本关联机型后运行地面脚本 |
 | 暂停／继续／停止／重新运行仿真 | 使用原有生命周期接口 |
 | 打开视景／日志／PX4 工具箱 | 打开对应界面 |
+| 这个模块有哪些参数 | 查询画布中选中模块的可用参数、当前值和单位 |
+| 查询空机质量／把空机质量改成三点二千克 | 查询或预览机身的空重修改 |
+| 把滚转惯量增加百分之十／把东向风速改成每秒五米 | 预览主惯量或恒定风速修改 |
 | 启动／停止软件飞控 | 使用软件飞控页已保存的配置 |
 | 干跑当前测试脚本 | 通过共享测试引擎预演，不控制飞控 |
 | 运行当前真实仿真测试 | 预览确认后使用当前脚本，保留原有 HIL 和控制源检查 |
@@ -124,6 +155,10 @@ bash scripts/setup-local-voice.sh --test-mic
 这不是全双工实时语音或唤醒词监听；语音和文字共用同一套操作解析及执行流程。
 
 ## 操作与数据
+
+查询仿真状态、列出模型或脚本、打开三维视景或日志，以及明确的“暂停仿真”“继续仿真”“停止仿真”“重启仿真”等常用指令由本地解析。仿真启停仍需预览确认。其他表达交给大模型解析，执行校验继续使用上位机的完整状态。
+
+模块参数在编辑器本地解析，支持空重、主惯量、机翼面积与几何、恒定风速分量。多个模块匹配时先在画布选中目标，或在指令里说出模块名。带单位的字段需要提供单位，百分比增减依照当前值计算。预览会显示原值、新值和联动影响，有效期 60 秒。可点击“确认修改”，或再次录音说“确认修改”。确认后由属性面板共用的编辑接口更新草稿，可撤销并通过“保存工程”持久化。实时调参的自动提交和“重新应用”只处理原有的手动调参修改。
 
 动作采用固定白名单和严格参数校验，模型没有任意代码执行权限。
 每个预览最多四步、有效 60 秒；执行前重新检查实例、模型、连接、测试脚本摘要和
@@ -146,6 +181,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --test voice_assistant --offline
 node tests/voice-actions.mjs
 node tests/voice-runtime.mjs
 python3 tests/voice-asr-service.py
+python3 tests/voice-tts-service.py
 .toolchains/voice/bin/python tests/voice-proxy.py
 .toolchains/voice/bin/python tests/voice-asr-audio.py
 node --experimental-websocket tests/voice-assistant-ui.mjs

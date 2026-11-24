@@ -19,15 +19,16 @@ const permissions={main:JSON.parse(await readFile('src-tauri/capabilities/defaul
 const source=`import React,{useState}from'react';import{createRoot}from'react-dom/client';
 import Host,{NativePx4Toolbox}from'./src/components/Px4ToolboxWindow';import WindowControls from './src/components/WindowControls';
 import{openTestToolbox,hideTestToolbox,useFlightTestStore,startFlightTest,stopFlightTest}from'./src/flight-test/session';
-import{executeMcpRequest}from'./src/flight-test/mcp';import{useSignalMonitorStore}from'./src/store/signalMonitorStore';import{encode}from'./src/px4/protocol';
+import{executeMcpRequest}from'./src/flight-test/mcp';import{useSignalMonitorStore}from'./src/store/signalMonitorStore';import{encode,Parser}from'./src/px4/protocol';
 window.label=location.search.includes('mock-toolbox')?'px4-toolbox':'main';window.__TAURI_INTERNALS__.metadata={currentWindow:{label:window.label},currentWebview:{label:window.label}};
 window.store=useFlightTestStore;window.openTesting=()=>openTestToolbox(true);window.startFromMain=()=>startFlightTest(true);window.stopFromMain=()=>stopFlightTest();window.mcp=executeMcpRequest;
 if(window.label==='main'){
- window.calls=[];window.opens=0;window.sceneCalls=0;window.geometry={x:2100,y:100,width:1000,height:750};let channel,seq=0;
+ window.calls=[];window.opens=0;window.sceneCalls=0;window.nshCommands=[];let nshLine='';const parser=new Parser();window.geometry={x:2100,y:100,width:1000,height:750};let channel,seq=0;
  window.snapshot={id:0,status:'idle',dryRun:true,name:'',elapsed:0,realElapsed:0,activeBlocks:[],values:{},rc:[0,0,0,.5],logs:[],exitResult:''};
  const heartbeat=()=>channel?.onmessage({kind:'data',sessionId:99,direction:'rx',peer:'127.0.0.1:40000',datagram:true,bytes:Array.from(encode(0,new Uint8Array([0,0,0,0,2,12,32,3,3]),seq++,7,1))});setInterval(heartbeat,500);
  window.px4Print=value=>{const p=new Uint8Array(54);p[0]=6;p.set(new TextEncoder().encode(value),1);channel.onmessage({kind:'data',sessionId:99,direction:'rx',peer:'127.0.0.1:40000',datagram:true,bytes:Array.from(encode(253,p,seq++,7,1))});};
  const monitor=x=>({name:'screen'+x,position:{x,y:0},size:{width:1920,height:1080},scaleFactor:1,workArea:{position:{x,y:0},size:{width:1920,height:1040}}});
+ window.nshReply=text=>{const bytes=new TextEncoder().encode(text);for(let i=0;i<bytes.length;i+=70){const p=new Uint8Array(81);p[6]=10;p[8]=Math.min(70,bytes.length-i);p.set(bytes.subarray(i,i+70),9);channel.onmessage({kind:'data',sessionId:99,direction:'rx',peer:'127.0.0.1:40000',datagram:true,bytes:Array.from(encode(126,p,seq++,7,1))});}};
  window.native=async(command,args,label)=>{
   window.calls.push({command,args,label});
   const restricted={'plugin:window|minimize':'core:window:allow-minimize','plugin:window|toggle_maximize':'core:window:allow-toggle-maximize','plugin:window|close':'core:window:allow-close'};
@@ -48,6 +49,15 @@ if(window.label==='main'){
   if(command==='px4_router_read')return{simulator:'127.0.0.1',state:'running',config:{device:'/dev/ttyACM0',baud:921600,host:'127.0.0.1',qgc_port:14550,toolbox_port:14553},active_config:{device:'/dev/ttyACM0',baud:921600,host:'127.0.0.1',qgc_port:14550,toolbox_port:14553},routes:[]};
   if(command==='simulator_network_target_get')return'127.0.0.1';
   if(command==='tool_transport_open'){channel=args.onEvent;heartbeat();return{sessionId:99,path:'mock PX4'};}
+  if(command==='tool_transport_write'){
+   for(const frame of parser.push(Uint8Array.from(args.bytes))){if(frame.id!==126)continue;
+    const text=new TextDecoder().decode(frame.payload.subarray(9,9+frame.payload[8]));
+    if(text==='\\n'){queueMicrotask(()=>window.nshReply('\\r\\nnsh> '));continue;}
+    if(text==='\\x03'){window.nshReply('\\r\\nnsh> ');continue;}
+    nshLine+=text;if(!nshLine.endsWith('\\r'))continue;
+    const line=nshLine;nshLine='';const token=/then echo (MCP[0-9a-f]+)0/.exec(line)?.[1];if(token){window.nshCommands.push(line);queueMicrotask(()=>window.nshReply(line+'\\nSYS_HITL: 1\\r\\n'+token+'0\\r\\nnsh> '));}
+   }return;
+  }
   if(command==='tool_transport_pin_peer')return new Promise(resolve=>{window.finishPeerPin=()=>{window.peerReady=true;resolve();};});
   if(command==='flight_test_rc_source_status'){
    if(!window.peerReady||args.options.sessionId!==99||args.options.system!==7||args.options.component!==1)throw Error('仿真机转发会话、来源或固定回传目标已失效');
@@ -78,6 +88,12 @@ try{
  await until(`window.store.getState().rcSource?.mode===3`);
  assert.equal(await child(`document.body.innerText.includes('仿真机转发会话、来源或固定回传目标已失效')`),false);
  assert.equal(await ev('window.store.getState().rcSourceStatusError'),'');
+ const nsh=await ev(`window.mcp({name:'upper_nsh_command',arguments:{command:'param show SYS_HITL'}})`);
+ assert.match(nsh.output,/SYS_HITL: 1/);assert.deepEqual(nsh.target,{system:7,component:1});assert.equal(nsh.sessionId,99);
+ assert.equal(await ev('window.nshCommands.length'),1);assert.equal(await count('tool_transport_open'),1,'NSH reuses owner connection');
+ await ev(`window.store.setState({starting:true})`);assert.match(await ev(`window.mcp({name:'upper_nsh_command',arguments:{command:'status'}}).then(()=>'',e=>String(e))`),/操作进行中/);await ev(`window.store.setState({starting:false})`);
+ const beforeExpired=await ev('window.nshCommands.length');await child(`window.__emit('px4-toolbox-bridge',{kind:'nsh-command',id:'expired-nsh',deadline:Date.now()-1,request:{command:'status'}})`);assert.equal(await ev('window.nshCommands.length'),beforeExpired,'expired NSH never executes');
+
  assert.equal(await ev('document.querySelector(".px4-toolbox-overlay")'),null,'main has no modal overlay');
  assert.equal(await count('tool_transport_open'),1);
  assert.equal(await ev(`window.calls.find(c=>c.command==='tool_transport_open').label`),'px4-toolbox');

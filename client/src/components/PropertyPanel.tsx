@@ -1,3 +1,4 @@
+import MovingPlatformEditor from './MovingPlatformEditor';
 import WindProfileEditor from './WindProfileEditor';
 import { profileFromEnvironment, windProfileEdits } from '../sim/windProfile';
 import { environmentFromProject, environmentEdits } from '../sim/runtimeParameters';
@@ -285,6 +286,8 @@ export default function PropertyPanel() {
       </div>
     );
   }
+
+  if (node.data.componentType === 'moving_platform') return <MovingPlatformEditor node={node} onChange={params => updateNodeParams(node.id, params)} onRemove={() => { removeNode(node.id); setSelectedNode(null); }} />;
 
   const def = getComponentDef(node.data.componentType);
   if (!def) return null;

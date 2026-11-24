@@ -66,8 +66,8 @@ try:
 
     rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "native-smoke", "version": "1"}})
     rpc("notifications/initialized", notify=True)
-    assert len(rpc("tools/list")["tools"]) == 8
-    results.append("actual stdio initialize/list: eight tools")
+    assert len(rpc("tools/list")["tools"]) == 12
+    results.append("actual stdio initialize/list: nine tools")
     status = call("upper_get_status")
     assert status["connection"]["connected"] is False
     assert status["test"]["id"] == 0

@@ -116,40 +116,59 @@ export async function readLogs(link: Px4Connection, update: (logs: LogEntry[], e
 }
 
 export async function readLogWindow(link: Px4Connection, id: number, offset: number, length: number, signal: AbortSignal, progress: (n: number) => void): Promise<Uint8Array> {
-  const bytes = new Uint8Array(length), seen = new Uint8Array(length); let received = 0, error = '', lastData = Date.now(), lastReported = 0;
-  const unsubscribe = link.subscribe(frame => {
-    if (frame.id !== 120) return; const p = frame.payload, d = view(p), at = d.getUint32(0, true), n = p[6];
-    if (d.getUint16(4, true) !== id || at < offset || at >= offset + length || n > 90 || !n || at + n > offset + length) return;
-    for (let i = 0; i < n; i++) { const index = at-offset+i; if (seen[index] && bytes[index] !== p[7+i]) { error = '日志内容在传输中发生变化'; return; } if (!seen[index]) { seen[index] = 1; received++; lastData = Date.now(); } bytes[index] = p[7+i]; }
-    if (Date.now() - lastReported > 100 || received === length) { lastReported = Date.now(); progress(received); }
+  const bytes=new Uint8Array(length),seen=new Uint8Array(length);
+  let received=0,error='',lastData=Date.now(),lastReported=0;
+  let requestedStart=0,requestedEnd=length,lastRequest=0;
+  const unsubscribe=link.subscribe(frame=>{
+    if(frame.id!==120)return;
+    const p=frame.payload,d=view(p),at=d.getUint32(0,true),n=p[6];
+    if(d.getUint16(4,true)!==id||!n||n>90||p.length<7+n||at>=offset+length||at+n<=offset)return;
+    const first=Math.max(at,offset),end=Math.min(at+n,offset+length);
+    for(let pos=first;pos<end;pos++){
+      const index=pos-offset,value=p[7+pos-at];
+      if(seen[index]&&bytes[index]!==value){error='日志内容在传输中发生变化';return;}
+      if(!seen[index]){seen[index]=1;received++;lastData=Date.now();}bytes[index]=value;
+    }
+    if(Date.now()-lastReported>100||received===length){lastReported=Date.now();progress(received);}
   });
-  const request = (at: number, count: number) => { const p = new Uint8Array(12), d = view(p); d.setUint32(0, at, true); d.setUint32(4, count, true); d.setUint16(8, id, true); p[10] = link.target.system; p[11] = link.target.component; return link.send(119, p); };
-  try {
-    await request(offset, length); let retry = Date.now(); const started = retry;
-    while (received < length) {
-      await delay(100, signal, link.signal); if (error) throw Error(error);
-      if (Date.now()-lastData > 10000 || Date.now()-started > 60000) throw Error('日志下载停滞，请检查连接后重试');
-      if (Date.now()-retry > 1200) {
-        retry = Date.now();
-        for (let i = 0, requests = 0; i < length && requests < 8;) {
-          if (seen[i]) { i++; continue; } const start = i; while (i < length && !seen[i]) i++;
-          await request(offset + start, i-start); requests++;
-        }
+  const request=async(start:number,end:number)=>{
+    const p=new Uint8Array(12),d=view(p);d.setUint32(0,offset+start,true);d.setUint32(4,end-start,true);d.setUint16(8,id,true);p[10]=link.target.system;p[11]=link.target.component;
+    requestedStart=start;requestedEnd=end;lastRequest=Date.now();await link.send(119,p);
+  };
+  const missing=(start:number,end:number)=>{for(let i=start;i<end;i++)if(!seen[i])return i;return end;};
+  try{
+    const started=Date.now();await request(0,length);
+    while(received<length){
+      await delay(20,signal,link.signal);if(error)throw Error(error);if(received===length)break;
+      const now=Date.now();
+      if(now-lastData>10000||now-started>60000)throw Error('日志下载停滞，请检查连接后重试');
+      // PX4 has a single outstanding LOG_REQUEST_DATA range. Do not replace a
+      // progressing stream or enqueue several repairs that overwrite each other.
+      const rangeComplete=missing(requestedStart,requestedEnd)===requestedEnd;
+      if(rangeComplete||(now-lastData>250&&now-lastRequest>300)){
+        const first=missing(0,length);let end=first+1;while(end<length&&!seen[end])end++;
+        await request(first,end);
       }
     }
-    return bytes;
-  } finally { unsubscribe(); }
+    if(error)throw Error(error);return bytes;
+  }finally{unsubscribe();}
 }
-export async function downloadLog(link: Px4Connection, log: LogEntry, signal: AbortSignal, progress: (bytes: number) => void): Promise<UlogSummary | null> {
+export async function downloadLog(link: Px4Connection, log: LogEntry, signal: AbortSignal, progress: (bytes: number) => void, managed?: { onBegin:(id:number)=>void }): Promise<UlogSummary | null> {
   aborted(signal,link.signal);
-  const id = await invoke<number | null>('px4_log_begin', { name: `px4_log_${log.id}.ulg`, size: log.size }); if (id === null) return null;
+  const identity={uid:link.uid,boot:link.bootGeneration,heartbeat:link.heartbeatGeneration,session:link.transport.sessionId,system:link.target.system,component:link.target.component};
+  const checkIdentity=()=>{aborted(signal,link.signal);if(!link.alive||link.transport.sessionId!==identity.session||link.bootGeneration!==identity.boot||link.heartbeatGeneration!==identity.heartbeat||(identity.uid&&link.uid!==identity.uid)||link.target.system!==identity.system||link.target.component!==identity.component)throw Error('日志来源飞控或连接已变化，未保存为完整文件');};
+  const id = managed ? await invoke<number>('px4_log_begin_managed',{logId:log.id,size:log.size,time:log.time,sessionId:identity.session,system:identity.system,component:identity.component,hardwareUid:identity.uid}) : await invoke<number | null>('px4_log_begin', { name: `px4_log_${log.id}.ulg`, size: log.size }); if (id === null) return null;
   try {
+    managed?.onBegin(id);
+    let lastReceipt=0;
     for (let offset = 0; offset < log.size;) {
-      aborted(signal, link.signal); const bytes = await readLogWindow(link, log.id, offset, Math.min(32760, log.size-offset), signal, n => progress(offset+n));
-      await invoke('px4_log_write', { id, offset, bytes: Array.from(bytes) }); offset += bytes.length;
+      if(managed)checkIdentity();else aborted(signal,link.signal); const bytes = await readLogWindow(link, log.id, offset, Math.min(262080, log.size-offset), signal, n => {progress(offset+n);if(managed&&Date.now()-lastReceipt>250){lastReceipt=Date.now();void invoke("px4_log_transfer_received",{id,received:offset+n}).catch(()=>{});}});
+      for(let start=0;start<bytes.length;start+=65520){aborted(signal,link.signal);await invoke('px4_log_write',{id,offset:offset+start,bytes:Array.from(bytes.subarray(start,start+65520))});}offset+=bytes.length;
     }
-    aborted(signal, link.signal); const summary = await invoke<UlogSummary>('px4_log_finish', { id }); return summary;
-  } catch (e) { await invoke('px4_log_cancel', { id }).catch(() => {}); throw e; }
+    aborted(signal, link.signal);
+    if(managed){checkIdentity();const current=(await readLogs(link,()=>{},signal)).find(item=>item.id===log.id);if(!current||current.size!==log.size||current.time!==log.time)throw Error('机载日志在下载期间发生变化，未保存为完整文件');}
+    if(managed)checkIdentity();else aborted(signal,link.signal); const summary = await invoke<UlogSummary>('px4_log_finish', { id }); return summary;
+  } catch (e) { await invoke('px4_log_cancel', { id }).catch(() => {}); if(managed)await invoke('px4_log_transfer_error',{id,error:String(e),cancelled:signal.aborted}).catch(()=>{}); throw e; }
   finally { await link.send(122, Uint8Array.of(link.target.system, link.target.component)).catch(() => {}); }
 }
 

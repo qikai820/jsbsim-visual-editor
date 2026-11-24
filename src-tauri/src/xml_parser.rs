@@ -1756,6 +1756,26 @@ fn append_builtin_flight_dynamics(nodes: &mut Vec<Value>) {
     }));
 }
 
+fn parse_moving_platform(fdm: &XmlElement, aircraft: &Value, nodes: &mut Vec<Value>, layout: &mut LayoutState) {
+    let Some(section) = find_child(fdm, "external_reactions") else { return };
+    for el in find_children(section, "moving_platform") {
+        let name=get_attr(el,"name").unwrap_or("移动平台起降");
+        let mut params=json!({"name":name,"version":get_attr(el,"version").unwrap_or("1")});
+        if el.disabled { params["disabled"]=json!(true); }
+        for property in find_children(el,"property") {
+            if let Some(value)=get_attr(property,"value").and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()) {
+                params[get_text(property)]=json!(value);
+            }
+        }
+        if let Some(file)=get_attr(section,"file") {
+            let model=aircraft["name"].as_str().unwrap_or("aircraft");
+            params["_source_file"]=json!(if file.contains('/') {file.to_string()} else {format!("aircraft/{model}/{file}")});
+        }
+        nodes.push(json!({"id":layout.next_id(),"type":"aircraftComponent","position":layout.next_position(),
+            "data":{"label":name,"componentType":"moving_platform","params":params}}));
+    }
+}
+
 // ── Section file resolver ──────────────────────────────────────────────────
 
 fn resolve_section_files(
@@ -1764,7 +1784,7 @@ fn resolve_section_files(
 ) -> XmlElement {
     let section_names = [
         "metrics", "mass_balance", "ground_reactions", "propulsion", "aerodynamics",
-        "flight_control", "system", "output",
+        "flight_control", "system", "output", "external_reactions",
     ];
 
     let mut resolved = fdm_config.clone();
@@ -1889,6 +1909,7 @@ pub fn parse_xml(xml: &str, file_map: &HashMap<String, String>) -> Result<Value,
         file_map,
         &mut layout,
     );
+    parse_moving_platform(&fdm_config, &aircraft, &mut nodes, &mut layout);
     parse_aerodynamics(&fdm_config, &mut nodes, &mut edges, &mut layout);
     parse_input(&fdm_config, &mut nodes, &mut layout);
     parse_output(&fdm_config, &mut nodes, &mut layout);

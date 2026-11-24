@@ -8,6 +8,7 @@ const paths: Record<ComponentType, string> = {
   vtail: 'M9 20l3-17 4 14-3 3z',
   engine: 'M6 5h10l3 4v6l-3 4H6l-3-4V9z M8 8v8h6V8z',
   propeller: 'M12 10c-4-7-7-6-6-3 1 3 3 5 5 6-7 4-6 7-3 6 3-1 5-3 6-5 4 7 7 6 6 3-1-3-3-5-5-6 7-4 6-7 3-6-3 1-5 3-6 5z',
+  moving_platform: 'M2 17h20M5 17V9h14v8M8 9V4m8 5V4M6 4h4m4 0h4M9 13h6',
   landing_gear: 'M7 3h10v7h-4v5m-2-5v5M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6m12 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6',
   fuel_tank: 'M7 3h10v3l2 3v11H5V9l2-3z M9 8h6',
   point_mass: 'M12 3v5m-6 3h12M8 11l-4 8h8zm8 0l-4 8h8z',

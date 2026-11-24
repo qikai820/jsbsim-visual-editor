@@ -13,6 +13,7 @@ auth=ftp[ftp.index('fn credentials()'):ftp.index('fn safe_component(')]
 # selected explicitly and the entire actual firmware_update module is included.
 harness='''
 extern crate serde_json;
+mod sim_backend {pub fn active()->bool{false} pub const NSH_PORT:u16=23;}
 mod transport {
  pub fn network_host()->Option<std::net::Ipv4Addr>{std::env::var("SIM_UDP_HOST").ok()?.parse().ok()}
 }

@@ -1213,8 +1213,20 @@ fn build_ground_reactions(groups: &std::collections::HashMap<String, Vec<&Value>
     xml_element_raw("ground_reactions", &[], Some(&content), 0)
 }
 
-fn build_external_reactions() -> String {
-    xml_element("external_reactions", &[], None, 0)
+fn build_external_reactions(groups: &std::collections::HashMap<String, Vec<&Value>>) -> String {
+    let mut children=Vec::new();
+    for node in groups.get("moving_platform").into_iter().flatten() {
+        let p=get_params(node);let name=get_val_or(&p["name"],"移动平台起降");
+        let version=get_val_or(&p["version"],"1");let mut properties=Vec::new();
+        if let Some(params)=p.as_object() {for (key,value) in params {
+            if key.starts_with("moving-platform/") || key.starts_with("guide-rail/") || key.starts_with("scenario/") {
+                if let Some(value)=get_val(value) {properties.push(xml_element("property",&[("value",&value)],Some(key),2));}
+            }
+        }}
+        let xml=xml_element_raw("moving_platform",&[("name",&name),("version",&version)],Some(&properties.join("\n")),1);
+        children.push(maybe_disabled(xml,p,1));
+    }
+    xml_element_raw("external_reactions", &[], Some(&children.join("\n")), 0)
 }
 
 fn build_propulsion(
@@ -2094,7 +2106,7 @@ pub fn generate_xml(data: &Value) -> Result<String, String> {
     section_content.push(build_metrics(&groups));
     section_content.push(build_mass_balance(&groups));
     section_content.push(build_ground_reactions(&groups));
-    section_content.push(build_external_reactions());
+    section_content.push(build_external_reactions(&groups));
     section_content.push(build_propulsion(&groups, data));
 
     let system_refs = build_system_references(&groups);

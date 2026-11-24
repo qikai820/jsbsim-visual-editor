@@ -122,6 +122,11 @@ pub fn observe(event: &SerialEvent) {
     }
 }
 pub fn guard_write(bytes: &[u8]) -> Result<(), String> {
+    if crate::px4_firmware::busy() {
+        let frames = Parser::default().push(bytes, true);
+        if frames.len() == 1 && frames[0].id == 0 { return Ok(()); }
+        return Err("PX4 固件升级进行中，其他飞控指令暂不可用".into());
+    }
     if !running() && !receiver::busy() {
         return Ok(());
     }
@@ -313,6 +318,7 @@ pub fn start(source: String, options: Options) -> Result<Snapshot, String> {
     let script = xml::parse(&source)?;
     if receiver::busy() { return Err("遥控器来源切换中，请等待确认后执行测试".into()); }
     let _source_gate = receiver::gate()?;
+    if crate::px4_firmware::busy() { return Err("PX4 固件升级进行中，请等待完成后再执行测试".into()); }
     let mut c = controller().lock().map_err(|e| e.to_string())?;
     if running() {
         return Err("已有仿真测试正在运行".into());

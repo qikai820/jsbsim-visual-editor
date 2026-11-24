@@ -37,6 +37,13 @@ mod mcp;
 mod local_sim {
     pub fn mcp_status() -> serde_json::Value { serde_json::json!({"active":false,"bundled":false,"ready":false}) }
 }
+fn sim_status(_:tauri::AppHandle)->Result<serde_json::Value,String>{Ok(serde_json::json!({}))}
+mod mcp_logs {
+    #[derive(serde::Serialize)] pub struct Status{pub job_id:u64}
+    pub struct Request{pub id:u16,pub expected_size:u32,pub expected_time:u32}
+    pub fn validate(_:serde_json::Value)->Result<Request,String>{Err("offline test".into())}
+    pub fn status()->Option<Status>{None}
+}
 
 fn fixture(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1484,4 +1491,27 @@ fn f450_joint_hover_profile_parses_with_production_engine() {
     assert!(script.events.iter().any(|event|event.name.contains("::HOVER_BEGIN")));
     assert!(script.events.iter().any(|event|event.name.contains("::HOVER_END")));
     assert!(source.contains("<use aircraft=\"F450_PX4\" initialize=\"current-instance\""));
+}
+mod px4_firmware {
+    thread_local! { pub static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+    pub fn busy()->bool {BUSY.with(|v|v.get())}
+    #[derive(serde::Serialize)] pub struct Target {pub path:String,pub simulator:String}
+    pub fn ports()->Result<Vec<Target>,String>{Err("offline test".into())}
+    pub fn status()->Result<serde_json::Value,String>{Ok(serde_json::json!({}))}
+    pub fn local(_:&std::path::Path)->Result<serde_json::Value,String>{Err("offline test".into())}
+    pub fn remote_file(_:String)->Result<serde_json::Value,String>{Err("offline test".into())}
+    pub fn start(_:u64,_:Target)->Result<serde_json::Value,String>{Err("offline test".into())}
+    pub fn cancel(_:u64)->Result<serde_json::Value,String>{Err("offline test".into())}
+}
+
+#[test]
+fn firmware_upgrade_keeps_heartbeat_but_refuses_other_toolbox_commands() {
+    px4_firmware::BUSY.with(|v| v.set(true));
+    let heartbeat = flight_test::mavlink::encode(0, &[0,0,0,0,6,8,0,4,3], 0);
+    assert!(flight_test::guard_write(&heartbeat).is_ok());
+    for command in [246,400,512] {
+        let frame=flight_test::mavlink::command((1,1),command,[1.,0.,0.,0.,0.,0.,0.],0);
+        assert!(flight_test::guard_write(&frame).unwrap_err().contains("固件升级"));
+    }
+    px4_firmware::BUSY.with(|v| v.set(false));
 }

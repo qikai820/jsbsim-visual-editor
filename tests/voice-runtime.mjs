@@ -37,8 +37,8 @@ async function native(command,args){
  }
 }
 globalThis.window={__TAURI_INTERNALS__:{invoke:(command,args)=>native(command,args),transformCallback:()=>1}};
-const compiled=await build({stdin:{contents:`export * from './client/src/voice/runtime';export{useFlightTestStore}from'./client/src/flight-test/session';export{runVoicePlan}from'./client/src/voice/model';`,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm',define:{'process.env.NODE_ENV':'"production"'},loader:{'.css':'empty'}});
-const {collectVoiceContext,readVoiceContext,executeVoiceAction,useFlightTestStore,runVoicePlan}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
+const compiled=await build({stdin:{contents:`export * from './client/src/voice/runtime';export{useFlightTestStore}from'./client/src/flight-test/session';export{runVoicePlan,matchLocalVoiceAction,voiceInterpretationContext}from'./client/src/voice/model';`,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm',define:{'process.env.NODE_ENV':'"production"'},loader:{'.css':'empty'}});
+const {collectVoiceContext,readVoiceContext,executeVoiceAction,executeVoiceReadAction,useFlightTestStore,runVoicePlan,matchLocalVoiceAction,voiceInterpretationContext}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
 const initial=useFlightTestStore.getState();let synced;
 const host={binding:()=>({instance:'01',selectedModel:'ball',busy:false}),syncModel:async()=>{synced++;},selectModel:async()=>{},openToolbox:()=>{},showScene:()=>{},showLogs:()=>{}};
 function reset(){simulation={external:true,local:true,connected:true,running:false,model:'ball',state:'stopped'};target='127.0.0.1';overrides=new Map();calls=[];synced=0;useFlightTestStore.setState(initial,true);}
@@ -48,6 +48,27 @@ const deferred=()=>{let resolve;return{promise:new Promise(r=>resolve=r),resolve
 reset();simulation.connected=false;
 const disconnected=await collectVoiceContext(host);
 assert.equal(count('sim_list_models'),0);assert.equal(count('sim_list_tests'),0);assert.equal(count('simulator_network_target_get'),0);assert.ok(disconnected.catalogErrors.length);
+
+assert.equal(matchLocalVoiceAction('请你帮我查询一下当前的访真状态。'),'status');
+assert.equal(matchLocalVoiceAction('停止当前仿真！'),'stop');
+assert.equal(matchLocalVoiceAction('不要暂停仿真'),undefined);
+assert.equal(matchLocalVoiceAction('打开三维视景，然后停止仿真'),undefined);
+assert.equal(matchLocalVoiceAction('取消暂停'),undefined);
+reset();
+assert.match(await executeVoiceReadAction('status',host,()=>{}),/已停止/);
+assert.deepEqual(calls.map(call=>call.command),['sim_status']);
+reset();
+assert.match(await executeVoiceReadAction('list_scripts',host,()=>{}),/F450_PX4_lan.xml/);
+assert.deepEqual(calls.map(call=>call.command),['sim_status','sim_list_tests']);
+reset();
+overrides.set('sim_instance_snapshot',()=>({model:'other',state:'running',age_ms:3500}));
+const otherHost={...host,binding:()=>({...host.binding(),instance:'02'})};
+assert.match(await executeVoiceReadAction('status',otherHost,()=>{}),/实例 02 暂无有效仿真状态/);
+assert.deepEqual(calls.map(call=>call.command),['sim_instance_snapshot']);
+const compact=voiceInterpretationContext({...disconnected,px4Config:{argument:'private-config'},simulation:{...disconnected.simulation,flightController:{device_path:'/device/path'},fdmRunMs:10}});
+assert.equal(compact.px4Configured,true);
+assert.deepEqual(compact.models,disconnected.models);
+assert.doesNotMatch(JSON.stringify(compact),/private-config|device\/path|sourceHash|fdmRunMs|capturedAtMs/);
 
 reset();let c=await collectVoiceContext(host);assert.equal(c.simulatorTarget,'127.0.0.1');assert.ok(c.models.includes('ball'));
 await executeVoiceAction({type:'start_script',model:'F450_PX4',script:'F450_PX4_lan.xml'},c,host);

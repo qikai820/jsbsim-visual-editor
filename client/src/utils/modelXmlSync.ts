@@ -1,3 +1,4 @@
+import { movingPlatformParameters } from './movingPlatformConfig';
 import { changedModelPaths, mainXmlPath, nodeXmlFingerprint, nodeXmlPath, subFileXmlPath, type ModelProject } from './modelChanges';
 import { applyXmlDelta, parseXmlDocument } from './xmlDelta';
 import { patchExistingSubfileXml } from './sourcePreservingXml';
@@ -15,6 +16,19 @@ export interface XmlGenerators {
 }
 
 function validateOutputs(project: ModelProject): void {
+  const platforms=project.nodes.filter(node=>node.data.componentType==='moving_platform' && !node.data.params.disabled);
+  if(platforms.length>1) throw new Error('每个飞机模型仅支持一个移动平台起降部件。');
+  for(const node of platforms) {
+    const p=node.data.params;
+    if(String(p.version || '1')!=='1') throw new Error('不支持的移动平台部件版本。');
+    for(const def of movingPlatformParameters) {
+      const value=Number(p[def.path] ?? def.default);
+      if(!Number.isFinite(value) || (def.min!==null && value<def.min) || (def.max!==null && value>def.max)) throw new Error('移动平台参数范围错误：'+def.label);
+      if(['Enabled','ContactMode','Scenario','JamL','JamR','Invalid'].includes(def.id) && !Number.isInteger(value)) throw new Error('移动平台选项必须为整数：'+def.label);
+    }
+    if(Number(p['moving-platform/static-friction'] ?? .7)<Number(p['moving-platform/dynamic-friction'] ?? .5)) throw new Error('静摩擦系数须大于等于动摩擦系数。');
+  }
+
   const outputs = project.nodes.filter(node => node.data.componentType === 'output');
   for (const node of outputs) {
     const p = node.data.params;

@@ -1,3 +1,4 @@
+import { modelStorage } from './utils/modelStorage';
 import { useState, useCallback, useEffect, useRef, useMemo, Component, type ReactNode, Suspense, lazy } from 'react';
 import { disabledDependencies } from './utils/disabledGraph';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -193,19 +194,19 @@ const SLOT_KEY = 'jsbsim-multi-model-slots-v1';
 const INITIAL_OVERRIDE_KEY = 'jsbsim-multi-initial-overrides-v1';
 const NETWORK_OVERRIDE_KEY = 'jsbsim-multi-network-overrides-v1';
 function savedInitialOverrides(): FleetInitialOverrides {
-  try { return normalizeFleetInitialOverrides(JSON.parse(localStorage.getItem(INITIAL_OVERRIDE_KEY) || '{}')); }
+  try { return normalizeFleetInitialOverrides(JSON.parse(modelStorage.getItem(INITIAL_OVERRIDE_KEY) || '{}')); }
   catch { return {}; }
 }
 function savedNetworkOverrides(): FleetNetworkOverrides {
-  try { return normalizeFleetNetworkOverrides(JSON.parse(localStorage.getItem(NETWORK_OVERRIDE_KEY) || '{}')); }
+  try { return normalizeFleetNetworkOverrides(JSON.parse(modelStorage.getItem(NETWORK_OVERRIDE_KEY) || '{}')); }
   catch { return {}; }
 }
 function savedInstanceSlots(): Record<string, string> {
   try {
-    const stored = localStorage.getItem(SLOT_KEY);
+    const stored = modelStorage.getItem(SLOT_KEY);
     const slots = stored ? normalizeFleetSlots(JSON.parse(stored)) : defaultFleetSlots();
     if (!fleetSlotIds(slots).length) return defaultFleetSlots();
-    if (!stored && !slots['01']) slots['01'] = localStorage.getItem('jsbsim-remote-model') || '';
+    if (!stored && !slots['01']) slots['01'] = modelStorage.getItem('jsbsim-remote-model') || '';
     return slots;
   } catch {
     return defaultFleetSlots();
@@ -220,12 +221,12 @@ function AppContent() {
   const editingSubFileId = useFlowStore(state => state.editingSubFileId);
   const [showJsbsimLog, setShowJsbsimLog] = useState(false);
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
-  const [showNshPrints, setShowNshPrints] = useState(() => localStorage.getItem('jsbsim-log-show-nsh') === 'true');
+  const [showNshPrints, setShowNshPrints] = useState(() => modelStorage.getItem('jsbsim-log-show-nsh') === 'true');
   const nshCursor = useRef(0);
   const [logReservedHeight, setLogReservedHeight] = useState(82);
   const [dragType, setDragType] = useState<ComponentType | null>(null);
-  const [paletteCollapsed, setPaletteCollapsed] = useState(() => localStorage.getItem('jsbsim-palette-collapsed') === 'true');
-  const [paletteWidth, setPaletteWidth] = useState(() => Number(localStorage.getItem('jsbsim-palette-width') || 250));
+  const [paletteCollapsed, setPaletteCollapsed] = useState(() => modelStorage.getItem('jsbsim-palette-collapsed') === 'true');
+  const [paletteWidth, setPaletteWidth] = useState(() => Number(modelStorage.getItem('jsbsim-palette-width') || 250));
   const paletteResize = useRef<{ x: number; width: number } | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [showLogCenter, setShowLogCenter] = useState(false);
@@ -264,7 +265,7 @@ function AppContent() {
       clearTimeout(timer);
       timer = setTimeout(() => {
         const current = useFlowStore.getState();
-        localStorage.setItem('jsbsim-project', JSON.stringify({ nodes: current.nodes, edges: current.edges, aircraft: current.aircraft, subFiles: current.subFiles, xmlFiles: current.xmlFiles, xmlEditBaseline: cachedEditBaseline(current, current.xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
+        modelStorage.setItem('jsbsim-project', JSON.stringify({ nodes: current.nodes, edges: current.edges, aircraft: current.aircraft, subFiles: current.subFiles, xmlFiles: current.xmlFiles, xmlEditBaseline: cachedEditBaseline(current, current.xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
       }, 250);
     });
     return () => { stop(); clearTimeout(timer); };
@@ -288,11 +289,11 @@ function AppContent() {
         groundspeed_mps: editorSnapshot.groundspeed_mps } : null;
   const hudConnected = activeInstance === '01' ? connected : connected && !!editorSnapshot &&
     editorSnapshot.instance_id === activeInstance && (editorSnapshot.age_ms ?? Infinity) < 2000;
-  const [logPos, setLogPos] = useState<{ x: number; y: number }>(() => JSON.parse(localStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'));
+  const [logPos, setLogPos] = useState<{ x: number; y: number }>(() => JSON.parse(modelStorage.getItem('jsbsim-log-position') || '{"x":0,"y":0}'));
   const logDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const [draggingLog, setDraggingLog] = useState(false);
-  const [hudPos, setHudPos] = useState<{ x: number; y: number }>(() => JSON.parse(localStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
-  const [hudVisible, setHudVisible] = useState(() => localStorage.getItem('jsbsim-hud-visible') !== 'false');
+  const [hudPos, setHudPos] = useState<{ x: number; y: number }>(() => JSON.parse(modelStorage.getItem('jsbsim-hud-position') || '{"x":0,"y":0}'));
+  const [hudVisible, setHudVisible] = useState(() => modelStorage.getItem('jsbsim-hud-visible') !== 'false');
   const [draggingHud, setDraggingHud] = useState(false);
   const hudDrag = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const undoStack = useRef<any[]>([]);
@@ -302,14 +303,14 @@ function AppContent() {
   const applyingHistory = useRef(false);
   const copiedNode = useRef<any>(null);
 
-  useEffect(() => { localStorage.setItem(SLOT_KEY, JSON.stringify(instanceSlots)); }, [instanceSlots]);
-  useEffect(() => { localStorage.setItem(INITIAL_OVERRIDE_KEY, JSON.stringify(initialOverrides)); }, [initialOverrides]);
-  useEffect(() => { localStorage.setItem(NETWORK_OVERRIDE_KEY, JSON.stringify(networkOverrides)); }, [networkOverrides]);
-  useEffect(() => { localStorage.setItem('jsbsim-palette-collapsed', String(paletteCollapsed)); }, [paletteCollapsed]);
-  useEffect(() => { localStorage.setItem('jsbsim-palette-width', String(paletteWidth)); }, [paletteWidth]);
-  useEffect(() => { localStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
-  useEffect(() => { localStorage.setItem('jsbsim-hud-visible', String(hudVisible)); }, [hudVisible]);
-  useEffect(() => { localStorage.setItem('jsbsim-log-position', JSON.stringify(logPos)); }, [logPos]);
+  useEffect(() => { modelStorage.setItem(SLOT_KEY, JSON.stringify(instanceSlots)); }, [instanceSlots]);
+  useEffect(() => { modelStorage.setItem(INITIAL_OVERRIDE_KEY, JSON.stringify(initialOverrides)); }, [initialOverrides]);
+  useEffect(() => { modelStorage.setItem(NETWORK_OVERRIDE_KEY, JSON.stringify(networkOverrides)); }, [networkOverrides]);
+  useEffect(() => { modelStorage.setItem('jsbsim-palette-collapsed', String(paletteCollapsed)); }, [paletteCollapsed]);
+  useEffect(() => { modelStorage.setItem('jsbsim-palette-width', String(paletteWidth)); }, [paletteWidth]);
+  useEffect(() => { modelStorage.setItem('jsbsim-hud-position', JSON.stringify(hudPos)); }, [hudPos]);
+  useEffect(() => { modelStorage.setItem('jsbsim-hud-visible', String(hudVisible)); }, [hudVisible]);
+  useEffect(() => { modelStorage.setItem('jsbsim-log-position', JSON.stringify(logPos)); }, [logPos]);
   useEffect(() => {
     void initializeSimulatorTransport().catch(error => {
       console.error('[transport] unable to apply saved simulator transport', error);
@@ -319,7 +320,7 @@ function AppContent() {
     if (!isTauri) return;
     let active = true;
     const synchronize = () => {
-      const threshold = Math.max(1, Number(localStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
+      const threshold = Math.max(1, Number(modelStorage.getItem('jsbsim-time-sync-threshold-secs') || 60));
       void simSyncTime(threshold).then(result => {
         if (active && result.synchronized) {
           setJsbsimLogs(lines => [...lines, `[${new Date().toLocaleTimeString()}] 已自动同步仿真机时间（偏差 ${result.differenceSeconds}s）`].slice(-200));
@@ -533,7 +534,7 @@ function AppContent() {
         } else if (++failures >= 3) {
           setJsbsimLogs(lines => [...lines, `[NSH/USB] 读取失败：${String(error)}；请确认板端固件支持 USB 控制台镜像`].slice(-500));
           setShowNshPrints(false);
-          localStorage.setItem('jsbsim-log-show-nsh', 'false');
+          modelStorage.setItem('jsbsim-log-show-nsh', 'false');
         } else {
           timer = setTimeout(poll, 600);
         }
@@ -553,14 +554,14 @@ function AppContent() {
   const CACHE_VERSION = 2;
   useEffect(() => {
     try {
-      const ver = Number(localStorage.getItem('jsbsim-cache-version') || '0');
+      const ver = Number(modelStorage.getItem('jsbsim-cache-version') || '0');
       if (ver < CACHE_VERSION) {
-        localStorage.removeItem('jsbsim-project');
-        localStorage.removeItem('jsbsim-raw-xml');
-        localStorage.setItem('jsbsim-cache-version', String(CACHE_VERSION));
+        modelStorage.removeItem('jsbsim-project');
+        modelStorage.removeItem('jsbsim-raw-xml');
+        modelStorage.setItem('jsbsim-cache-version', String(CACHE_VERSION));
         return;
       }
-      const saved = localStorage.getItem('jsbsim-project');
+      const saved = modelStorage.getItem('jsbsim-project');
       if (saved) {
         const data = JSON.parse(saved);
         if (data && data.nodes && data.nodes.length > 0) {
@@ -580,7 +581,7 @@ function AppContent() {
       saveTimer.current = setTimeout(() => {
         try {
           const { nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline } = useFlowStore.getState();
-          localStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline: cachedEditBaseline({ nodes, edges, aircraft, subFiles, xmlFiles }, xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
+          modelStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline: cachedEditBaseline({ nodes, edges, aircraft, subFiles, xmlFiles }, xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
         } catch (e) {
           console.warn('[AutoSave] Failed:', e);
         }
@@ -663,9 +664,9 @@ function AppContent() {
   let baselineChannels: any[] | null = null;
   if (focusedModule) {
     try {
-      const model = localStorage.getItem('jsbsim-remote-model') || useFlowStore.getState().aircraft.name || '';
+      const model = modelStorage.getItem('jsbsim-remote-model') || useFlowStore.getState().aircraft.name || '';
       const key = `jsbsim-remote-baseline:${model.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
-      const baseline = JSON.parse(localStorage.getItem(key) || '{}');
+      const baseline = JSON.parse(modelStorage.getItem(key) || '{}');
       const old = baseline.nodes?.find((node: any) => node.id === focusedModule.id && node.data?.componentType === focusedModule.data.componentType);
       if (old) {
         const params = old.data.params || {};
@@ -885,7 +886,7 @@ function AppContent() {
        * the HUD by default but remains draggable like the HUD itself. */}
       {showJsbsimLog && (
         <div className="jsbsim-log-sidebar jsbsim-log-detached" style={logPos.x || logPos.y ? { transform: `translate(${logPos.x}px, ${logPos.y}px)` } : undefined}>
-          <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button, input, label')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><label className="jsbsim-log-nsh-toggle" title="通过 USB 显示板端调试控制台的打印"><input type="checkbox" checked={showNshPrints} onChange={event => { const enabled = event.target.checked; setShowNshPrints(enabled); localStorage.setItem('jsbsim-log-show-nsh', String(enabled)); }} />NSH 打印</label><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)}>×</button></div></div>
+          <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button, input, label')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><label className="jsbsim-log-nsh-toggle" title="通过 USB 显示板端调试控制台的打印"><input type="checkbox" checked={showNshPrints} onChange={event => { const enabled = event.target.checked; setShowNshPrints(enabled); modelStorage.setItem('jsbsim-log-show-nsh', String(enabled)); }} />NSH 打印</label><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)}>×</button></div></div>
           <div ref={logWindowRef} className="sim-log-window jsbsim-log-sidebar-window" onScroll={event => {
             const element = event.currentTarget;
             followLogTailRef.current =

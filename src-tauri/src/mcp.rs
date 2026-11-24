@@ -14,6 +14,12 @@ use tauri::{Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 
+#[path = "mcp_nsh.rs"]
+mod nsh_validation;
+
+#[path = "mcp_sim.rs"]
+mod sim_validation;
+
 const MAX_REQUEST: usize = 8 * 1024 * 1024;
 const BUILTIN: &str =
     include_str!("../../examples/flight-tests/morphquad-attitude/10_four_mode_complete.xml");
@@ -161,11 +167,65 @@ fn arguments(value: &Value, allowed: &[&str]) -> Result<(), String> {
 }
 async fn dispatch(app: tauri::AppHandle, name: &str, args: Value) -> Result<Value, String> {
     match name {
+        "upper_firmware_status" => {
+            arguments(&args, &[])?;
+            crate::run_blocking(|| { let ports=crate::px4_firmware::ports(); Ok(json!({"ports":ports.as_ref().ok(),"portsError":ports.as_ref().err(),"status":crate::px4_firmware::status()?})) }).await
+        }
+        "upper_firmware_prepare" => {
+            arguments(&args, &["path", "source"])?;
+            let source=args["source"].as_str().unwrap_or("simulator").to_owned();
+            if !["local","simulator"].contains(&source.as_str()){return Err("source must be local or simulator".into());}
+            let path = args["path"].as_str().filter(|s| !s.is_empty() && s.len() <= 4096).ok_or("An absolute .px4 path is required")?;
+            let path = std::path::PathBuf::from(path);
+            if !path.is_absolute() { return Err("An absolute .px4 path is required".into()); }
+            crate::run_blocking(move || {
+                let mut selected=json!(if source=="simulator"{crate::px4_firmware::remote_file(path.to_string_lossy().into_owned())?}else{crate::px4_firmware::local(&path)?});
+                selected["selectionId"]=selected["id"].clone();
+                Ok(selected)
+            }).await
+        }
+        "upper_firmware_start" => {
+            arguments(&args, &["selectionId", "simulator", "port"])?;
+            let simulator=args["simulator"].as_str().filter(|s|s.parse::<std::net::Ipv4Addr>().is_ok()).ok_or("A current simulator IPv4 is required")?.to_owned();
+            let id = args["selectionId"].as_u64().filter(|v| *v > 0).ok_or("A current firmware selectionId is required")?;
+            let port = args["port"].as_str().filter(|v| !v.is_empty() && v.len() <= 256).ok_or("A current USB port is required")?.to_owned();
+            let connection = crate::flight_test::connection_snapshot();
+            if connection["fresh"] == true && connection["armed"] != false { return Err("飞控已解锁或解锁状态未知，未开始刷写".into()); }
+            if SERVICE.get().ok_or("MCP service not ready")?.pending.lock().map_err(|e| e.to_string())?.len() > 0 { return Err("已有界面控制请求，请等待完成".into()); }
+            crate::run_blocking(move || {
+                let target = crate::px4_firmware::ports()?.into_iter().find(|p| p.path == port && p.simulator==simulator).ok_or("USB target changed; enumerate ports again")?;
+                Ok(json!(crate::px4_firmware::start(id, target)?))
+            }).await
+        }
+        "upper_firmware_cancel" => {
+            arguments(&args,&["id"])?;
+            Ok(json!(crate::px4_firmware::cancel(args["id"].as_u64().filter(|v|*v>0).ok_or("A current upgrade id is required")?)?))
+        }
+        "upper_sim_start" | "upper_sim_stop" => {
+            if name=="upper_sim_start" {let _=sim_validation::start(&args)?;} else {arguments(&args,&[])?;}
+            let connection=crate::flight_test::connection_snapshot();
+            if connection["fresh"]!=true || connection["armed"]!=false {return Err("模型启停需要新鲜且上锁的飞控连接".into());}
+            let test=crate::flight_test::status();
+            if matches!(test.status.as_str(),"running"|"preflight"|"exiting"){return Err("请先结束飞控测试，再启停模型".into());}
+            ui_request(&app,name,args).await
+        }
+        "upper_list_logs" | "upper_download_log" | "upper_cancel_log_download" => {
+            match name {
+                "upper_list_logs"=>arguments(&args,&[])?,
+                "upper_download_log"=>{let r=crate::mcp_logs::validate(args.clone())?;let _=(r.id,r.expected_size,r.expected_time);},
+                _=>{arguments(&args,&["jobId"])?;let id=args["jobId"].as_u64().filter(|v|*v>0).ok_or("Invalid jobId")?;if !crate::mcp_logs::status().is_some_and(|s|s.job_id==id){return Err("日志下载任务已变化".into());}}
+            }
+            ui_request(&app,name,args).await
+        }
+        "upper_nsh_command" => {
+            let (command, timeout) = nsh_validation::arguments(&args)?;
+            ui_request(&app, name, json!({"command":command,"timeoutMs":timeout})).await
+        }
         "upper_get_status" => {
             arguments(&args, &[])?;
             Ok(
                 json!({"connection":crate::flight_test::connection_snapshot(),"test":crate::flight_test::status(),
-                "scene":crate::scene_telemetry::snapshots(),"localSimulation":crate::local_sim::mcp_status(),"bridge":mcp_bridge_status()}),
+                "scene":crate::scene_telemetry::snapshots(),"simulation":crate::sim_status(app.clone())?,"localSimulation":crate::local_sim::mcp_status(),"logDownload":crate::mcp_logs::status(),"bridge":mcp_bridge_status()}),
             )
         }
         "upper_list_scripts" => {

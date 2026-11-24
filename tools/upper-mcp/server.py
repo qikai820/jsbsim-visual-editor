@@ -6,6 +6,8 @@ No MAVLink/USB/UDP access. The desktop remains the only device owner.
 import argparse
 import concurrent.futures
 import json
+import ipaddress
+import math
 import os
 from pathlib import Path
 import socket
@@ -27,6 +29,9 @@ def tool(name, description, properties=None, required=(), read_only=True):
 
 
 TOOLS = [
+    tool("upper_list_logs", "通过 PX4 工具箱现有连接读取机载日志列表；需要新鲜且上锁的连接。"),
+    tool("upper_download_log", "异步下载选定机载日志到应用数据目录 px4-logs；id/expectedSize/expectedTime 必须来自当前列表。复用唯一飞控连接，不弹保存框、不覆盖文件。通过 upper_get_status.logDownload 查看进度；失败不自动重启下载。", {"id":{"type":"integer","minimum":0,"maximum":65534},"expectedSize":{"type":"integer","minimum":16,"maximum":536870912},"expectedTime":{"type":"integer","minimum":0,"maximum":4294967295}}, ("id","expectedSize","expectedTime"), False),
+    tool("upper_cancel_log_download", "取消指定 jobId 的日志下载，清理未完成文件；不影响飞控解锁状态或仿真。", {"jobId":{"type":"integer","minimum":1}}, ("jobId",), False),
     tool("upper_get_status", "读取上位机已有飞控/视景缓存、数据年龄、共享测试状态和 MCP 调用记录；不向飞控追加遥测请求。"),
     tool("upper_list_scripts", "列出当前上位机构建内置的测试脚本。"),
     tool("upper_get_script", "读取内置脚本 XML。", {"script": BUILTIN}, ("script",)),
@@ -39,6 +44,17 @@ TOOLS = [
     tool("upper_get_report", "读取已退出测试的结果。默认省略轨迹和源 XML；使用 offset/limit 分页读取轨迹，每页最多 1000 点。",
          {"offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 0, "maximum": 1000}}),
     tool("upper_save_report", "将已退出测试的完整记录保存到上位机应用数据目录 test-reports，返回绝对路径。", read_only=False),
+    tool("upper_firmware_status", "读取升级进度和仿真机上的 USB 飞控目标；不打开电脑串口。"),
+    tool("upper_firmware_prepare", "从仿真机（默认）或本地校验并暂存 .px4 固件包，返回 selectionId 和板型；不刷写。",
+         {"path": {"type": "string", "minLength": 1, "maxLength": 4096}, "source":{"type":"string","enum":["simulator","local"]}}, ("path",), False),
+    tool("upper_firmware_start", "通过仿真机独占 USB 通道执行一次已选固件升级；需当前 selectionId、simulator 和 port；先停止模型、上锁飞控。等待 Bootloader，核对板型/容量，擦除写入后 CRC 校验。控制操作不要自动重试。",
+         {"selectionId": {"type": "integer", "minimum": 1}, "simulator":{"type":"string","minLength":7,"maxLength":15}, "port": {"type": "string", "minLength": 1, "maxLength": 256}}, ("selectionId", "simulator", "port"), False),
+    tool("upper_firmware_cancel", "取消当前升级的 Bootloader 等待；擦除开始后不能取消。", {"id":{"type":"integer","minimum":1}}, ("id",), False),
+    tool("upper_sim_start", "通过上位机现有任务机控制通道启动主实例模型一次；不另建 UDP/飞控连接。需要飞控连接新鲜且上锁、测试空闲。script 或显式地面坐标二选一；超时不重发。",
+         {"model":{"type":"string"},"script":{"type":"string"},"latitudeDeg":{"type":"number"},"longitudeDeg":{"type":"number"},"terrainAltitudeM":{"type":"number"},"rollDeg":{"type":"number"},"pitchDeg":{"type":"number"},"yawDeg":{"type":"number"}},("model",),False),
+    tool("upper_sim_stop", "通过上位机现有通道停止主实例一次；需要飞控上锁、测试空闲。UI 终止始终有效。",read_only=False),
+    tool("upper_nsh_command", "通过工具箱现有 NSH 会话执行一条非交互命令，返回输出及成功标记。需要新鲜双向连接且飞控未解锁，与测试/参数操作互斥；超时不自动重试。",
+         {"command": {"type": "string", "minLength": 1, "maxLength": 256}, "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 30000}}, ("command",), False),
 ]
 CATALOG = {item["name"]: item for item in TOOLS}
 
@@ -66,7 +82,7 @@ def validate(name, arguments):
     for key, value in arguments.items():
         spec = schema["properties"][key]
         good = {"string": isinstance(value, str), "boolean": type(value) is bool,
-                "integer": type(value) is int}[spec["type"]]
+                "integer": type(value) is int, "number": type(value) in (int,float) and math.isfinite(value)}[spec["type"]]
         if not good or ("enum" in spec and value not in spec["enum"]):
             raise ValueError("Invalid argument: " + key)
         if ("minimum" in spec and value < spec["minimum"]) or ("maximum" in spec and value > spec["maximum"]):
@@ -74,6 +90,17 @@ def validate(name, arguments):
     if name in ("upper_validate_script", "upper_start_test"):
         if ("source" in arguments) == ("script" in arguments) or arguments.get("source") == "":
             raise ValueError("Provide exactly one nonempty source or script")
+    if name == "upper_firmware_prepare":
+        if not arguments["path"] or len(arguments["path"]) > 4096 or not Path(arguments["path"]).is_absolute() or not arguments["path"].lower().endswith(".px4"):
+            raise ValueError("Provide an absolute .px4 path")
+    if name == "upper_firmware_start":
+        ipaddress.IPv4Address(arguments["simulator"])
+        if not arguments["port"] or len(arguments["port"]) > 256:
+            raise ValueError("Provide a current USB port")
+    if name == "upper_nsh_command":
+        command = arguments["command"]
+        if not command.strip() or len(command) > 256 or any(ord(c) < 32 or ord(c) == 127 for c in command):
+            raise ValueError("Provide one noninteractive command of at most 256 characters")
 
 
 def call_upper(endpoint, name, arguments):

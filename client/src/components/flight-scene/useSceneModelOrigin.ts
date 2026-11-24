@@ -74,15 +74,19 @@ async function readModelGround(model: string, signal: AbortSignal): Promise<Init
 }
 
 export type SceneModelOrigin = {
-  model: string; loading: boolean; error: string; origin?: Origin; groundSource?: string; refresh: () => void;
+  model: string; loading: boolean; error: string; origin?: Origin; groundSource?: string; runtime?: boolean; refresh: () => void;
 };
 
 export function useSceneModelOrigin(model: string, enabled: boolean,
-  applyOrigin: (origin: Origin | undefined) => void): SceneModelOrigin {
+  applyOrigin: (origin: Origin | undefined) => void, runtimeOrigin?: Origin): SceneModelOrigin {
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<Omit<SceneModelOrigin, 'refresh'>>({ model: '', loading: false, error: '' });
   useEffect(() => {
     if (!enabled) return;
+    if (runtimeOrigin) {
+      applyOrigin(runtimeOrigin);
+      return;
+    }
     applyOrigin(undefined);
     if (!model) { setResult({ model, loading: false, error: '' }); return; }
     if (!isTauri) { setResult({ model, loading: false, error: '请在桌面端连接仿真机后读取模型初始状态' }); return; }
@@ -106,6 +110,8 @@ export function useSceneModelOrigin(model: string, enabled: boolean,
         if (!controller.signal.aborted) setResult({ model, loading: false, error: `模型基准读取失败：${error instanceof Error ? error.message : String(error)}` });
       });
     return () => controller.abort();
-  }, [model, enabled, revision, applyOrigin]);
-  return { ...(result.model === model && enabled ? result : { model, loading: enabled && !!model, error: '' }), refresh: () => setRevision(value => value + 1) };
+  }, [model, enabled, revision, applyOrigin, runtimeOrigin]);
+  const current = enabled && runtimeOrigin ? { model, loading: false, error: '', origin: runtimeOrigin, runtime: true }
+    : result.model === model && enabled ? result : { model, loading: enabled && !!model, error: '' };
+  return { ...current, refresh: () => setRevision(value => value + 1) };
 }

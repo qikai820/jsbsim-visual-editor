@@ -51,7 +51,8 @@ function gridDraft(pose?: InitialPose): GridDraft {
 function readInitialPose(config: any): InitialPose {
   const pose = Object.fromEntries(INITIAL_FIELDS.map(([key]) => [key,
     typeof config?.initial?.[key] === 'number' ? config.initial[key] : 0])) as InitialPose;
-  pose.latitudeDeg = modelGeocentricToGpsLatitude(pose.latitudeDeg, pose.altitudeM);
+  if (config?.initial?.latitudeKind !== 'geodetic')
+    pose.latitudeDeg = modelGeocentricToGpsLatitude(pose.latitudeDeg, pose.altitudeM);
   return pose;
 }
 

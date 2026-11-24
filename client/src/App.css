@@ -73,8 +73,8 @@ html, body, #root {
 .toolbar {
   --toolbar-control-height: 32px;
   --toolbar-control-radius: 7px;
-  display: flex; align-items: center; justify-content: space-between;
-  height: 48px; padding: 0 10px 0 12px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px;
+  min-height: 48px; padding: 8px 10px 8px 12px;
   background-color: rgba(255, 255, 255, .72);
   backdrop-filter: blur(14px) saturate(1.2);
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
@@ -82,9 +82,17 @@ html, body, #root {
   box-shadow: 0 1px 4px rgba(31, 52, 68, .06);
   flex-shrink: 0; z-index: 2300;
 }
+.toolbar-content { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+/* Keep native controls outside the menus' intrinsic width, including when they wrap. */
+.toolbar > .native-window-controls { grid-column: 2; grid-row: 1; max-width: 100%; min-width: 0; margin-left: 0; }
+@media (max-width: 640px) {
+  .toolbar { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .toolbar > .native-window-controls { grid-column: 1; justify-self: end; }
+  .toolbar:has(> .native-window-controls) > .toolbar-content { grid-row: 2; }
+}
 .window-controls { display: flex; align-items: center; gap: 5px; margin-left: 12px; }
 .window-controls, .window-controls * { -webkit-app-region: no-drag; }
-.toolbar .window-controls button { display: grid; place-items: center; width: 32px; height: var(--toolbar-control-height); padding: 0; border: 1px solid #dde5ec; border-radius: var(--toolbar-control-radius); background: #f5f8fa; color: #637585; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }
+.toolbar .window-controls button { display: grid; flex: 0 1 32px; place-items: center; width: 32px; min-width: 0; height: var(--toolbar-control-height); padding: 0; border: 1px solid #dde5ec; border-radius: var(--toolbar-control-radius); background: #f5f8fa; color: #637585; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }
 .toolbar .window-controls button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
 .toolbar .window-controls button:hover { background: #eaf1f5; border-color: #c7d5df; color: #294758; }
 .toolbar .window-controls button:active { transform: translateY(0); background: #dfe9ef; }
@@ -201,7 +209,8 @@ html, body, #root {
 .mcap-variable-list label { display: flex; gap: 7px; align-items: center; min-height: 24px; padding: 2px 3px; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #445866; }
 .mcap-variable-list label:hover { background: #edf7fc; }
 .mcap-variable-empty { display: block; padding: 10px 3px; color: #8294a2; font-size: 11px; }
-.toolbar-center { margin-right: auto; gap: 6px; }
+.toolbar-center { flex: 1; min-width: 0; flex-wrap: wrap; margin-right: auto; gap: 6px; }
+.toolbar-right { flex-wrap: wrap; margin-left: auto; }
 
 .toolbar-title {
   font-size: 15px; font-weight: 700; color: var(--accent);
@@ -2527,6 +2536,7 @@ html, body, #root {
 .sim-config-dialog>header button:disabled,.simulator-version-card>button:disabled,.sim-config-layout nav button:disabled{cursor:not-allowed;opacity:.5}
 .sim-config-layout{display:grid;grid-template-columns:170px 1fr;flex:1;min-height:0}.sim-config-layout nav{display:flex;flex-direction:column;gap:4px;padding:12px;border-right:1px solid #e2e8f0;background:#f8fafc}.sim-config-layout nav button{padding:9px 11px;border:0;border-radius:6px;background:transparent;color:#475569;text-align:left;font-size:12px;cursor:pointer}.sim-config-layout nav button:hover{background:#e2e8f0}.sim-config-layout nav button.active{background:#2563eb;color:#fff;font-weight:700}
 .sim-config-layout main{overflow:auto;padding:20px 24px}.sim-config-layout section h3{margin:0 0 5px;font-size:16px}.sim-config-layout section>p{margin:0 0 16px;color:#94a3b8;font-size:11px}.sim-config-grid{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:13px 20px;margin-top:16px}.sim-config-field{display:flex;flex-direction:column;gap:5px}.sim-config-field>span{color:#64748b;font-size:11px;font-weight:600}.sim-config-field>div{display:flex;align-items:center}.sim-config-field input,.sim-config-field select,.sim-config-field>select{width:100%;height:34px;padding:6px 9px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;color:#1e293b;font-size:12px;outline:none}.sim-config-field input:focus,.sim-config-field select:focus{border-color:#3b82f6;background:#fff;box-shadow:0 0 0 2px #dbeafe}.sim-config-field em{min-width:42px;margin-left:-43px;color:#94a3b8;font:10px monospace;pointer-events:none}.sim-config-check{display:flex;align-items:center;gap:7px;min-height:34px;color:#475569;font-size:12px}.sim-config-check input{accent-color:#2563eb}.sim-config-readonly{margin-top:16px;padding:9px 11px;border-radius:6px;background:#f1f5f9;color:#64748b;font:11px monospace}
+.sim-config-default-position-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:16px}.sim-config-default-position-actions small{color:#64748b}.sim-config-model-initial{margin-top:28px;padding-top:20px;border-top:1px solid #e2e8f0}
 .sim-config-plotjuggler{display:flex;flex-direction:column;gap:7px;margin-top:22px;padding-top:16px;border-top:1px solid #e2e8f0}.sim-config-plotjuggler>label{color:#334155;font-size:12px;font-weight:700}.sim-config-plotjuggler>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sim-config-plotjuggler input{width:90px;height:34px;padding:6px 9px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;color:#1e293b;font-size:12px}.sim-config-plotjuggler button{height:34px;padding:0 12px;border:1px solid #2563eb;border-radius:6px;background:#2563eb;color:#fff;font-size:12px;cursor:pointer}.sim-config-plotjuggler button:disabled{opacity:.5;cursor:not-allowed}.sim-config-plotjuggler>div>span,.sim-config-plotjuggler small,.sim-config-plotjuggler p{color:#64748b;font-size:11px}.sim-config-plotjuggler p{margin:0;line-height:1.5}
 .sim-config-dialog>footer{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;border-top:1px solid #e2e8f0;background:#f8fafc}.sim-config-dialog>footer>span{color:#64748b;font-size:11px}.sim-config-dialog>footer>div{display:flex;gap:8px}.sim-config-dialog>footer button{padding:7px 13px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#475569;cursor:pointer}.sim-config-dialog>footer button.primary{border-color:#2563eb;background:#2563eb;color:#fff}.sim-config-dialog>footer button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:700px){.sim-config-layout{grid-template-columns:130px 1fr}.sim-config-grid{grid-template-columns:1fr}.sim-config-layout main{padding:16px}}

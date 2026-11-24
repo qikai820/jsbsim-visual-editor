@@ -1,5 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod native_extensions;
 mod scene_collision;
 
 mod disabled_xml;
@@ -38,12 +39,14 @@ mod model_read;
 mod model_launch;
 mod firmware_picker;
 mod firmware_update;
+mod px4_firmware;
 mod usb_file_picker;
 mod usb_file_editor;
 mod serial_assistant;
 mod tool_transport;
 mod flight_test;
 mod mcp;
+mod mcp_logs;
 mod px4_files;
 mod px4_sitl;
 mod local_sim;
@@ -584,6 +587,19 @@ fn sim_start_blocking(
          * Do not hold this shared mutex
          * while the background command waits for board confirmation. */
         let client = state.sim_client.lock().map_err(|e| e.to_string())?.clone();
+        // Check both inline and file-backed native contact components.
+        if let Some(directory) = model.as_deref().map(|name|name.trim_end_matches(".xml")).filter(|name| !name.is_empty() && name.len()<64 &&
+            name.bytes().all(|b| b.is_ascii_alphanumeric() || b==b'_' || b==b'-')) {
+            let path=format!("aircraft/{directory}/{directory}.xml");
+            if let Ok(xml)=ftp_sync::download_path(&path) {
+                if native_extensions::requires_moving_platform(directory,&xml,ftp_sync::download_path)? {
+                    let capabilities=nsh_execute_inner("jsbsim --hil-capabilities")?;
+                    if !capabilities.split_whitespace().any(|token|token=="moving_platform_version=1") {
+                        return Err("该模型需要移动平台 C++ 模块 v1，请先升级任务机固件。".into());
+                    }
+                }
+            }
+        }
         // MCAP chooses its directory and filename as soon as the bridge loads
         // a model. Synchronize the board clock first so a stale boot clock
         // cannot create logs under an old date such as 2022-03-01.
@@ -1725,6 +1741,12 @@ fn main() {
             firmware_apply,
             firmware_info,
             firmware_rollback,
+            px4_firmware::px4_firmware_ports,
+            px4_firmware::px4_firmware_status,
+            px4_firmware::px4_firmware_pick,
+            px4_firmware::px4_firmware_remote,
+            px4_firmware::px4_firmware_start,
+            px4_firmware::px4_firmware_cancel,
             simulator_transport_get,
             simulator_network_target_get,
             px4_router_read,
@@ -1744,6 +1766,9 @@ fn main() {
             flight_test::flight_test_stop,
             flight_test::flight_test_report,
             px4_files::px4_log_begin,
+            px4_files::px4_log_begin_managed,
+            px4_files::px4_log_transfer_error,
+            px4_files::px4_log_transfer_received,
             px4_files::px4_log_write,
             px4_files::px4_log_finish,
             px4_files::px4_log_cancel,
@@ -1778,12 +1803,23 @@ fn main() {
             if window.label() == "main"
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
+                if px4_firmware::busy() {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); }
+                    if let Some(toolbox) = window.app_handle().get_webview_window("px4-toolbox") { let _ = toolbox.show(); let _ = toolbox.set_focus(); }
+                    return;
+                }
                 window.app_handle().exit(0);
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_, event| {
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                if px4_firmware::busy() {
+                    api.prevent_exit();
+                    if let Some(toolbox) = app.get_webview_window("px4-toolbox") { let _ = toolbox.show(); let _ = toolbox.set_focus(); }
+                }
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 voice::shutdown();
                 let _ = px4_sitl::global().stop();

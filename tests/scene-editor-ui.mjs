@@ -13,7 +13,7 @@ const rootsModule = new URL(`../client/${name}-roots.ts`, import.meta.url);
 const profile = await mkdtemp(path.join(tmpdir(), 'flight-scene-chrome-'));
 await writeFile(html, `<html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="/${name}.tsx"></script></body></html>`);
 await writeFile(rootsModule, `export {_roots as roots} from '@react-three/fiber';`);
-await writeFile(module, `import React from 'react';import{createRoot}from'react-dom/client';import{_roots}from'@react-three/fiber';import FlightScene from './src/components/flight-scene/FlightScene';import{sceneGroundFromInitialXml}from'./src/components/flight-scene/useSceneModelOrigin';import './src/App.css';window.__sceneRoots=_roots;window.__readSceneGround=sceneGroundFromInitialXml;function Harness(){return <div style={{display:'flex',height:'100vh'}}><FlightScene onClose={()=>{}} slots={{'01':'voliro_t','02':'F450','03':'slow','04':'broken'}} /></div>}createRoot(document.getElementById('root')).render(<Harness/>);`);
+await writeFile(module, `import React from 'react';import{createRoot}from'react-dom/client';import{_roots}from'@react-three/fiber';import FlightScene from './src/components/flight-scene/FlightScene';import{sceneGroundFromInitialXml}from'./src/components/flight-scene/useSceneModelOrigin';import './src/App.css';window.__sceneRoots=_roots;window.__readSceneGround=sceneGroundFromInitialXml;function Harness(){return <div style={{display:'flex',height:'100vh'}}><FlightScene onClose={()=>{}} slots={{'01':'voliro_t','02':'F450','03':'slow','04':'broken','05':'XCD20_FlightIdentified'}} /></div>}createRoot(document.getElementById('root')).render(<Harness/>);`);
 const chrome = spawn('/usr/bin/google-chrome-stable', ['--headless=new', '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-first-run', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
 let ws;
 try {
@@ -41,8 +41,10 @@ try {
       if(command==='plugin:event|unlisten'){window.__events.get(args.event)?.delete(args.eventId);return}
       if(command==='ftp_list_xml_parent')return{exists:true,files:window.__noGround?['reset.xml']:['initfile.xml','reset.xml']};
       if(command==='ftp_download_xml'){
+        if(window.__noGround)return{path:args.path,content:'<initialize/>'};
+        if(args.path.includes('/XCD20_FlightIdentified/'))return{path:args.path,content:'<initialize><latitude type="geodetic" unit="DEG">34.07186987</latitude><longitude unit="DEG">108.99735379</longitude><elevation unit="M">582.57</elevation></initialize>'};
         if(window.__f450Ground && args.path.includes('/F450/'))return{path:args.path,content:'<initialize><latitude type="geodetic" unit="DEG">44.725801</latitude><longitude unit="DEG">-93.075866</longitude><altitude unit="M">0</altitude><elevation unit="M">285.2111</elevation></initialize>'};
-        return{path:args.path,content:window.__noGround?'<initialize/>':'<initialize><elevation unit="M">'+(args.path.includes('/voliro_t/')?582.57:0)+'</elevation><altitude unit="M">0.5</altitude></initialize>'};
+        return{path:args.path,content:'<initialize><elevation unit="M">'+(args.path.includes('/voliro_t/')?582.57:0)+'</elevation><altitude unit="M">0.5</altitude></initialize>'};
       }
       if(command==='ftp_download_sim_config'){
         window.__configReads=(window.__configReads||0)+1;
@@ -109,6 +111,22 @@ try {
   await until(`document.body.innerText.includes('已从 F450 的初始状态自动获取')`);
   assert.deepEqual((await evaluate(geoFields)).map(Number),[44.725801,-93.075866,285.2111],
     'zero JSON coordinates retain the ground script location and elevation');
+  await evaluate(`document.querySelector('[data-aircraft="05"]').click()`);
+  await until(`document.body.innerText.includes('已从 XCD20_FlightIdentified 的初始状态自动获取')`);
+  assert.equal((await evaluate(geoFields))[2], '582.57');
+  await evaluate(`window.__xcdGround={instance_id:'05',model:'XCD20_FlightIdentified',tree_generation:2,scene_epoch:1,timestamp:1,state:'running',latitude_deg:0,longitude_deg:0,altitude_m:.248,roll_deg:0,pitch_deg:0,yaw_deg:0,properties:{'position/terrain-elevation-asl-ft':0},scene_property_age_ms:{'position/terrain-elevation-asl-ft':0}};window.__emit('scene-frames',[window.__xcdGround])`);
+  await until(`document.body.innerText.includes('已使用本次仿真首次测得的地面和位置')`);
+  assert.deepEqual(await evaluate(geoFields), ['0','0','0']);
+  await until(`(()=>{const scene=(${rootState}).scene,aircraft=scene.getObjectByName('scene-aircraft-05'),shade=scene.getObjectByName('scene-ground-shade-05');return aircraft && shade?.visible && Math.abs(aircraft.position.y-.248)<1e-6 && Math.abs(shade.position.y-.05)<1e-6})()`);
+  await evaluate(`window.__emit('scene-frames',[{...window.__xcdGround,timestamp:2,altitude_m:12}])`);
+  await until(`(${rootState}).scene.getObjectByName('scene-aircraft-05').position.y>1`);
+  assert.deepEqual(await evaluate(geoFields), ['0','0','0'], 'climbing does not move the automatic map datum');
+  await setNumber('基准海拔',12);
+  await evaluate(`window.__emit('scene-frames',[{...window.__xcdGround,scene_epoch:2,altitude_m:2.248,properties:{'position/terrain-elevation-asl-ft':2/.3048}}])`);
+  await until(`document.body.innerText.includes('当前使用场景保存或手动设置的基准')`);
+  assert.equal((await evaluate(geoFields))[2], '12', 'manual datum survives an instance restart');
+  await clickText('使用本次仿真的地图基准');
+  await until(`(${geoFields})[2]==='2'`);
   await evaluate(`document.querySelector('[data-aircraft="03"]').click()`);
   await until(`window.__releaseConfig && document.body.innerText.includes('正在从 slow 读取初始位置')`);
   assert.deepEqual(await evaluate(geoFields),['','',''],'pending config is never represented by zero coordinates');

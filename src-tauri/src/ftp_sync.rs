@@ -1141,7 +1141,11 @@ mod tests {
 
 /// Firmware-only FTP account stages in RAM, independently of SIMDATA.
 /// Pin the host chosen before upload; do not rediscover or fall back mid-update.
-pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], mut progress: impl FnMut(u64)) -> Result<(), String> {
+pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], progress: impl FnMut(u64)) -> Result<(), String> {
+    upload_firmware_at((host, 21).into(), "nuttx.bin", bytes, progress)
+}
+
+fn upload_firmware_at(address: std::net::SocketAddr, file_name: &str, bytes: &[u8], mut progress: impl FnMut(u64)) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
     use std::net::{SocketAddr, TcpStream, Shutdown};
     fn reply(control: &mut BufReader<TcpStream>) -> Result<(u16,String),String> {
@@ -1167,7 +1171,7 @@ pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], mut progre
         Ok(text)
     }
     let _guard=FTP_LOCK.lock().map_err(|e|e.to_string())?;
-    let socket=TcpStream::connect_timeout(&SocketAddr::from((host,21)),Duration::from_secs(3)).map_err(|e|e.to_string())?;
+    let socket=TcpStream::connect_timeout(&address,Duration::from_secs(3)).map_err(|e|e.to_string())?;
     socket.set_read_timeout(Some(Duration::from_secs(30))).map_err(|e|e.to_string())?;
     socket.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e|e.to_string())?;
     let mut control=BufReader::new(socket);
@@ -1180,8 +1184,13 @@ pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], mut progre
     let response=command(&mut control,&format!("USER {user}"),&[230,331])?;
     if response.starts_with("331") {command(&mut control,&format!("PASS {password}"),&[230])?;}
     command(&mut control,"TYPE I",&[200])?;
-    command(&mut control,"MKD fireware",&[257,250,550,521])?;
-    command(&mut control,"CWD fireware",&[250])?;
+    // NuttX may reset the connection on MKD of an existing directory.
+    // Probe it first so another upgrade can reuse a previous RAM staging area.
+    let cwd=command(&mut control,"CWD fireware",&[250,550])?;
+    if cwd.starts_with("550") {
+        command(&mut control,"MKD fireware",&[257,250])?;
+        command(&mut control,"CWD fireware",&[250])?;
+    }
     let pasv=command(&mut control,"PASV",&[227])?;
     let tuple=pasv.split_once('(').and_then(|(_,r)|r.split_once(')')).map(|(v,_)|v).ok_or("Invalid FTP passive reply")?;
     let values=tuple.split(',').map(|s|s.trim().parse::<u8>()).collect::<Result<Vec<_>,_>>().map_err(|_|"Invalid FTP passive port")?;
@@ -1189,17 +1198,21 @@ pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], mut progre
     let port=u16::from(values[4])*256+u16::from(values[5]);
     if port==0 {return Err("Invalid FTP passive port".into());}
     // Pin data connection to the verified board instead of trusting PASV's IP.
-    let mut data=TcpStream::connect_timeout(&SocketAddr::from((host,port)),Duration::from_secs(3)).map_err(|e|e.to_string())?;
+    let mut data=TcpStream::connect_timeout(&SocketAddr::new(address.ip(),port),Duration::from_secs(3)).map_err(|e|e.to_string())?;
     data.set_nodelay(true).map_err(|e|e.to_string())?;
     data.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e|e.to_string())?;
-    command(&mut control,"STOR nuttx.bin",&[125,150])?;
+    command(&mut control,&format!("STOR {file_name}"),&[125,150])?;
     let mut done=0u64;let mut notified=0u64;
-    for chunk in bytes.chunks(1024) {
+    // Firmware stages in RAM, not the slower model filesystem. Match the
+    // board's 16 KiB FTP buffer while retaining a 5 ms polling drain interval.
+    // The old 1 KiB bursts capped uploads at 200 KiB/s regardless of link speed.
+    for chunk in bytes.chunks(16 * 1024) {
         data.write_all(chunk).map_err(|e|e.to_string())?;
         done+=chunk.len() as u64;
         if done-notified>=65536 || done==bytes.len() as u64 {progress(done);notified=done;}
-        // Avoid bursts overflowing the NuttX polling receive path.
-        std::thread::sleep(Duration::from_millis(5));
+        if done < bytes.len() as u64 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
     data.shutdown(Shutdown::Write).map_err(|e|e.to_string())?;
     drop(data);
@@ -1207,4 +1220,68 @@ pub(crate) fn upload_firmware(host: std::net::Ipv4Addr, bytes: &[u8], mut progre
     if code!=226 && code!=250 {return Err(format!("FTP upload incomplete ({code})"));}
     command(&mut control,"QUIT",&[221])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod firmware_upload_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read};
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    #[test]
+    fn firmware_upload_is_fast_complete_and_requires_server_success() {
+        for completion in [226, 451] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let expected: Vec<u8> = (0..1024 * 1024 + 37).map(|i| (i % 251) as u8).collect();
+            let expected_server = expected.clone();
+            let board = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut control = BufReader::new(socket.try_clone().unwrap());
+                socket.write_all(b"220 Fixture ready\r\n").unwrap();
+                let data_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let port = data_listener.local_addr().unwrap().port();
+                let mut bytes = Vec::new();
+                let mut stor_count = 0;
+                loop {
+                    let mut line = String::new();
+                    if control.read_line(&mut line).unwrap() == 0 { break; }
+                    let response = if line.starts_with("USER ") { "331 Password required\r\n".into() }
+                    else if line.starts_with("PASS ") { "230 Logged in\r\n".into() }
+                    else { match line.trim() {
+                        "TYPE I" => "200 Binary\r\n".into(),
+                        "CWD fireware" => "250 Already exists\r\n".into(),
+                        // A different advertised IP must not redirect the upload.
+                        "PASV" => format!("227 Passive (192,0,2,123,{},{})\r\n", port / 256, port % 256),
+                        "STOR speed-check.tmp" => {
+                            stor_count += 1;
+                            socket.write_all(b"150 Send data\r\n").unwrap();
+                            let (mut data, _) = data_listener.accept().unwrap();
+                            data.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                            data.read_to_end(&mut bytes).unwrap();
+                            format!("{completion} Transfer finished\r\n")
+                        },
+                        "QUIT" => { socket.write_all(b"221 Bye\r\n").unwrap(); break; },
+                        other => panic!("unexpected FTP command: {other}"),
+                    }};
+                    socket.write_all(response.as_bytes()).unwrap();
+                }
+                assert_eq!(stor_count, 1, "failed transfers must not be replayed");
+                assert_eq!(bytes, expected_server, "server must receive every byte including the final partial chunk");
+            });
+            let mut events = Vec::new();
+            let started = Instant::now();
+            let result = upload_firmware_at(address, "speed-check.tmp", &expected, |done| events.push(done));
+            let elapsed = started.elapsed();
+            board.join().unwrap();
+            if completion == 226 { result.unwrap(); }
+            else { assert!(result.unwrap_err().contains("incomplete (451)")); }
+            assert!(elapsed < Duration::from_secs(3), "1 MiB upload still has the old 200 KiB/s ceiling: {elapsed:?}");
+            assert_eq!(events.last().copied(), Some(expected.len() as u64));
+            assert!(events.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(events.iter().any(|&done| done > 0 && done < expected.len() as u64));
+        }
+    }
 }

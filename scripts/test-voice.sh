@@ -10,6 +10,7 @@ if [[ "$voice_test_mode" != ui ]]; then
   node tests/voice-actions.mjs
   node tests/voice-runtime.mjs
   python3 tests/voice-asr-service.py
+  python3 tests/voice-tts-service.py
   if [[ -x .toolchains/voice/bin/python ]]; then
     .toolchains/voice/bin/python tests/voice-proxy.py
     if .toolchains/voice/bin/python -c 'import av, numpy' >/dev/null 2>&1; then

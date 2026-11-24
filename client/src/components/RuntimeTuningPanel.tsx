@@ -1,6 +1,7 @@
-import { automaticRuntimeTuningSuppressed } from '../sim/runtimeTuningOrigin';
+import { automaticRuntimeTuningSuppressed, projectForAutomaticRuntimeTuning } from '../sim/runtimeTuningOrigin';
 import { useEffect, useMemo, useState } from 'react';
 import { useFlowStore } from '../store/flowStore';
+import { useSignalMonitorStore } from '../store/signalMonitorStore';
 import { useRuntimeTuningStore, refreshRuntimeSnapshot, submitRuntimeEdits } from '../store/runtimeTuningStore';
 import { projectParameterChanges, projectParameterDiagnostics } from '../sim/runtimeParameters';
 import { isTauri } from '../utils/tauriApi';
@@ -9,10 +10,11 @@ export default function RuntimeTuningPanel() {
   const nodes = useFlowStore(project => project.nodes);
   const edges = useFlowStore(project => project.edges);
   const [runningBaseline, setRunningBaseline] = useState<any>(null);
+  const tunableProject = useMemo(() => projectForAutomaticRuntimeTuning({ nodes, edges }), [nodes, edges]);
   const currentEdits = useMemo(() => runningBaseline
-    ? projectParameterChanges(runningBaseline, { nodes, edges }, runningBaseline) : [], [runningBaseline, nodes, edges]);
+    ? projectParameterChanges(runningBaseline, tunableProject, runningBaseline) : [], [runningBaseline, tunableProject]);
   const diagnostics = useMemo(() => runningBaseline
-    ? projectParameterDiagnostics(runningBaseline, { nodes, edges }, runningBaseline) : [], [runningBaseline, nodes, edges]);
+    ? projectParameterDiagnostics(runningBaseline, tunableProject, runningBaseline) : [], [runningBaseline, tunableProject]);
   useEffect(() => {
     if (!isTauri) return;
     let alive = true;
@@ -23,25 +25,38 @@ export default function RuntimeTuningPanel() {
       if (snapshot && snapshot.tuning.session !== session) {
         session = snapshot.tuning.session;
         const project = useFlowStore.getState();
-        runningProject = project.xmlEditBaseline || project;
+        runningProject = project.xmlEditBaseline || projectForAutomaticRuntimeTuning(project);
         setRunningBaseline(runningProject);
       }
     } catch {} };
     void poll(); const timer = setInterval(poll, 500);
     // Numeric controls commit on Enter / blur. Coalesce paired field commits.
-    let pending: ReturnType<typeof setTimeout> | undefined, baseline: any;
+    type Project = ReturnType<typeof useFlowStore.getState>;
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    let batch: { before: Project; after: Project; instance: number } | undefined;
     const stop = useFlowStore.subscribe((next, previous) => {
+      if (next.xmlEditBaseline !== previous.xmlEditBaseline || next.aircraft !== previous.aircraft) {
+        clearTimeout(pending);
+        batch = undefined;
+        return;
+      }
       if (automaticRuntimeTuningSuppressed()) return;
-      if (next.nodes === previous.nodes || next.xmlEditBaseline !== previous.xmlEditBaseline || next.aircraft !== previous.aircraft) return;
-      const edits = projectParameterChanges(previous, next, runningProject || previous);
+      if (next.nodes === previous.nodes) return;
+      const before = projectForAutomaticRuntimeTuning(previous), after = projectForAutomaticRuntimeTuning(next);
+      if (batch) batch.after = after;
+      const edits = projectParameterChanges(before, after, runningProject || before);
       if (!edits.length) {
-        const reasons = projectParameterDiagnostics(previous,next,runningProject || previous);
+        const reasons = projectParameterDiagnostics(before, after, runningProject || before);
         if (reasons.length && useRuntimeTuningStore.getState().enabled) useRuntimeTuningStore.setState({message:reasons.join('；'),error:true});
         return;
       }
-      baseline ||= previous;
+      batch ||= { before, after, instance: Number(useSignalMonitorStore.getState().instance) };
       clearTimeout(pending);
-      pending = setTimeout(() => { const before = baseline; baseline = undefined; submitRuntimeEdits(projectParameterChanges(before, useFlowStore.getState(), runningProject || before)); }, 250);
+      pending = setTimeout(() => {
+        const edits = batch;
+        batch = undefined;
+        if (edits) submitRuntimeEdits(projectParameterChanges(edits.before, edits.after, runningProject || edits.before), undefined, edits.instance);
+      }, 250);
     });
     return () => { alive = false; clearInterval(timer); clearTimeout(pending); stop(); };
   }, []);

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { synchronizeTablePatch } from '../sim/runtimeTables';
+import { trackRuntimeDraftParameters } from '../sim/runtimeTuningOrigin';
 import { withoutLegacyForwarders, removeLegacyForwarderXml } from '../utils/legacyForwarder';
 import { restoreHilTransport } from '../utils/restoreHilTransport';
 import { useSignalMonitorStore } from './signalMonitorStore';
@@ -29,7 +30,7 @@ interface FlowState {
   updateEdgeData: (id: string, patch: Record<string, any>) => void;
   addNode: (type: ComponentType, position: { x: number; y: number }) => void;
   removeNode: (id: string) => void;
-  updateNodeParams: (id: string, params: Record<string, any>) => void;
+  updateNodeParams: (id: string, params: Record<string, any>, options?: { draftOnly?: boolean }) => void;
   setSelectedNode: (id: string | null) => void;
   setFocusedNodeId: (id: string | null) => void;
   setAircraft: (aircraft: { name: string; version: string; release: string }) => void;
@@ -321,7 +322,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     });
   },
 
-  updateNodeParams: (id, params) => {
+  updateNodeParams: (id, params, options) => {
     const state = get();
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
@@ -346,7 +347,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       // JSBSim uses the thruster location. The engine card displays its linked
       // thruster's location as a convenience; update the real owner as well.
       if (physical && linked.has(n.id) && ['engine','propeller'].includes(n.data.componentType) && changedKeys.includes('location')) patch={...patch,location:params.location};
-      return Object.keys(patch).length ? {...n,data:{...n.data,params:{...n.data.params,...patch}}} : n;
+      const keys = Object.keys(patch);
+      if (!keys.length) return n;
+      const nextParams = { ...n.data.params, ...patch };
+      trackRuntimeDraftParameters(n.data.params, nextParams, keys, options?.draftOnly === true);
+      return { ...n, data: { ...n.data, params: nextParams } };
     });
     set({ nodes: nextNodes });
   },

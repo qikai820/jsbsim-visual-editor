@@ -94,8 +94,10 @@ export default function SceneEditorPanel({ model, modelOrigin, sceneLoaded, scen
         {modelOrigin && <div className="scene-muted">
           {modelOrigin.loading ? <p>正在从 {model} 读取初始位置…</p>
             : modelOrigin.error ? <><p role="alert">{modelOrigin.error}</p><button className="scene-action" onClick={modelOrigin.refresh}>重新读取模型基准</button></>
-            : modelOrigin.origin ? editor.document.georeference === modelOrigin.origin ? <p>已从 {model} 的初始状态自动获取地图基准；地面海拔来自 {modelOrigin.groundSource}。</p>
-              : <><p>当前使用场景保存或手动设置的基准。</p><button className="scene-action" onClick={() => editor.applyModelOrigin(modelOrigin.origin, true)}>使用 {model} 的模型基准</button></>
+            : modelOrigin.origin ? editor.document.georeference === modelOrigin.origin
+              ? <p>{modelOrigin.runtime ? '已使用本次仿真首次测得的地面和位置作为地图基准。'
+                : `已从 ${model} 的初始状态自动获取地图基准，地面海拔来自 ${modelOrigin.groundSource}。`}</p>
+              : <><p>当前使用场景保存或手动设置的基准。</p><button className="scene-action" onClick={() => editor.applyModelOrigin(modelOrigin.origin, true)}>{modelOrigin.runtime ? '使用本次仿真的地图基准' : `使用 ${model} 的模型基准`}</button></>
             : <p>选择仿真模型后自动获取初始位置。</p>}
         </div>}
         {(['latitude', 'longitude', 'altitude'] as const).map((key, i) => <label key={key}>{['原点纬度 / °', '原点经度 / °', '基准海拔 / m'][i]}

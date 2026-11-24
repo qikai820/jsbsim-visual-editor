@@ -1,3 +1,4 @@
+import { migrateModelStorage } from './utils/modelStorage';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
@@ -6,6 +7,7 @@ import { trimBrowserCaches } from './utils/browserCache';
 import { NativePx4Toolbox } from './components/Px4ToolboxWindow';
 
 trimBrowserCaches();
+migrateModelStorage();
 installDisplayScaling();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

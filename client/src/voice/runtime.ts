@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ftpDownloadScript, getSimulatorNetworkTarget, getSimulatorTransportMode, simGetStatus, simListModels, simListTests, simPause, simRestart, simResume, simStart, simStop } from '../utils/tauriApi';
+import { ftpDownloadScript, getSimulatorNetworkTarget, getSimulatorTransportMode, simGetStatus, simInstanceSnapshot, simListModels, simListTests, simPause, simRestart, simResume, simStart, simStop } from '../utils/tauriApi';
 import { sessionIsActive, startFlightTest, stopFlightTest, useFlightTestStore } from '../flight-test/session';
-import type { VoiceAction, VoiceBinding, VoiceContext } from './model';
+import type { LocalVoiceReadAction, VoiceAction, VoiceBinding, VoiceContext } from './model';
 import {controllerIdentity} from './model';
 export type VoiceHost = {
   binding: () => VoiceBinding;
@@ -35,6 +35,52 @@ export async function collectVoiceContext(host:VoiceHost):Promise<VoiceContext>{
   const catalog=await readVoiceCatalog();
   return {...context,models:catalog.models,scripts:catalog.scripts,catalogErrors:catalog.errors};
 }
+
+const simulationStateLabel: Record<string, string> = {
+  running: '运行中', paused: '已暂停', stopped: '已停止', idle: '空闲', loading: '正在加载', starting: '正在启动',
+  stopping: '正在停止', crashed: '进程异常', disconnected: '未连接', error: '异常',
+};
+
+export async function executeVoiceReadAction(action: LocalVoiceReadAction, host: VoiceHost,
+  checkpoint: () => void, context?: VoiceContext): Promise<string> {
+  checkpoint();
+  switch (action) {
+    case 'status': {
+      const instance = host.binding().instance;
+      if (instance !== '01') {
+        const snapshot = await simInstanceSnapshot(instance);
+        checkpoint();
+        if (instance !== host.binding().instance) throw Error('当前实例已变化，请重新查询');
+        if (!snapshot || snapshot.age_ms == null || snapshot.age_ms > 3000) return `实例 ${instance} 暂无有效仿真状态。`;
+        return `实例 ${instance}：${simulationStateLabel[snapshot.state || ''] || '状态未知'}，运行模型 ${snapshot.model || '未选择'}。`;
+      }
+      const status = await simGetStatus();
+      checkpoint();
+      if (instance !== host.binding().instance) throw Error('当前实例已变化，请重新查询');
+      if (status.external && !status.connected) return '外部仿真未连接，无法读取当前运行状态。';
+      const state = status.state || (status.running ? status.paused ? 'paused' : 'running' : 'stopped');
+      return `${status.local || status.external === false ? '本机' : '外部'}仿真：${simulationStateLabel[state] || '状态未知'}，运行模型 ${status.model || '未选择'}。`;
+    }
+    case 'list_models':
+    case 'list_scripts': {
+      const models = action === 'list_models';
+      const kind = models ? '模型' : '脚本';
+      let entries = context && (models ? context.models : context.scripts);
+      if (!entries) {
+        const status = await simGetStatus();
+        checkpoint();
+        if (status.external && !status.connected) return `仿真链路未连接，无法读取${kind}目录。`;
+        entries = models ? names(await simListModels(), 'model') : names(await simListTests(), 'script');
+        checkpoint();
+      }
+      return entries.length ? `可用${kind}：${entries.join('、')}` : `${kind}目录不可用：${context?.catalogErrors.join('；') || '目录为空'}`;
+    }
+    case 'open_toolbox': host.openToolbox(); return 'PX4 工具箱已打开';
+    case 'show_scene': host.showScene(); return '三维视景已打开';
+    case 'show_logs': host.showLogs(); return '日志中心已打开';
+  }
+}
+
 function noActiveTest(){if(sessionIsActive(useFlightTestStore.getState()))throw Error('当前仿真测试正在运行或退出，请先结束测试');}
 export async function executeVoiceAction(action:VoiceAction,context:VoiceContext,host:VoiceHost,continueOperation=()=>true):Promise<string>{
   const checkpoint=()=>{if(!continueOperation())throw Error('已取消后续操作');};checkpoint();
@@ -53,12 +99,8 @@ export async function executeVoiceAction(action:VoiceAction,context:VoiceContext
     noActiveTest();
   };
   switch(action.type){
-    case 'status': {const s=await simGetStatus();return `${s.local||s.external===false?'本机':'外部'}仿真：${s.state||(s.running?(s.paused?'已暂停':'运行中'):'已停止')}，${s.external?s.connected?'已连接':'未连接':s.running?'进程运行中':'进程未运行'}，运行模型 ${s.model||'未选择'}。`;}
-    case 'list_models':return context.models.length?`可用模型：${context.models.join('、')}`:`模型目录不可用：${context.catalogErrors.join('；')||'目录为空'}`;
-    case 'list_scripts':return context.scripts.length?`可用脚本：${context.scripts.join('、')}`:`脚本目录不可用：${context.catalogErrors.join('；')||'目录为空'}`;
-    case 'open_toolbox':host.openToolbox();return 'PX4 工具箱已打开';
-    case 'show_scene':host.showScene();return '三维视景已打开';
-    case 'show_logs':host.showLogs();return '日志中心已打开';
+    case 'status':case 'list_models':case 'list_scripts':case 'open_toolbox':case 'show_scene':case 'show_logs':
+      return executeVoiceReadAction(action.type, host, checkpoint, context);
     case 'select_model':await guardTarget();await host.selectModel(action.model);return `已在编辑器载入 ${action.model}`;
     case 'start_model':case 'start_script':{
       await guardTarget();const current=await simGetStatus();checkpoint();if(current.running)throw Error('已有模型运行，请先停止当前仿真');

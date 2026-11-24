@@ -12,6 +12,7 @@ const markup = serializeDisabledElements;
 const equal = xmlElementsEqual;
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 function key(element: Element): string {
+  if(element.tagName==='property' && !element.hasAttribute('name')) return 'property|path='+element.textContent?.trim();
   return element.tagName + ['name', 'file', 'number', 'axis', 'type'].map(attr => `|${attr}=${element.getAttribute(attr) || ''}`).join('');
 }
 

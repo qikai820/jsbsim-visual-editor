@@ -15,6 +15,7 @@ export default defineConfig({
   build: {
     outDir: '../dist/client',
     emptyOutDir: true,
+    rollupOptions: { input: { main: 'client/index.html', movingPlatform: 'client/moving-platform-preview.html' } },
   },
   // Tauri uses `tauri://localhost` as origin in production
   clearScreen: false,

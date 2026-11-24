@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { voiceCancel,voiceGetConfig,voiceInterpret,voiceProbe,voiceRecordCancel,voiceRecordStart,voiceSaveConfig,voiceSynthesize,voiceTranscribe,type VoiceConfiguration } from '../voice/api';
-import { checkPlan,describeAction,isReadOnly,runVoicePlan,validatePlan,type StepResult,type VoiceConfig,type VoiceContext,type VoicePlan } from '../voice/model';
-import { collectVoiceContext,executeVoiceAction,readVoiceContext,type VoiceHost } from '../voice/runtime';
+import { checkPlan,describeAction,isLocalVoiceRead,isReadOnly,matchLocalVoiceAction,runVoicePlan,validatePlan,voiceInterpretationContext,type StepResult,type VoiceConfig,type VoiceContext,type VoicePlan } from '../voice/model';
+import { collectVoiceContext,executeVoiceAction,executeVoiceReadAction,readVoiceContext,type VoiceHost } from '../voice/runtime';
+import { commitVoiceParameterEdit,isParameterConfirmation,prepareVoiceParameterCommand,type VoiceParameterEdit } from '../voice/modelParameters';
 import VoiceSettingsForm from './VoiceSettingsForm';
 import './VoiceAssistant.css';
 
 type Phase='idle'|'starting_recording'|'recording'|'transcribing'|'context'|'thinking'|'executing'|'speaking'|'saving'|'probing';
 const phaseLabels:Record<Phase,string>={idle:'就绪',starting_recording:'打开麦克风',recording:'正在录音',transcribing:'识别语音',context:'读取当前上下文',thinking:'大模型解析中',executing:'执行操作中',speaking:'语音播报中',saving:'保存配置',probing:'检查服务连接'};
-type Pending={plan:VoicePlan;context:VoiceContext};
+type Pending={kind:'simulation';plan:VoicePlan;context:VoiceContext}|{kind:'parameter';edit:VoiceParameterEdit};
 export default function VoiceAssistant({open,onClose,host,onExecutingChange}:{open:boolean;onClose:()=>void;host:VoiceHost;onExecutingChange?:(busy:boolean)=>void}){
   const hostRef=useRef(host);hostRef.current=host;
   const [tab,setTab]=useState<'operation'|'settings'>('operation'),[settings,setSettings]=useState<VoiceConfiguration>(),[draft,setDraft]=useState<VoiceConfig>();
@@ -16,10 +17,10 @@ export default function VoiceAssistant({open,onClose,host,onExecutingChange}:{op
   const [pending,setPending]=useState<Pending>(),[steps,setSteps]=useState<StepResult[]>([]),[probe,setProbe]=useState(''),[elapsed,setElapsed]=useState(0),[executionBusy,setExecutionBusy]=useState(false);
   const epoch=useRef(0),request=useRef(''),recording=useRef<{id:number;maxSeconds:number;started:number}>(),autoStop=useRef<ReturnType<typeof setTimeout>>(),player=useRef<HTMLAudioElement>(),audioUrl=useRef(''),executing=useRef(false);
   const stopAudio=()=>{player.current?.pause();player.current=undefined;if(audioUrl.current){URL.revokeObjectURL(audioUrl.current);audioUrl.current='';}};
-  const cancel=useCallback(()=>{
+  const cancel=useCallback((keepParameterEdit=false)=>{
     epoch.current++;if(request.current){void voiceCancel(request.current).catch(()=>{});request.current='';}
     if(recording.current){void voiceRecordCancel(recording.current.id).catch(()=>{});recording.current=undefined;}
-    clearTimeout(autoStop.current);stopAudio();setPending(undefined);setPhase('idle');
+    clearTimeout(autoStop.current);stopAudio();setPending(current=>keepParameterEdit&&current?.kind==='parameter'?current:undefined);setPhase('idle');
   },[]);
   useEffect(()=>()=>{cancel();},[cancel]);
   useEffect(()=>{onExecutingChange?.(executionBusy);return()=>onExecutingChange?.(false);},[executionBusy,onExecutingChange]);
@@ -35,9 +36,12 @@ export default function VoiceAssistant({open,onClose,host,onExecutingChange}:{op
     }catch(e){if(token===epoch.current){setSpeechError(`播报失败：${String(e)}`);setPhase('idle');}}
   };
   const execute=async(value:Pending,token:number)=>{
-    if(executing.current)return;executing.current=true;setExecutionBusy(true);setPending(undefined);setSteps([]);setError('');setPhase('executing');const results:StepResult[]=[];
+    if(executing.current||token!==epoch.current)return;executing.current=true;setExecutionBusy(true);setPending(undefined);setSteps([]);setError('');setPhase('executing');const results:StepResult[]=[];
     try{
-      await runVoicePlan(value.plan,value.context,{
+      if(value.kind==='parameter'){
+        const message=commitVoiceParameterEdit(value.edit,hostRef.current.binding());
+        results.push({action:value.edit.summary,ok:true,message});setSteps(results);
+      }else await runVoicePlan(value.plan,value.context,{
         current:()=>readVoiceContext(hostRef.current,{models:value.context.models,scripts:value.context.scripts,errors:value.context.catalogErrors}),
         binding:()=>hostRef.current.binding(),cancelled:()=>epoch.current!==token,
         execute:(action,context)=>executeVoiceAction(action,context,hostRef.current,()=>epoch.current===token&&Date.now()<=value.plan.expiresAtMs),
@@ -47,23 +51,52 @@ export default function VoiceAssistant({open,onClose,host,onExecutingChange}:{op
     }catch(e){if(token===epoch.current){setError(String(e));setPhase('idle');}}
     finally{executing.current=false;setExecutionBusy(false);}
   };
-  const analyze=async(input=text)=>{
-    if(executing.current||!input.trim())return;cancel();const token=epoch.current;setError('');setSpeechError('');setReply('');setSteps([]);setPhase('context');
+  const analyze=async(input=text,fromSpeech=false)=>{
+    if(executing.current||!input.trim())return;
+    const confirmingParameter=isParameterConfirmation(input);
+    cancel();const token=epoch.current;setError('');setSpeechError('');setReply('');setSteps([]);
     try{
+      if(confirmingParameter){
+        if(pending?.kind!=='parameter')throw Error('当前没有待确认的参数修改');
+        await execute(pending,token);return;
+      }
+      if(pending?.kind==='parameter'&&/^(取消|取消修改|放弃|放弃修改)[。.!！]?$/.test(input.trim())){setReply('已放弃参数修改');return;}
+      const parameter=prepareVoiceParameterCommand(input,hostRef.current.binding(),fromSpeech);
+      if(parameter){
+        if(parameter.type==='edit_model_parameter'){
+          setPending({kind:'parameter',edit:parameter});await speak(`${parameter.summary}。请确认修改。`,token);
+        }else{setReply(parameter.reply);await speak(parameter.reply,token);}
+        return;
+      }
+      setPhase('context');
+      const local=matchLocalVoiceAction(input);
+      if(local){
+        if(isLocalVoiceRead(local)){
+          const message=await executeVoiceReadAction(local,hostRef.current,()=>{if(token!==epoch.current)throw Error('已取消操作');});
+          if(token!==epoch.current)return;
+          setSteps([{action:describeAction({type:local}),ok:true,message}]);setPhase('idle');await speak(message,token);
+        }else{
+          const context=await readVoiceContext(hostRef.current,{models:[],scripts:[],errors:[]});
+          if(token!==epoch.current)return;
+          const now=Date.now(),plan:VoicePlan={id:crypto.randomUUID(),createdAtMs:now,expiresAtMs:now+60_000,reply:'',actions:[{type:local}]};
+          checkPlan(plan,context);setPending({kind:'simulation',plan,context});setPhase('idle');
+        }
+        return;
+      }
       const context=await collectVoiceContext(hostRef.current);if(token!==epoch.current)return;
-      setPhase('thinking');const id=crypto.randomUUID();request.current=id;const plan=await voiceInterpret(input,context,id);
+      setPhase('thinking');const id=crypto.randomUUID();request.current=id;const plan=await voiceInterpret(input,voiceInterpretationContext(context),id);
       if(token!==epoch.current)return;request.current='';validatePlan(plan);checkPlan(plan,context);setReply(plan.reply);setPhase('idle');
-      if(plan.actions.length&&plan.actions.every(isReadOnly))await execute({plan,context},token);
-      else if(plan.actions.length)setPending({plan,context});else await speak(plan.reply,token);
-    }catch(e){if(token===epoch.current){setError(String(e));setPhase('idle');}}
+      if(plan.actions.length&&plan.actions.every(isReadOnly))await execute({kind:'simulation',plan,context},token);
+      else if(plan.actions.length)setPending({kind:'simulation',plan,context});else await speak(plan.reply,token);
+    }catch(e){if(token===epoch.current){request.current='';setError(String(e));setPhase('idle');}}
   };
   const finishRecording=async()=>{
     const session=recording.current;if(!session)return;recording.current=undefined;clearTimeout(autoStop.current);setPhase('transcribing');const token=epoch.current,id=crypto.randomUUID();request.current=id;
-    try{const transcript=await voiceTranscribe(session.id,id);if(token!==epoch.current)return;request.current='';setText(transcript);await analyze(transcript);}
+    try{const transcript=await voiceTranscribe(session.id,id);if(token!==epoch.current)return;request.current='';setText(transcript);await analyze(transcript,true);}
     catch(e){void voiceRecordCancel(session.id).catch(()=>{});if(token===epoch.current){setError(String(e));setPhase('idle');}}
   };
   const startRecording=async()=>{
-    if(executing.current)return;cancel();const token=epoch.current;setError('');setReply('');setSteps([]);setElapsed(0);setPhase('starting_recording');
+    if(executing.current)return;cancel(true);const token=epoch.current;setError('');setReply('');setSteps([]);setElapsed(0);setPhase('starting_recording');
     try{const session=await voiceRecordStart();if(token!==epoch.current){void voiceRecordCancel(session.id);return;}recording.current={...session,started:Date.now()};setPhase('recording');autoStop.current=setTimeout(()=>void finishRecording(),session.maxSeconds*1000);}
     catch(e){if(token===epoch.current){setError(String(e));setPhase('idle');}}
   };
@@ -78,15 +111,22 @@ export default function VoiceAssistant({open,onClose,host,onExecutingChange}:{op
       {error&&<p className="voice-error" role="alert">{error}</p>}
       {tab==='settings'?(draft?<><VoiceSettingsForm value={draft} onChange={setDraft} onSave={()=>void save()} onProbe={()=>void check()} busy={busy||executionBusy} recorders={settings?.capabilities.recorders||[]}/>{probe&&<pre className="voice-probe" role="status">{probe}</pre>}</>:<p>正在读取语音配置…</p>):<>
         {!enabled&&<p className="voice-notice">尚未启用。请在“服务配置”中填写已部署的大模型和语音识别地址，启用并保存。</p>}
-        <div className="voice-buttons"><button className={'voice-record'+(phase==='recording'?' recording':'')} disabled={!enabled||busy&&phase!=='recording'||executionBusy} onClick={()=>void(phase==='recording'?finishRecording():startRecording())}>{phase==='recording'?'■ 停止并识别':'🎙 开始录音'}</button>{phase!=='idle'&&<button onClick={cancel}>{phase==='executing'?'取消后续操作':'取消'}</button>}</div>
-        <label className="voice-instruction">识别文字 / 文字指令<textarea aria-label="语音指令文字" rows={4} disabled={busy} value={text} placeholder="例如：查询当前状态；用 F450_PX4_lan.xml 启动 F450；暂停仿真；打开三维视景" onChange={e=>{cancel();setText(e.target.value);setReply('');}}/></label>
-        <div className="voice-buttons"><button className="voice-primary" disabled={!enabled||busy||!text.trim()||executionBusy} onClick={()=>void analyze()}>解析指令</button><small>改变运行状态的操作会先预览。</small></div>
-        {reply&&<div className="voice-reply"><b>模型理解</b><p>{reply}</p></div>}
-        {pending&&<section className="voice-preview" aria-label="语音操作预览"><b>待执行操作</b><ol>{pending.plan.actions.map((a,i)=><li key={i}>{describeAction(a)}</li>)}</ol><small>实例 {pending.context.binding.instance} · 有效 60 秒。预览后改变连接或运行状态，需要重新解析。</small>{pending.plan.actions.some(a=>a.type==='start_test')&&<p>当前测试脚本：{pending.context.test.name}</p>}{pending.plan.actions.some(a=>a.type==='start_px4')&&<pre className="voice-probe">{JSON.stringify(pending.context.px4Config,null,2)||'尚未保存软件飞控配置'}</pre>}<div className="voice-buttons"><button className="voice-primary" disabled={busy||executionBusy} onClick={()=>void execute(pending,epoch.current)}>执行上述操作</button><button onClick={cancel}>放弃</button></div></section>}
+        <div className="voice-buttons"><button className={'voice-record'+(phase==='recording'?' recording':'')} disabled={!enabled||busy&&phase!=='recording'||executionBusy} onClick={()=>void(phase==='recording'?finishRecording():startRecording())}>{phase==='recording'?'■ 停止并识别':'🎙 开始录音'}</button>{phase!=='idle'&&<button onClick={()=>cancel()}>{phase==='executing'?'取消后续操作':'取消'}</button>}</div>
+        <label className="voice-instruction">识别文字 / 文字指令<textarea aria-label="语音指令文字" rows={4} disabled={busy} value={text} placeholder="例如：这个模块有哪些参数；把空机质量改成3.2千克；查询当前仿真状态" onChange={e=>{cancel();setText(e.target.value);setReply('');}}/></label>
+        <div className="voice-buttons"><button className="voice-primary" disabled={!enabled||busy||!text.trim()||executionBusy} onClick={()=>void analyze()}>解析指令</button><small>改参数和运行操作会先预览。</small></div>
+        {reply&&<div className="voice-reply" role="status"><p>{reply}</p></div>}
+        {pending?.kind==='simulation'&&<section className="voice-preview" aria-label="语音操作预览"><b>待执行操作</b><ol>{pending.plan.actions.map((a,i)=><li key={i}>{describeAction(a)}</li>)}</ol><small>实例 {pending.context.binding.instance} · 有效 60 秒。预览后改变连接或运行状态，需要重新解析。</small>{pending.plan.actions.some(a=>a.type==='start_test')&&<p>当前测试脚本：{pending.context.test.name}</p>}{pending.plan.actions.some(a=>a.type==='start_px4')&&<pre className="voice-probe">{JSON.stringify(pending.context.px4Config,null,2)||'尚未保存软件飞控配置'}</pre>}<div className="voice-buttons"><button className="voice-primary" disabled={busy||executionBusy} onClick={()=>void execute(pending,epoch.current)}>执行上述操作</button><button onClick={()=>cancel()}>放弃</button></div></section>}
+        {pending?.kind==='parameter'&&<section className="voice-preview" aria-label="参数修改预览">
+          <b>{pending.edit.aircraft.name} · 编辑器草稿</b>
+          <p>{pending.edit.summary}</p>
+          {pending.edit.notes.map(note=><p key={note}>{note}</p>)}
+          <small>预览有效 60 秒。也可再次录音说“确认修改”。</small>
+          <div className="voice-buttons"><button className="voice-primary" disabled={busy||executionBusy} onClick={()=>void execute(pending,epoch.current)}>确认修改</button><button onClick={()=>cancel()}>放弃</button></div>
+        </section>}
         {!!steps.length&&<section className="voice-results" aria-label="语音执行结果"><b>执行结果</b>{steps.map((s,i)=><div key={i} className={s.ok?'':'voice-error'}><strong>{s.ok?'✓':'×'} {s.action}</strong><p>{s.message}</p></div>)}</section>}
         {speechError&&<div className="voice-notice"><p>{speechError}</p>{player.current&&<button onClick={()=>{setSpeechError('');setPhase('speaking');void player.current?.play().catch(e=>{setSpeechError(String(e));setPhase('idle');});}}>播放播报</button>}</div>}
         {executionBusy&&<p className="voice-notice">已提交的操作可能继续完成；取消只阻止后续步骤。</p>}
-        <p className="voice-scope">支持仿真启停、模型选择、视景、日志、软件飞控和当前测试脚本。录音只在点击后启动，不后台监听。</p>
+        <p className="voice-scope">可查询和修改编辑器中的空重、主惯量、机翼几何和恒定风速。选中模块可指定同名参数的修改对象。</p>
       </>}
     </div>
   </aside>;

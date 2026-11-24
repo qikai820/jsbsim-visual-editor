@@ -87,7 +87,7 @@ class ProxyTests(unittest.TestCase):
         self.endpoint.unlink()
         self.send("tools/list", 2)
         tools = self.receive()["result"]["tools"]
-        self.assertEqual(len(tools), 8)
+        self.assertEqual(len(tools), 18)
         self.assertEqual(self.requests, [])
         self.send("tools/call", 3, {"name": "upper_get_status"})
         self.assertTrue(self.receive()["result"]["isError"])
@@ -103,11 +103,25 @@ class ProxyTests(unittest.TestCase):
             ("upper_get_report", {"limit": 1001}),
             ("upper_get_status", {"port": 14553}),
             ("raw_mavlink_write", {}),
+            ("upper_firmware_start", {"selectionId":1,"port":"/dev/ttyACM0"}),
+            ("upper_firmware_prepare", {"path":"/data/a.px4","source":"unknown"}),
+            ("upper_firmware_cancel", {"id":0}),
         ]
         for index, (name, args) in enumerate(cases, 10):
             self.send("tools/call", index, {"name": name, "arguments": args})
             self.assertTrue(self.receive()["result"]["isError"])
         self.assertEqual(self.requests, [])
+
+    def test_simulator_firmware_tools_share_authenticated_proxy(self):
+        self.initialize()
+        calls=[("upper_firmware_prepare",{"path":"/mnt/home/fw.px4","source":"simulator"}),
+               ("upper_firmware_prepare",{"path":"/tmp/fw.px4","source":"local"}),
+               ("upper_firmware_start",{"selectionId":3,"simulator":"192.0.2.1","port":"/dev/ttyACM0"}),
+               ("upper_firmware_cancel",{"id":4})]
+        for identity,(name,args) in enumerate(calls,40):
+            self.send("tools/call",identity,{"name":name,"arguments":args})
+            self.assertFalse(self.receive()["result"]["isError"])
+            self.assertEqual(self.requests[-1]["arguments"],args)
 
     def test_slow_stop_does_not_block_state_and_restart_rotates_token(self):
         self.initialize()
@@ -126,6 +140,29 @@ class ProxyTests(unittest.TestCase):
         self.send("tools/call", 4, {"name": "upper_get_status"})
         self.assertFalse(self.receive()["result"]["isError"])
         self.assertEqual(self.requests[-1]["token"], self.token)
+
+    def test_log_proxy_identity_and_async_status(self):
+        self.initialize()
+        for identity,(name,args) in enumerate([("upper_list_logs",{}),("upper_download_log",{"id":0,"expectedSize":24000000,"expectedTime":0}),("upper_cancel_log_download",{"jobId":1})], 20):
+            self.send("tools/call",identity,{"name":name,"arguments":args})
+            self.assertFalse(self.receive()["result"]["isError"])
+            self.assertEqual(self.requests[-1]["arguments"],args)
+        count=len(self.requests)
+        for identity,args in enumerate([{"id":65535,"expectedSize":24,"expectedTime":0},{"id":0,"expectedSize":15,"expectedTime":0},{"id":0,"expectedSize":24,"expectedTime":0,"path":"/tmp/x"}],30):
+            self.send("tools/call",identity,{"name":"upper_download_log","arguments":args})
+            self.assertTrue(self.receive()["result"]["isError"])
+        self.assertEqual(len(self.requests),count)
+
+    def test_nsh_tool_bounds_and_authenticated_forwarding(self):
+        self.initialize()
+        self.send("tools/call", 2, {"name":"upper_nsh_command","arguments":{"command":"param show SYS_HITL","timeoutMs":10000}})
+        self.assertFalse(self.receive()["result"]["isError"])
+        self.assertEqual(self.requests[-1]["name"],"upper_nsh_command")
+        count=len(self.requests)
+        for identity,args in enumerate([{"command":"a\nb"},{"command":"x"*257},{"command":"status","timeoutMs":999},{"command":"status","timeoutMs":30001}],3):
+            self.send("tools/call",identity,{"name":"upper_nsh_command","arguments":args})
+            self.assertTrue(self.receive()["result"]["isError"])
+        self.assertEqual(len(self.requests),count)
 
     def test_public_endpoint_credentials_and_malformed_json(self):
         self.initialize()

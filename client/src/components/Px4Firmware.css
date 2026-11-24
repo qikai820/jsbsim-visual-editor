@@ -1,0 +1,16 @@
+.px4-firmware{padding:22px;overflow:auto;flex:1;min-height:0;color:var(--pt-text)}
+.px4-firmware>header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:20px}
+.px4-firmware h2{font-size:19px;margin:0 0 7px}.px4-firmware h3{font-size:14px;margin:0 0 13px}.px4-firmware p{font-size:12px;line-height:1.8;margin:9px 0 15px}
+.firmware-badge{font-size:12px;white-space:nowrap;border:1px solid var(--pt-line);border-radius:16px;padding:6px 12px;color:var(--pt-muted)}
+.firmware-badge.complete{color:#16804c;background:#16804c12}.firmware-badge.error{color:#c43c48;background:#c43c4812}
+.firmware-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+.firmware-card{padding:20px;border:1px solid var(--pt-line);border-radius:10px;background:var(--pt-bg);min-width:0}
+.firmware-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 16px}
+.firmware-actions button[aria-pressed=true]{color:var(--pt-blue);background:var(--pt-tint)}
+.px4-firmware dl{display:grid;grid-template-columns:42px minmax(0,1fr);gap:12px;font-size:12px;margin:20px 0 0}.px4-firmware dt{color:var(--pt-muted)}.px4-firmware dd{margin:0;overflow-wrap:anywhere;line-height:1.6}
+.firmware-port{display:flex;flex-direction:column;gap:8px;font-size:12px;margin:16px 0 12px}.firmware-port select{width:100%;min-width:0}
+.firmware-card>h3:not(:first-child){margin-top:26px}.firmware-confirm{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.8;margin:20px 0}.firmware-confirm input{margin-top:4px;flex-shrink:0}
+.firmware-browser{margin-top:20px;border-top:1px solid var(--pt-line);padding-top:16px}.firmware-browser>code{font-size:12px;display:block;overflow-wrap:anywhere;color:var(--pt-muted);margin-bottom:10px}
+.firmware-file-list{max-height:240px;overflow:auto}.firmware-file-list>button{display:flex;width:100%;justify-content:space-between;text-align:left;gap:12px;margin:0 0 5px}.firmware-file-list span{overflow-wrap:anywhere}.firmware-file-list small{white-space:nowrap;color:var(--pt-muted)}
+.firmware-progress{margin-top:18px}.firmware-progress>div{display:flex;justify-content:space-between;align-items:center}.firmware-progress progress{display:block;width:100%;accent-color:var(--pt-blue);height:8px;margin:7px 0 15px}.firmware-progress small{display:block;margin-top:8px;overflow-wrap:anywhere;color:var(--pt-muted)}.firmware-progress.error{border-color:#c43c48}
+@container px4-toolbox (max-width:720px){.px4-firmware{padding:14px}.firmware-grid{grid-template-columns:1fr}.firmware-card{padding:16px}.px4-firmware>header{flex-wrap:wrap}}

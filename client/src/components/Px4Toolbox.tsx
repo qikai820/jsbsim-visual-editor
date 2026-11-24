@@ -15,7 +15,10 @@ import Px4ParameterEditor from './Px4ParameterEditor';
 import Px4FlightTest from './Px4FlightTest';
 import Px4Messages from './Px4Messages';
 import Px4Sitl from './Px4Sitl';
+import Px4Firmware from './Px4Firmware';
 import { sessionIsActive, useFlightTestStore } from '../flight-test/session';
+import { registerLogOwner, validateLogRequest } from '../flight-test/mcpLogs';
+import { registerNshOwner, validateNshRequest } from '../flight-test/mcpNsh';
 import { usePx4Router } from '../px4/router';
 import './Px4Toolbox.css';
 
@@ -47,7 +50,10 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
   if (!testRunning&&!sourceSwitching) sourceLease.current = nextSourceIdentity;
   const sourceIdentity = sourceLease.current;
   const [sourceState, setSourceState] = useState('等待仿真机数据');
-  const [tab, setTab] = useState<'parameters'|'logs'|'messages'|'nsh'|'forwarding'|'testing'|'sitl'>('parameters');
+  const [tab, setTab] = useState<'parameters'|'logs'|'messages'|'nsh'|'forwarding'|'testing'|'sitl'|'firmware'>('parameters');
+  const [firmwareOpened, setFirmwareOpened] = useState(false), [firmwareBusy, setFirmwareBusy] = useState(false);
+  const firmwareBusyRef = useRef(false);
+  const firmwareBusyChanged = useCallback((value:boolean) => { firmwareBusyRef.current=value; setFirmwareBusy(value); }, []);
   const [sitlOpened, setSitlOpened] = useState(false);
   const [px4Messages] = useState(() => new Px4MessageBuffer());
   const [testFocus, setTestFocus] = useState(false), [connectionOpen, setConnectionOpen] = useState(false);
@@ -57,13 +63,19 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
   const mounted = useRef(true), linkRef = useRef<Px4Connection | null>(null), shellRef = useRef<Px4Shell | null>(null);
   const metadataAbort = useRef<AbortController>(), operation = useRef<AbortController>();
   const beforeTestRun = useCallback(async () => {
+    if (firmwareBusyRef.current) throw Error('PX4 固件升级进行中');
     if (operation.current && !operation.current.signal.aborted) throw Error('其他飞控操作进行中');
     metadataAbort.current?.abort(); await shellRef.current?.close();
   }, []);
+  const beforeFirmwareOperation = useCallback(async () => {
+    const current=useFlightTestStore.getState();
+    if(sessionIsActive(current)||current.rcSourceSwitching||(operation.current&&!operation.current.signal.aborted))throw Error('其他飞控操作进行中，请等待完成');
+    firmwareBusyChanged(true); metadataAbort.current?.abort(); await shellRef.current?.close();
+  }, [firmwareBusyChanged]);
   const rebootOperation = useRef(false);
   const [controllerProgress, setControllerProgress] = useState('');
   const [operationBusy, setBusy] = useState(''), [metadataBusy, setMetadataBusy] = useState(false), [metadataError, setMetadataError] = useState('');
-  const busy=testRunning?'flight-test':sourceSwitching?'rc-source':operationBusy;
+  const busy=firmwareBusy?'firmware':testRunning?'flight-test':sourceSwitching?'rc-source':operationBusy;
   const [catalog, setCatalog] = useState<MetadataCatalog>(), bundled = useRef<MetadataCatalog>();
   const [parameters, setParameters] = useState<Parameter[]>([]), [expected, setExpected] = useState<number | null>(null), [parameterComplete, setParameterComplete] = useState(false);
   const [mode, setMode] = useState<'metadata'|'prefix'|'custom'>('metadata'), [group, setGroup] = useState('all'), [search, setSearch] = useState(''), [filter, setFilter] = useState('all'), [page, setPage] = useState(0), [selectedParam, setSelectedParam] = useState('');
@@ -76,6 +88,8 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
   const [library, setLibrary] = useState<LibraryItem[]>(() => { const value = stored<unknown>('px4-log-library-v1', []); return Array.isArray(value) ? value.filter(l => l && typeof l.path === 'string' && typeof l.name === 'string' && typeof l.size === 'number' && ['downloaded','local'].includes(l.source)).slice(0,64) : []; });
   const [summary, setSummary] = useState<UlogSummary>(), [detailTab, setDetailTab] = useState('overview'), [summaryBusy, setSummaryBusy] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{ id: number; received: number; total: number; index: number; count: number }>();
+  const mcpDownload=useRef<{id:number;abort:AbortController;done:Promise<void>}>();
+  const downloadClock=useRef(0);
   const summaryGeneration = useRef(0);
   const link = linkRef.current, shell = shellRef.current, alive = link?.alive || false;
   const simulationStateKnown = alive && typeof link?.hilEnabled === 'boolean' && typeof link?.armed === 'boolean';
@@ -135,7 +149,7 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
           if (disposed || !mounted.current) return; refresh(v=>v+1);
           if (connection.lastHeartbeat && !initialized) {
             initialized = true;
-            if (source.bidirectional) { void connection.requestMessage(148).catch(e=>{if(!disposed)setError(String(e));}); void loadMetadata(connection); }
+            if (source.bidirectional&&!firmwareBusyRef.current) { void connection.requestMessage(148).catch(e=>{if(!disposed)setError(String(e));}); void loadMetadata(connection); }
           }
         };
         connection.onError = terminal.onError = e=>{if(!disposed&&mounted.current&&!rebootOperation.current)setError(e);};
@@ -151,15 +165,32 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
     return ()=>{disposed=true;clearInterval(timer);unsubscribeMessages?.();px4Messages.resetAssembly();operation.current?.abort();metadataAbort.current?.abort();const terminal=shellRef.current;void terminal?.close(false).catch(()=>{});void owned?.close().catch(()=>{});if(linkRef.current===owned){linkRef.current=null;shellRef.current=null;}};
   }, [sourceIdentity, Px4Connection, Px4Shell, px4Messages]);
   useEffect(()=>{
-    if(visible&&tab==='nsh'&&alive&&source.bidirectional&&shell&&!shell.active&&!testRunning&&!sourceSwitching)void shell.open().catch(e=>{if(mounted.current)setError(String(e));});
-  },[visible,tab,alive,shell,source.bidirectional,testRunning,sourceSwitching]);
+    if(visible&&tab==='nsh'&&alive&&source.bidirectional&&shell&&!shell.active&&!testRunning&&!sourceSwitching&&!firmwareBusy)void shell.open().catch(e=>{if(mounted.current)setError(String(e));});
+  },[visible,tab,alive,shell,source.bidirectional,testRunning,sourceSwitching,firmwareBusy]);
   const run = async (kind: string, task: (signal: AbortSignal) => Promise<void>) => {
+    if (firmwareBusyRef.current) return;
     if (sessionIsActive(useFlightTestStore.getState())) return;
     if (operation.current && !operation.current.signal.aborted) return;
     const abort = new AbortController(); operation.current = abort; setBusy(kind); setError(''); setMessage('');
     try { await task(abort.signal); } catch (e) { if (mounted.current) { if (abort.signal.aborted) setMessage('操作已取消'); else setError(String(e)); } }
     finally { if (operation.current === abort) { operation.current = undefined; if (mounted.current) setBusy(''); } }
   };
+  useEffect(()=>registerNshOwner(async request=>{
+    if(firmwareBusyRef.current)throw Error('PX4 固件升级进行中，未发送 NSH 命令');
+    const valid=validateNshRequest(request),current=useFlightTestStore.getState();
+    if(sessionIsActive(current)||current.rcSourceSwitching)throw Error('仿真测试或遥控器来源切换中，未发送 NSH 命令');
+    if(operation.current&&!operation.current.signal.aborted)throw Error('其他飞控操作进行中，未发送 NSH 命令');
+    const connection=linkRef.current,terminal=shellRef.current;
+    if(!connection?.alive||!terminal||!source.bidirectional)throw Error('请先连接双向 PX4 工具箱并等待新鲜心跳');
+    if(connection.armed!==false)throw Error('MCP NSH 需要确认飞控未解锁，未发送命令');
+    const abort=new AbortController();operation.current=abort;metadataAbort.current?.abort();setBusy('mcp-nsh');setError('');setMessage('');setTab('nsh');
+    try {
+      const result=await terminal.runCommand(valid.command,valid.timeoutMs,abort.signal);
+      if(linkRef.current!==connection||!connection.alive)throw Error('NSH 执行期间飞控连接已变化，结果不作为当前连接确认');
+      return {...result,target:{...connection.target},sessionId:connection.transport.sessionId!};
+    } catch(e){if(mounted.current)setError(String(e));throw e;}
+    finally{if(operation.current===abort){operation.current=undefined;if(mounted.current)setBusy('');}}
+  }),[sourceIdentity,source.bidirectional]);
   const switchSimulation = (enabled: boolean) => {
     if (!source.bidirectional || !linkRef.current?.alive || (operation.current && !operation.current.signal.aborted)) return;
     rebootOperation.current = true;
@@ -248,24 +279,62 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
   const openLog = async () => { try { const s = await invoke<UlogSummary|null>('px4_log_pick'); if (s && mounted.current) { summaryGeneration.current++; addLibrary(s,'local'); setLogSource('local'); } } catch (e) { setError(String(e)); } };
   const download = (ids:number[]) => { const current = linkRef.current; if (!current?.alive) return; const queue = logs.filter(l => ids.includes(l.id));
     void run('download', async signal => {
-      for (let i=0;i<queue.length;i++) { const l=queue[i]; setDownloadProgress({ id:l.id,received:0,total:l.size,index:i+1,count:queue.length });
+      for (let i=0;i<queue.length;i++) { const l=queue[i]; downloadClock.current=Date.now();setDownloadProgress({ id:l.id,received:0,total:l.size,index:i+1,count:queue.length });
         const s = await downloadLog(current,l,signal,n => { if (mounted.current) setDownloadProgress({ id:l.id,received:n,total:l.size,index:i+1,count:queue.length }); });
         if (s && mounted.current && !signal.aborted && linkRef.current===current) { summaryGeneration.current++; addLibrary(s,'downloaded',l); setSelectedLogs(ids => ids.filter(id => id!==l.id)); setMessage('日志已保存：'+s.path); }
       }
     }); };
+  useEffect(()=>registerLogOwner(async request=>{
+    const valid=validateLogRequest(request);
+    if(valid.action==='cancel'){
+      const active=mcpDownload.current;if(!active||active.id!==valid.jobId)throw Error('当前工具箱没有该下载任务');
+      active.abort.abort();await active.done;return {jobId:valid.jobId,cancelRequested:true};
+    }
+    const state=useFlightTestStore.getState(),connection=linkRef.current;
+    if(firmwareBusyRef.current||sessionIsActive(state)||state.rcSourceSwitching||(operation.current&&!operation.current.signal.aborted))throw Error('其他飞控操作正在进行，未读取日志');
+    if(!connection?.alive||!source.bidirectional||connection.armed!==false)throw Error('读取日志需要新鲜、上锁的双向飞控连接');
+    const abort=new AbortController();operation.current=abort;metadataAbort.current?.abort();setBusy(valid.action==='list'?'mcp-logs':'download');setTab('logs');setLogSource('onboard');setError('');
+    const release=()=>{if(operation.current===abort){operation.current=undefined;if(mounted.current){setBusy('');setDownloadProgress(undefined);}}};
+    try{
+      await shellRef.current?.close();
+      const entries=await readLogs(connection,(items,total)=>{if(mounted.current){setLogs(items);setLogExpected(total);}},abort.signal);
+      if(linkRef.current!==connection||!connection.alive||connection.armed!==false)throw Error('日志连接或解锁状态已变化，未开始下载');
+      const identity={sessionId:connection.transport.sessionId,target:{...connection.target},hardwareUid:connection.uid};
+      if(valid.action==='list'){release();return {...identity,logs:entries};}
+      if(!connection.uid)throw Error('尚未识别飞控 UID，未开始日志下载');
+      const log=entries.find(l=>l.id===valid.id);
+      if(!log||log.size!==valid.expectedSize||log.time!==valid.expectedTime)throw Error('机载日志列表已变化，请重新读取列表后选择');
+      downloadClock.current=Date.now();setDownloadProgress({id:log.id,received:0,total:log.size,index:1,count:1});
+      let readyResolve!:(v:unknown)=>void,readyReject!:(e:unknown)=>void;
+      const ready=new Promise<unknown>((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
+      const active={id:0,abort,done:Promise.resolve()};mcpDownload.current=active;
+      const stopOnArm=connection.subscribe(()=>{if(connection.armed!==false)abort.abort();});
+      active.done=(async()=>{
+        try{
+          const result=await downloadLog(connection,log,abort.signal,received=>{if(mounted.current)setDownloadProgress({id:log.id,received,total:log.size,index:1,count:1});},{onBegin:id=>{active.id=id;readyResolve({...identity,jobId:id,status:'downloading',log});}});
+          if(result&&mounted.current){addLibrary(result,'downloaded',log);setMessage('日志已保存：'+result.path);}
+        }catch(e){readyReject(e);if(mounted.current){if(abort.signal.aborted)setMessage('日志下载已取消');else setError(String(e));}}
+        finally{stopOnArm();if(mcpDownload.current===active)mcpDownload.current=undefined;release();}
+      })();
+      return await ready;
+    }catch(e){release();throw e;}
+  }),[sourceIdentity,source.bidirectional,deviceKey]);
+  const downloadElapsed=Math.max(.001,(Date.now()-downloadClock.current)/1000);
+  const downloadRate=downloadProgress?downloadProgress.received/downloadElapsed:0;
+  const downloadEta=downloadProgress&&downloadRate>0?Math.ceil((downloadProgress.total-downloadProgress.received)/downloadRate):null;
   const visibleRemote = logs.filter(l => (`${l.id} ${logTime(l.time)}`).includes(logSearch.trim()));
   const visibleLocal = library.filter(l => l.source===logSource && l.name.toLowerCase().includes(logSearch.toLowerCase()));
   const selectedRemote = selectedLog.startsWith('remote:') ? logs.find(l => l.id===Number(selectedLog.slice(7))) : undefined;
   return <div className={'px4-toolbox-overlay'+(nativeWindow?' px4-native-window':'')} hidden={!visible} role="dialog" aria-modal="false" aria-label="PX4 工具箱" onKeyDown={e=>e.stopPropagation()}>
     <section className={'px4-toolbox'+(tab==='testing'?' px4-testing':'')+(tab==='testing'&&testFocus?' px4-test-focus':'')}>
       <header className="px4-toolbox-head" onPointerDown={onWindowDrag} onDoubleClick={event=>{if(!(event.target as HTMLElement).closest('button,input,select'))onWindowMaximize?.();}}><div><h2>PX4 工具箱</h2><small>实例 {instance}{link?.target.system?' · SYS '+link.target.system:''} · {alive?'PX4 在线':'等待 PX4'}{link?.hilEnabled?' · HIL':''}</small></div><div className="px4-window-actions"><button type="button" aria-expanded={connectionOpen} onClick={()=>setConnectionOpen(v=>!v)}>连接与仿真</button><div className="px4-title-controls">{windowControls||<button type="button" aria-label="关闭 PX4 工具箱" title="隐藏工具箱，测试继续运行" onClick={onClose}>×</button>}</div></div></header>
-      <div className="px4-connectbar" hidden={tab==='sitl'||tab==='testing'&&!connectionOpen}><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select disabled={!!busy} aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
-      <div className="px4-simulationbar" aria-label="飞控仿真模式" hidden={tab==='sitl'||tab==='testing'&&!connectionOpen}>
+      <div className="px4-connectbar" hidden={tab==='sitl'||tab==='firmware'||tab==='testing'&&!connectionOpen}><span className={'px4-status '+(alive?'connected':'')}>{alive?'● 仿真机 PX4 数据在线':'◌ 等待仿真机 PX4 数据'}</span><span className="px4-muted">{source.service?'常驻服务':'实例 '+instance}{link?.target.system?' · SYS '+link.target.system+' / COMP '+link.target.component:''}{link?.version?' · PX4 '+link.version:''}</span><span className="px4-endpoint">{source.name} · {sourceState}</span>{sources.length>1&&<select disabled={!!busy} aria-label="仿真机转发来源" value={source.key} onChange={e=>setSourceKey(e.target.value)}>{sources.map(s=><option key={s.key} value={s.key}>{s.name} · {s.id}</option>)}</select>}</div>
+      <div className="px4-simulationbar" aria-label="飞控仿真模式" hidden={tab==='sitl'||tab==='firmware'||tab==='testing'&&!connectionOpen}>
         <div><b>{!simulationStateKnown?'飞控模式待确认':link?.hilEnabled?'仿真模式 · HIL':'正常模式'}</b><small id="px4-simulation-hint" aria-live="polite">{simulationUnavailable || '切换模式后自动重启飞控'}</small></div>
         <div><button type="button" className="px4-primary" disabled={!!simulationUnavailable} aria-describedby="px4-simulation-hint" aria-busy={busy==='simulation'} title={simulationUnavailable || '切换模式并重启飞控'} onClick={()=>{const current=linkRef.current;if(typeof current?.hilEnabled==='boolean')switchSimulation(!current.hilEnabled);}}>{simulationButtonLabel}</button><button type="button" aria-label="重启飞控" disabled={!!controllerUnavailable} aria-describedby="px4-simulation-hint" aria-busy={busy==='reboot'} title={controllerUnavailable || '重启当前连接的飞控'} onClick={restartFlightController}>{busy==='reboot'?'正在重启…':'重启飞控'}</button></div>
       </div>
-      {tab!=='sitl'&&!source.bidirectional&&<div className="px4-notice">当前仿真机转发为单向，无法请求参数、日志或发送 NSH 输入。</div>}
-      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','messages','nsh','testing','sitl','forwarding'] as const).map(t=><button disabled={!!busy&&t==='forwarding'} key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>{setTab(t);if(t==='sitl')setSitlOpened(true);}}>{({parameters:'参数',logs:'日志',messages:'PX4 打印',nsh:'NSH 控制台',testing:'仿真测试',sitl:'软件飞控',forwarding:'转发设置'})[t]}</button>)}</nav>
+      {tab!=='sitl'&&tab!=='firmware'&&!source.bidirectional&&<div className="px4-notice">当前仿真机转发为单向，无法请求参数、日志或发送 NSH 输入。</div>}
+      <nav className="px4-tabs" role="tablist" aria-label="PX4 功能">{(['parameters','logs','messages','nsh','testing','sitl','firmware','forwarding'] as const).map(t=><button disabled={!!busy&&t==='forwarding'} key={t} type="button" role="tab" id={'px4-tab-'+t} aria-controls={'px4-panel-'+t} aria-selected={tab===t} onClick={()=>{setTab(t);if(t==='sitl')setSitlOpened(true);if(t==='firmware')setFirmwareOpened(true);}}>{({parameters:'参数',logs:'日志',messages:'PX4 打印',nsh:'NSH 控制台',testing:'仿真测试',sitl:'软件飞控',firmware:'固件升级',forwarding:'转发设置'})[t]}</button>)}</nav>
       {error && <div className="px4-notice error" role="alert">{error}<button aria-label="关闭错误提示" onClick={()=>setError('')}>×</button></div>}
       {message && <div className="px4-notice" role="status">{message}<button aria-label="关闭状态提示" onClick={()=>setMessage('')}>×</button></div>}
       <section role="tabpanel" id="px4-panel-parameters" aria-labelledby="px4-tab-parameters" hidden={tab!=='parameters'} className="px4-panel">
@@ -297,12 +366,12 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
       <section role="tabpanel" id="px4-panel-logs" aria-labelledby="px4-tab-logs" hidden={tab!=='logs'} className="px4-panel">
         <div className="px4-log-layout"><aside className="px4-groups"><h3>日志来源</h3>{[['onboard','板载日志',logs.length],['downloaded','已下载',library.filter(l=>l.source==='downloaded').length],['local','本地导入',library.filter(l=>l.source==='local').length]].map(([key,label,n])=><button key={key} aria-pressed={logSource===key} onClick={()=>setLogSource(String(key))}><span>{label}</span><small>{n}</small></button>)}</aside>
           <div className="px4-list-pane"><div className="px4-list-actions"><h3>{logSource==='onboard'?'板载日志':logSource==='downloaded'?'已下载':'本地导入'}</h3><div><button onClick={()=>void openLog()}>打开本地 .ulg</button><button disabled={!alive||!source.bidirectional||!!busy} onClick={refreshLogs}>刷新板载列表</button></div></div>
-            <div className="px4-filter"><input aria-label="搜索 PX4 日志" placeholder="搜索日志编号、时间或文件名" value={logSearch} onChange={e=>setLogSearch(e.target.value)}/>{logSource==='onboard'&&<button className="px4-primary" disabled={!alive||!source.bidirectional||!!busy||!selectedLogs.length} onClick={()=>download(selectedLogs)}>下载所选（{selectedLogs.length}）</button>}{busy==='logs'&&<button onClick={()=>operation.current?.abort()}>取消</button>}</div>
+            <div className="px4-filter"><input aria-label="搜索 PX4 日志" placeholder="搜索日志编号、时间或文件名" value={logSearch} onChange={e=>setLogSearch(e.target.value)}/>{logSource==='onboard'&&<button className="px4-primary" disabled={!alive||!source.bidirectional||!!busy||!selectedLogs.length} onClick={()=>download(selectedLogs)}>下载所选（{selectedLogs.length}）</button>}{(busy==='logs'||busy==='mcp-logs'||(busy==='download'&&!downloadProgress))&&<button onClick={()=>operation.current?.abort()}>取消</button>}</div>
             <div className="px4-table-scroll"><table className="px4-log-table"><thead><tr>{logSource==='onboard'&&<th><input type="checkbox" aria-label="选择全部板载日志" checked={!!visibleRemote.length&&visibleRemote.every(l=>selectedLogs.includes(l.id))} onChange={e=>setSelectedLogs(e.target.checked?visibleRemote.map(l=>l.id):[])}/></th>}<th>日志 / 飞控报告时间</th><th>大小</th><th>状态</th></tr></thead><tbody>
               {logSource==='onboard'?visibleRemote.map(l=><tr key={l.id} className={selectedLog==='remote:'+l.id?'selected':''}><td><input type="checkbox" aria-label={'选择日志 '+l.id} checked={selectedLogs.includes(l.id)} onChange={e=>setSelectedLogs(ids=>e.target.checked?[...ids,l.id]:ids.filter(id=>id!==l.id))}/></td><td><button className="px4-log-pick" onClick={()=>{const item=localFor(l);if(item){void inspectLocal(item);}else{summaryGeneration.current++;setSummaryBusy(false);setSummary(undefined);setSelectedLog('remote:'+l.id);}}}><code>日志 #{l.id}</code><small>{logTime(l.time)}</small></button></td><td>{bytes(l.size)}</td><td>{localFor(l)?'本地可用':'待下载'}</td></tr>):visibleLocal.map(l=><tr key={l.path} className={selectedLog==='local:'+l.path?'selected':''}><td><button className="px4-log-pick" onClick={()=>void inspectLocal(l)}><code>{l.name}</code><small>{l.path}</small></button></td><td>{bytes(l.size)}</td><td>本地文件</td></tr>)}
             </tbody></table>{(logSource==='onboard'?!visibleRemote.length:!visibleLocal.length)&&<div className="px4-empty">{logSource==='onboard'?'仿真机数据就绪后刷新板载日志列表':'暂无本地日志'}</div>}</div>
             <div className="px4-list-footer"><span>{logSource==='onboard'?`${logs.length}/${logExpected??'?'} 个板载日志`:visibleLocal.length+' 个文件'}</span><span>ULog · .ulg</span></div>
-            {downloadProgress&&<div className="px4-download"><div><span>日志 #{downloadProgress.id} · 队列 {downloadProgress.index}/{downloadProgress.count}{busy==='download'?' · 下载中':''}</span>{busy==='download'&&<button onClick={()=>operation.current?.abort()}>取消下载</button>}</div><progress max={downloadProgress.total} value={downloadProgress.received}/><small>{bytes(downloadProgress.received)} / {bytes(downloadProgress.total)}</small></div>}
+            {downloadProgress&&<div className="px4-download"><div><span>日志 #{downloadProgress.id} · 队列 {downloadProgress.index}/{downloadProgress.count}{busy==='download'?' · 下载中':''}</span>{busy==='download'&&<button onClick={()=>operation.current?.abort()}>取消下载</button>}</div><progress max={downloadProgress.total} value={downloadProgress.received}/><small>{bytes(downloadProgress.received)} / {bytes(downloadProgress.total)} · {bytes(downloadRate)}/s{downloadEta!==null?` · 预计剩余 ${downloadEta} 秒`:""}</small></div>}
           </div>
           <aside className="px4-details"><h3>日志详情</h3>{summaryBusy?<p>正在读取 ULog…</p>:summary?<><code className="px4-detail-name">{summary.name}</code><div className="px4-log-detail-tabs">{[['overview','概览'],['topics','主题'],['parameters','参数快照']].map(([k,label])=><button key={k} aria-pressed={detailTab===k} onClick={()=>setDetailTab(k)}>{label}</button>)}</div>
             {detailTab==='overview'&&<><dl><dt>时长</dt><dd>{summary.duration===null?'未知':summary.duration.toFixed(1)+' s'}</dd><dt>大小</dt><dd>{bytes(summary.size)}</dd><dt>主题数</dt><dd>{summary.topics.length}</dd><dt>丢失记录</dt><dd>{summary.dropoutCount} 次 / {summary.dropoutMs} ms</dd></dl>{Object.entries(summary.info).filter(([k])=>/ver_|sys_|hardware|software/.test(k)).map(([k,v])=><p className="px4-log-info" key={k}><small>{k}</small><code>{v}</code></p>)}{summary.truncated&&<p className="px4-error-text">文件尾部不完整；概览仅包含已解析部分。</p>}<small className="px4-muted">{summary.path}</small></>}
@@ -312,11 +381,12 @@ export default function Px4Toolbox({ onClose, visible = true, onShowScene, nativ
         </div>
       </section>
       <section role="tabpanel" id="px4-panel-messages" aria-labelledby="px4-tab-messages" hidden={tab!=='messages'} className="px4-panel"><Px4Messages messages={px4Messages} online={alive} visible={visible&&tab==='messages'}/></section>
-      <section role="tabpanel" id="px4-panel-nsh" aria-labelledby="px4-tab-nsh" hidden={tab!=='nsh'} className="px4-panel px4-nsh-panel"><div className="px4-nsh-heading"><div><b>NuttX NSH 控制台</b><small>仿真机转发 · PX4 {link?.target.system?'SYS '+link.target.system+' / COMP '+link.target.component:'等待识别'} · MAVLink Shell</small></div><small>{controllerRestarting?'飞控操作进行中，终端输入暂不可用':shell?.active&&alive?'交互会话已就绪':'等待仿真机终端数据'}</small></div><NshTerminal channel={shell||EMPTY_CHANNEL} connected={!!shell?.active&&alive&&!busy} historyKey={`px4-nsh-history-${link?.target.system??0}-${link?.target.component??0}`}/></section>
-      <section role="tabpanel" id="px4-panel-testing" aria-labelledby="px4-tab-testing" hidden={tab!=='testing'} className="px4-panel ft-panel"><Px4FlightTest link={link||null} instance={Number(instance)} bidirectional={source.bidirectional} disabled={!!operationBusy} beforeRun={beforeTestRun} onShowScene={onShowScene} onFocusChange={setTestFocus}/></section>
+      <section role="tabpanel" id="px4-panel-nsh" aria-labelledby="px4-tab-nsh" hidden={tab!=='nsh'} className="px4-panel px4-nsh-panel"><div className="px4-nsh-heading"><div><b>NuttX NSH 控制台</b><small>仿真机转发 · PX4 {link?.target.system?'SYS '+link.target.system+' / COMP '+link.target.component:'等待识别'} · MAVLink Shell</small></div>{busy==='mcp-nsh'&&<button onClick={()=>operation.current?.abort()}>取消 MCP 命令</button>}<small>{busy==='mcp-nsh'?'MCP 命令执行中，终端输入暂不可用':controllerRestarting?'飞控操作进行中，终端输入暂不可用':shell?.active&&alive?'交互会话已就绪':'等待仿真机终端数据'}</small></div><NshTerminal channel={shell||EMPTY_CHANNEL} connected={!!shell?.active&&alive&&!busy} historyKey={`px4-nsh-history-${link?.target.system??0}-${link?.target.component??0}`}/></section>
+      <section role="tabpanel" id="px4-panel-testing" aria-labelledby="px4-tab-testing" hidden={tab!=='testing'} className="px4-panel ft-panel"><Px4FlightTest link={link||null} instance={Number(instance)} bidirectional={source.bidirectional} disabled={!!operationBusy||firmwareBusy} beforeRun={beforeTestRun} onShowScene={onShowScene} onFocusChange={setTestFocus}/></section>
       <section role="tabpanel" id="px4-panel-forwarding" aria-labelledby="px4-tab-forwarding" hidden={tab!=='forwarding'} className="px4-panel"><Px4RouterSettings router={router} disabled={!!busy}/></section>
       <section role="tabpanel" id="px4-panel-sitl" aria-labelledby="px4-tab-sitl" hidden={tab!=='sitl'} className="px4-panel">{sitlOpened&&<Px4Sitl disabled={!!busy}/>}</section>
-      <footer className="px4-toolbox-footer"><span>{alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='sitl'?'本机 PX4 · 独立运行目录':tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='messages'?'飞控实时打印 · MAVLink STATUSTEXT':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':tab==='testing'?'后台执行 · JSBSim XML · 仿真机转发':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
+      <section role="tabpanel" id="px4-panel-firmware" aria-labelledby="px4-tab-firmware" hidden={tab!=='firmware'} className="px4-panel">{firmwareOpened&&<Px4Firmware disabled={!!busy&&busy!=='firmware'} beforeOperation={beforeFirmwareOperation} onBusyChange={firmwareBusyChanged}/>}</section>
+      <footer className="px4-toolbox-footer"><span>{tab==='firmware'?'仿真机 USB 飞控升级':alive?'仿真机 PX4 数据正常':'等待仿真机转发数据'}{link?.connected&&!alive&&link.lastHeartbeat>0?' · 心跳超时':''}</span><span>{tab==='firmware'?'本地 / 仿真机固件 · USB Bootloader':tab==='sitl'?'本机 PX4 · 独立运行目录':tab==='parameters'?'参数值来自飞控；分组与注释来自元数据':tab==='logs'?'完整接收并验证后保存 .ulg 文件':tab==='messages'?'飞控实时打印 · MAVLink STATUSTEXT':tab==='forwarding'?'仿真机独立服务 · 开机自动启动':tab==='testing'?'后台执行 · JSBSim XML · 仿真机转发':'持续交互会话 · 终端输出由飞控返回'}</span></footer>
     </section>
   </div>;
 }

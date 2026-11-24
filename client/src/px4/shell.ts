@@ -1,4 +1,5 @@
 import { Px4Connection } from './connection';
+import type { NshResult } from '../flight-test/mcpNsh';
 export type TerminalChannel = { write: (data: string) => Promise<void>; subscribe: (fn: (bytes: Uint8Array) => void) => () => void };
 export class Px4Shell implements TerminalChannel {
   private listeners = new Set<(bytes: Uint8Array) => void>();
@@ -6,13 +7,18 @@ export class Px4Shell implements TerminalChannel {
   private unsubscribe?: () => void;
   private timer?: ReturnType<typeof setInterval>;
   private queue = Promise.resolve();
+  private receiveEpoch = 0;
+  private commandRunning = false;
+  private promptConfirmed = false;
   active = false;
   onChange: () => void = () => {};
   onError: (message: string) => void = () => {};
   constructor(private link: Px4Connection) {}
   subscribe = (fn: (bytes: Uint8Array) => void) => { this.listeners.add(fn); if (this.cache.length) fn(this.cache); return () => { this.listeners.delete(fn); }; };
   private receive(bytes: Uint8Array) {
+    if(bytes.length)this.receiveEpoch++;
     const cache = new Uint8Array(this.cache.length + bytes.length); cache.set(this.cache); cache.set(bytes, this.cache.length); this.cache = cache.slice(-256 * 1024);
+    if(bytes.length)this.promptConfirmed=/(?:^|[\r\n])nsh>\s*$/.test(new TextDecoder().decode(this.cache).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,''));
     this.listeners.forEach(fn => fn(bytes));
   }
   private packet(bytes: Uint8Array, flags = 22): Uint8Array {
@@ -33,9 +39,61 @@ export class Px4Shell implements TerminalChannel {
   write = (data: string): Promise<void> => {
     if (!this.active) return Promise.reject(Error('终端会话未连接'));
     const bytes = new TextEncoder().encode(data);
+    if(bytes.length)this.promptConfirmed=false;
     const work = this.queue.then(async () => { for (let i = 0; i < bytes.length; i += 70) { if (!this.active) throw Error('终端会话已结束'); await this.link.send(126, this.packet(bytes.subarray(i, i+70))); } });
     this.queue = work.catch(() => {}); return work;
   };
+  async runCommand(command: string, timeoutMs: number, signal: AbortSignal): Promise<Pick<NshResult,'command'|'output'|'succeeded'|'truncated'|'durationMs'>> {
+    if (!command.trim() || command.length>256 || /[\x00-\x1f\x7f]/.test(command)) throw Error('NSH 只接受一条不超过 256 字符的非交互命令');
+    if (!Number.isInteger(timeoutMs) || timeoutMs<1000 || timeoutMs>30000) throw Error('NSH 超时范围为 1000～30000 ms');
+    if (this.commandRunning) throw Error('已有 NSH 命令正在执行');
+    if (signal.aborted || this.link.signal.aborted || !this.link.alive) throw Error('飞控连接已断开或操作已取消');
+    const clean=(text:string)=>text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'');
+    const atPrompt=()=>this.promptConfirmed&&/(?:^|[\r\n])nsh>\s*$/.test(clean(new TextDecoder().decode(this.cache)));
+    if(this.active&&!atPrompt())throw Error('终端尚未回到空闲 nsh> 提示符，或有未提交输入；未发送命令');
+    this.commandRunning=true;
+    const started=performance.now(),deadline=started+timeoutMs;
+    let sent=false;
+    const pending=new Set<()=>void>();
+    const wait=<T,>(accept:(text:string,output:string,truncated:boolean)=>T|undefined)=>new Promise<T>((resolve,reject)=>{
+      let tail='',output='',truncated=false,settled=false;
+      const decoder=new TextDecoder();
+      const dispose:()=>void=()=>finish(Error('NSH 采集已结束'));
+      const finish=(error?:Error,result?:T):void=>{if(settled)return;settled=true;pending.delete(dispose);clearTimeout(timer);this.listeners.delete(receive);signal.removeEventListener('abort',cancel);this.link.signal.removeEventListener('abort',cancel);error?reject(error):resolve(result!);};
+      const cancel=()=>finish(Error('NSH 操作已取消或飞控连接已断开；命令不会重放'));
+      const receive=(bytes:Uint8Array)=>{
+        const text=decoder.decode(bytes,{stream:true});tail=(tail+text).slice(-4096);
+        if(output.length+text.length>65536)truncated=true;output=(output+text).slice(0,65536);
+        const result=accept(clean(tail),clean(output),truncated);if(result!==undefined)finish(undefined,result);
+      };
+      const timer=setTimeout(()=>finish(Error('NSH 超时，命令结果未确认；不会自动重试，也不会自动中断远端命令')),Math.max(1,deadline-performance.now()));
+      pending.add(dispose);signal.addEventListener('abort',cancel,{once:true});this.link.signal.addEventListener('abort',cancel,{once:true});this.listeners.add(receive);
+      if(signal.aborted||this.link.signal.aborted)cancel();
+    });
+    try {
+      if(!this.active){
+        const before=this.receiveEpoch;await this.open();
+        if(this.receiveEpoch===before||!atPrompt())await wait(text=>/(?:^|[\r\n])nsh>\s*$/.test(text)?true:undefined);
+      }
+      if(!atPrompt())throw Error('终端未就绪，未发送命令');
+      const token='MCP'+crypto.randomUUID().replace(/-/g,'').slice(0,12);
+      const result=wait((tail,output,truncated)=>{
+        const lines=tail.replace(/\r/g,'\n').split('\n').map(s=>s.trim());
+        const succeeded=lines.includes(token+'0')?true:lines.includes(token+'1')?false:undefined;
+        if(succeeded===undefined||!/(?:^|[\r\n])nsh>\s*$/.test(tail))return;
+        return {command,output:output.replace(/\r/g,'\n').split('\n').filter(line=>!line.includes(token)&&line.trim()!=='nsh>').join('\n').trim(),succeeded,truncated,durationMs:Math.round(performance.now()-started)};
+      });
+      // Observe rejection immediately: a failed transport write must not leave
+      // an unhandled timeout while the receive listener is being cleaned up.
+      void result.catch(()=>{});
+      sent=true;
+      await this.write(`if ${command}; then echo ${token}0; else echo ${token}1; fi\r`);
+      return await result;
+    } catch(error) {
+      if(sent&&signal.aborted&&!this.link.signal.aborted&&this.link.alive)await this.write('\x03').catch(()=>{});
+      throw error;
+    } finally {for(const dispose of pending)dispose();this.commandRunning=false;}
+  }
   async saveParameters(signal: AbortSignal) {
     if (signal.aborted) throw Error('操作已取消');
     await this.open();
@@ -61,6 +119,7 @@ export class Px4Shell implements TerminalChannel {
     });
   }
   async close(release = true) {
+    this.promptConfirmed=false;
     if (this.timer) clearInterval(this.timer); this.timer = undefined;
     if (this.active && release && this.link.connected) {
       await this.write('\x03').catch(() => {}); await this.link.send(126, this.packet(new Uint8Array(), 0)).catch(() => {});

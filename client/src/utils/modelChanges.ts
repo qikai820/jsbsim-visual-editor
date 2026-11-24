@@ -1,3 +1,4 @@
+import { modelStorage } from './modelStorage';
 import type { ProjectXmlFile } from '../types';
 import { xmlContentEqual } from './xmlContentEqual';
 
@@ -104,7 +105,7 @@ export function remoteBaselineKey(model: string): string {
 
 export function readRemoteBaseline(model: string): ModelProject | null {
   try {
-    const value = JSON.parse(localStorage.getItem(remoteBaselineKey(model)) || 'null');
+    const value = JSON.parse(modelStorage.getItem(remoteBaselineKey(model)) || 'null');
     return value && Array.isArray(value.nodes) && Array.isArray(value.edges) ? value : null;
   } catch { return null; }
 }
@@ -150,6 +151,6 @@ export function restoreModelBaseline(current: ModelProject, baseline: ModelProje
 
 export function cachedEditBaseline(project: ModelProject, baseline: ModelProject | null): ModelProject | undefined {
   const model = project.xmlFiles?.find(file => file.category === 'main')?.path.match(/^aircraft\/([^/]+)\//)?.[1]
-    || localStorage.getItem('jsbsim-remote-model') || project.aircraft.name;
+    || modelStorage.getItem('jsbsim-remote-model') || project.aircraft.name;
   return baseline && !readRemoteBaseline(model) ? compactModelBaseline(baseline) : undefined;
 }

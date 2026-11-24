@@ -43,3 +43,9 @@ export function cacheLocalText(key: string, value: string): boolean {
     return tryStoreLocalText(key, value);
   } catch { return false; }
 }
+
+/** Reclaim only recreatable caches for a required project/preferences write. */
+export function reclaimBrowserCaches(): void {
+  const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+  for (const key of keys) if (key && groupFor(key)) localStorage.removeItem(key);
+}

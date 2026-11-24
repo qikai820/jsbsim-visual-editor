@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { firmwareRollback, firmwareInfo, type FirmwareInfo, firmwareApply, firmwareStage, firmwareStageFile, selectFirmwareFile, isTauri, ftpDownloadSimConfig, ftpUploadSimConfig, simInstanceSnapshot, ftpGetSimulatorVersion, listenFirmwareProgress, getPlotJugglerRate, setPlotJugglerRate, readSimulatorNetwork, setSimulatorNetwork, SimulatorVersion, type FirmwareSelection, type SimulatorNetworkInterface } from '../utils/tauriApi';
 import { useLanguage } from '../i18n';
 import { useSimSocket } from '../sim/useSimSocket';
-import { fleetSlotIds } from '../utils/fleetModelGroups';
+import { fleetSlotIds, modelGeocentricToGpsLatitude } from '../utils/fleetModelGroups';
 import { cacheLocalText, tryStoreLocalText } from '../utils/browserCache';
 
 type Tab = '系统设置' | '运行与时间' | '数值积分' | '初始状态' | '环境模型' | 'MCAP日志' | '性能与安全' | '固件升级';
@@ -50,6 +50,16 @@ const merge = (source: any) => ({
   safety: { ...defaults.safety, ...source?.safety },
   diagnostics: { ...defaults.diagnostics, ...source?.diagnostics },
 });
+
+type DefaultPosition = { latitudeDeg: number; longitudeDeg: number; altitudeM: number; terrainAltitudeM: number };
+const defaultPosition = (source: any): DefaultPosition => {
+  const initial = source?.initial || {};
+  const altitudeM = Number(initial.altitudeM ?? 0);
+  const latitude = Number(initial.latitudeDeg ?? 0);
+  return { latitudeDeg: initial.latitudeKind === 'geodetic' ? latitude : modelGeocentricToGpsLatitude(latitude, altitudeM),
+    longitudeDeg: Number(initial.longitudeDeg ?? 0), altitudeM,
+    terrainAltitudeM: Number(initial.terrainAltitudeM ?? 0) };
+};
 
 function NumberField({ label, value, onChange, unit, step = 1, min, max, commit = false }: any) {
   return <label className="sim-config-field"><span>{label}</span><div>{commit ? <FloatInput value={value} onValueChange={onChange} /> : <input type="number" value={value} step={step} min={min} max={max} onChange={e => onChange(Number(e.target.value))} />}{unit && <em>{unit}</em>}</div></label>;
@@ -108,6 +118,11 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
   const [baseline, setBaseline] = useState('');
   const [status, setStatus] = useState(tr('正在读取仿真机配置…', 'Reading simulator configuration…'));
   const [saving, setSaving] = useState(false);
+  const [simulatorPosition, setSimulatorPosition] = useState<DefaultPosition | null>(null);
+  const [simulatorPositionBaseline, setSimulatorPositionBaseline] = useState('');
+  const [simulatorPositionMessage, setSimulatorPositionMessage] = useState('');
+  const [simulatorPositionSaving, setSimulatorPositionSaving] = useState(false);
+  const [simulatorPositionRevision, setSimulatorPositionRevision] = useState(0);
   const [plotRateInput, setPlotRateInput] = useState(() => String(getPlotJugglerRate()));
   const [plotRateApplied, setPlotRateApplied] = useState(() => getPlotJugglerRate());
   const [plotRateSaving, setPlotRateSaving] = useState(false);
@@ -273,6 +288,38 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
     });
     return () => { active = false; };
   }, [path]);
+
+  useEffect(() => {
+    let active = true;
+    setSimulatorPositionMessage(tr('正在读取仿真机默认位置…', 'Reading simulator default position…'));
+    ftpDownloadSimConfig('config/global.json').then(result => {
+      if (!active) return;
+      const position = defaultPosition(JSON.parse(result.content));
+      setSimulatorPosition(position); setSimulatorPositionBaseline(JSON.stringify(position));
+      setSimulatorPositionMessage('');
+    }).catch(error => { if (active) setSimulatorPositionMessage(`${tr('读取失败', 'Read failed')}: ${error}`); });
+    return () => { active = false; };
+  }, [simulatorPositionRevision]);
+
+  const saveSimulatorPosition = async () => {
+    if (!simulatorPosition || simulatorPositionSaving) return;
+    if (Object.values(simulatorPosition).some(value => !Number.isFinite(value)) ||
+        Math.abs(simulatorPosition.latitudeDeg) > 90 || Math.abs(simulatorPosition.longitudeDeg) > 180) {
+      setSimulatorPositionMessage(tr('请输入有效的经纬度和海拔。', 'Enter valid coordinates and altitudes.')); return;
+    }
+    setSimulatorPositionSaving(true);
+    try {
+      const current = JSON.parse((await ftpDownloadSimConfig('config/global.json')).content);
+      const next = { ...current, version: current.version ?? 1,
+        initial: { ...current.initial, ...simulatorPosition, positionConfigured: true, latitudeKind: 'geodetic' } };
+      await ftpUploadSimConfig('config/global.json', JSON.stringify(next, null, 2));
+      const readback = defaultPosition(JSON.parse((await ftpDownloadSimConfig('config/global.json')).content));
+      if (JSON.stringify(readback) !== JSON.stringify(simulatorPosition)) throw Error(tr('保存回读不一致', 'Saved position does not match readback'));
+      setSimulatorPositionBaseline(JSON.stringify(simulatorPosition));
+      setSimulatorPositionMessage(tr('已保存到仿真机；下次启动模型生效。', 'Saved to simulator; applies on the next model start.'));
+    } catch (error) { setSimulatorPositionMessage(`${tr('保存失败，修改已保留', 'Save failed; edits retained')}: ${error}`); }
+    finally { setSimulatorPositionSaving(false); }
+  };
 
   const refreshSimulatorVersion = async () => {
     setVersionStatus(tr('正在读取仿真机版本…', 'Reading simulator version…'));
@@ -521,10 +568,23 @@ export default function SimulationConfigDialog({ model, instanceId, slots, onSel
           {tab === '数值积分' && <section><h3>{tr('数值积分','Numerical Integration')}</h3><p>{tr('修改后需重新加载模型。','Reload the model to apply changes.')}</p><div className="sim-config-grid">
             {([['rotationalRate',tr('旋转角速度','Rotational rate')],['translationalRate',tr('平移速度','Translational rate')],['rotationalPosition',tr('旋转姿态','Rotational position')],['translationalPosition',tr('平移位置','Translational position')]] as const).map(([key,label]) => <SelectField key={key} label={label} value={String(config.integrators[key])} onChange={(v:any)=>set('integrators',key,Number(v))}>{integratorOptions(isZh)}</SelectField>)}
           </div></section>}
-          {tab === '初始状态' && <section><h3>{tr('初始状态','Initial State')}</h3><div className="sim-config-grid">
+          {tab === '初始状态' && <><section aria-label={tr('仿真机默认位置', 'Simulator default position')}><h3>{tr('仿真机默认位置', 'Simulator default position')}</h3>
+            <p>{tr('所有模型共用的 GPS 位置。模型没有初始化位置时使用；模型自身的位置及实例覆盖优先。', 'Shared GPS position used when a model has no initial position. Model settings and instance overrides take precedence.')}</p>
+            {simulatorPosition && <div className="sim-config-grid">{([
+              ['latitudeDeg', tr('默认纬度', 'Default latitude'), '°', 0.0000001],
+              ['longitudeDeg', tr('默认经度', 'Default longitude'), '°', 0.0000001],
+              ['altitudeM', tr('默认模型海拔', 'Default aircraft altitude'), 'm', 0.01],
+              ['terrainAltitudeM', tr('默认地面海拔', 'Default terrain altitude'), 'm', 0.01],
+            ] as const).map(([key, label, unit, step]) => <NumberField key={key} label={label} value={simulatorPosition[key]} unit={unit} step={step}
+              onChange={(value: number) => { setSimulatorPosition(current => current && ({ ...current, [key]: value })); setSimulatorPositionMessage(''); }} />)}</div>}
+            <div className="sim-config-default-position-actions"><button type="button" disabled={simulatorPositionSaving || !simulatorPosition || JSON.stringify(simulatorPosition) === simulatorPositionBaseline} onClick={() => void saveSimulatorPosition()}>{tr('保存仿真机默认位置', 'Save simulator default position')}</button>
+              <button type="button" disabled={simulatorPositionSaving || !!simulatorPosition && JSON.stringify(simulatorPosition) !== simulatorPositionBaseline} onClick={() => setSimulatorPositionRevision(value => value + 1)}>{tr('重新读取', 'Reload')}</button>
+              {simulatorPositionMessage && <small role="status">{simulatorPositionMessage}</small>}</div>
+          </section><section className="sim-config-model-initial"><h3>{tr('模型初始状态','Model initial state')}</h3>
+            <p>{tr('模型模板中全零的位置表示未设置，将读取初始化文件；文件未设置的字段使用上面的仿真机默认值。', 'An all-zero template position is unset. The initialization file is used first; missing fields use the simulator defaults above.')}</p><div className="sim-config-grid">
             {([['latitudeDeg',tr('纬度','Latitude'),'°'],['longitudeDeg',tr('经度','Longitude'),'°'],['altitudeM',tr('海拔','Altitude'),'m'],['rollDeg','Roll','°'],['pitchDeg','Pitch','°'],['yawDeg','Yaw','°'],['airspeedMps',tr('初始空速','Initial airspeed'),'m/s']] as const).map(([key,label,unit]) => <NumberField key={key} label={label} value={config.initial[key]} step={0.1} unit={unit} onChange={(v:any)=>set('initial',key,v)} />)}
             <label className="sim-config-check"><input type="checkbox" checked={config.initial.trim} onChange={e=>set('initial','trim',e.target.checked)} />{tr('启动时执行配平','Trim on startup')}</label>
-          </div></section>}
+          </div></section></>}
           {tab === '环境模型' && <section><h3>{tr('环境模型','Environment Model')}</h3><p>{tr('大气与湍流参数支持实时调参；环境风请点击“应用风场”。保存后下次启动保留。','Atmosphere and turbulence edits apply live; click Apply wind for wind changes. Save to retain for the next start.')}</p><div className="sim-config-grid">
             <NumberField commit label={tr('海平面压力','Sea-level pressure')} value={config.environment.pressureSlPsf} step={0.01} min={0} unit="PSF" onChange={(v:any)=>set('environment','pressureSlPsf',v)} />
             <NumberField commit label={tr('温度偏差','Temperature bias')} value={config.environment.temperatureBiasR} step={0.1} unit="R" onChange={(v:any)=>set('environment','temperatureBiasR',v)} />

@@ -47,7 +47,15 @@ fn visual_property(path: &str, id: u8) -> Option<String> {
     }
     path = path.strip_prefix("jsbsim/").unwrap_or(path);
     let path = format!("/{path}");
-    let selected =
+    let platform = ["/moving-platform/enabled", "/moving-platform/contact-mode", "/moving-platform/deck-length-m",
+        "/moving-platform/deck-width-m", "/moving-platform/deck-z-m", "/guide-rail/length-m",
+        "/guide-rail/spacing-m", "/guide-rail/cg-z-m", "/guide-rail/sleeve-m"].contains(&path.as_str())
+        || (0..3).any(|i| {
+            let index = if i == 0 { String::new() } else { format!("[{i}]") };
+            path == format!("/moving-platform/relative-position-m{index}")
+                || path == format!("/moving-platform/angles-rad{index}")
+        });
+    let selected = platform ||
     ["/position/h-agl-ft", "/position/terrain-elevation-asl-ft", "/fcs/voliro_t/pitch-rad",
         "/fcs/voliro_t/rpm-model/version", "/fcs/voliro_t/rpm-model/tail-calibrated",
         "/atmosphere/total-wind-north-fps", "/atmosphere/total-wind-east-fps", "/atmosphere/total-wind-down-fps"]
@@ -214,6 +222,24 @@ pub fn snapshots() -> Vec<Value> { global().lock().map(|cache| cache.snapshots()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn moving_platform_pose_geometry_and_instances_are_preserved() {
+        assert_eq!(visual_property("/01/jsbsim/moving-platform/relative-position-m[0]", 1).as_deref(), Some("/moving-platform/relative-position-m"));
+        assert_eq!(visual_property("/02/jsbsim/moving-platform/angles-rad[2]", 1), None);
+        let mut packet = frame(1.0, 1);
+        packet["properties"] = json!({"/01/jsbsim/moving-platform/enabled":1,
+            "/01/jsbsim/moving-platform/relative-position-m[1]":2.5,
+            "/01/jsbsim/moving-platform/angles-rad[2]":0.4,
+            "/01/jsbsim/moving-platform/deck-width-m":3.0,
+            "/01/jsbsim/guide-rail/sleeve-m":0.1});
+        let mut cache = SceneTelemetry::default(); cache.ingest(&packet);
+        let snapshots = cache.snapshots();
+        assert_eq!(snapshots[0]["properties"]["/moving-platform/enabled"], 1);
+        assert_eq!(snapshots[0]["properties"]["/moving-platform/relative-position-m[1]"], 2.5);
+        assert_eq!(snapshots[0]["properties"]["/moving-platform/angles-rad[2]"], 0.4);
+        assert_eq!(snapshots[0]["properties"]["/moving-platform/deck-width-m"], 3.0);
+        assert_eq!(snapshots[0]["properties"]["/guide-rail/sleeve-m"], 0.1);
+    }
     fn frame(t: f64, generation: u32) -> Value {
         json!({"instance_id":"01", "model":"voliro_t", "state":"running", "timestamp":t,
             "capture_monotonic_us":t*1e6, "tree_generation":generation, "latitude_deg":34.0,

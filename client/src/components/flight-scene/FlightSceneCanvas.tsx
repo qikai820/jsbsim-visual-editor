@@ -14,6 +14,7 @@ import { Field, SCENE_FOG, SceneSky } from './FlightSceneEnvironment';
 import { createSceneSurfaceTextures, loadSceneSurfaceTextures, type SceneSurfaceTextures } from './sceneSurfaceTextures';
 import SceneObjects from './SceneObjects';
 import type { SceneEditor } from './useSceneEditor';
+import MovingPlatformScene from './MovingPlatformScene';
 
 export type SceneLayers = { grid: boolean; trails: boolean; labels: boolean; thrust: boolean; axes: boolean };
 type Props = {
@@ -315,6 +316,8 @@ export default function FlightSceneCanvas(props: Props) {
     <hemisphereLight args={['#d6e7f5', '#74795e', 1.7]} /><directionalLight position={[-30, 60, 20]} intensity={2} color="#fff1d6" />
     <Field grid={props.layers.grid} groundY={groundY} maps={maps} scenery={props.editor.document.showBase} />
     <SceneObjects editor={props.editor} groundY={groundY} maps={maps} feed={props.feed} instance={props.selected} />
+    {[...props.feed.aircraft].filter(([, entry]) => entry.latest.platformEnabled !== false && entry.latest.platform).map(([id, entry]) =>
+      <MovingPlatformScene key={`${id}:${entry.latest.model}:${entry.latest.generation}`} feed={props.feed} id={id} reading={entry.latest.platform!} />)}
     {[...props.feed.aircraft.keys()].map(id => <Aircraft key={id} id={id} {...props} selected={props.selected === id}
       groundY={groundY} groundKnown={props.groundAltitude !== null} maps={maps} />)}
     <Rig {...props} groundY={groundY} />

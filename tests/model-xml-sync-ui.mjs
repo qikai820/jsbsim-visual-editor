@@ -101,10 +101,12 @@ try {
     window.__files = Object.fromEntries(graph.xmlFiles.map(file => [file.path, file.originalXml]));
     window.__writes = []; window.__alerts = []; window.__failRead = ''; window.__failWrite = ''; window.__badReadback = ''; window.__holdWrite = false;
     window.confirm = () => true; window.alert = message => window.__alerts.push(message);
-    localStorage.setItem('jsbsim-language', 'zh-CN'); localStorage.setItem('jsbsim-cache-version', '2');
-    localStorage.setItem('jsbsim-project', JSON.stringify(graph)); localStorage.setItem('jsbsim-remote-model', 'test');
-    localStorage.setItem('jsbsim-remote-baseline:test', JSON.stringify(graph));
-    localStorage.setItem('jsbsim-remote-upload-enabled', 'true');
+    if (!localStorage.getItem('jsbsim-quota-reload-fixture')) {
+      localStorage.setItem('jsbsim-language', 'zh-CN'); localStorage.setItem('jsbsim-cache-version', '2');
+      localStorage.setItem('jsbsim-project', JSON.stringify(graph)); localStorage.setItem('jsbsim-remote-model', 'test');
+      localStorage.setItem('jsbsim-remote-baseline:test', JSON.stringify(graph));
+      localStorage.setItem('jsbsim-remote-upload-enabled', 'true');
+    }
     window.__TAURI_INTERNALS__ = { metadata: { currentWindow:{label:'main'}, currentWebview:{label:'main'} }, transformCallback:()=>1,
       invoke: async (command, args) => {
         if (command === 'load_aircraft') {
@@ -507,6 +509,48 @@ try {
   await evaluate(`document.querySelector('.model-pull-review-footer .primary').click()`);
   await until(`localStorage.getItem('jsbsim-remote-model')==='other'&&window.store.getState().nodes.length>0`);
   assert.equal(await evaluate('window.__writes.length'),writesBeforePull);
+  if (process.env.JSBSIM_QUOTA_LIBRARY) {
+    const library=process.env.JSBSIM_QUOTA_LIBRARY,model='XCD20_FlightIdentified';
+    const {readdir}=await import('node:fs/promises');const docs={};
+    for(const filename of await readdir(path.join(library,'aircraft',model))){
+      if(filename.endsWith('.xml'))docs['aircraft/'+model+'/'+filename]=await readFile(path.join(library,'aircraft',model,filename),'utf8');
+    }
+    for(const filename of ['XCD20_V5315_KV300.xml','XCD20_CINE1510_3B_FlightIdentified.xml'])docs['engine/'+filename]=await readFile(path.join(library,'engine',filename),'utf8');
+    docs['config/models/'+model+'.json']=await readFile(path.join(library,'config/models',model+'.json'),'utf8');
+    const large=backend('load_model',{model,documents:docs});
+    await evaluate(`Object.assign(window.__files,${JSON.stringify(docs)});window.__largeProject=${JSON.stringify(large)};window.cache=(await import('/src/utils/modelStorage.ts')).modelStorage`);
+    await evaluate(`(()=>{
+      window.__quotaSetItem=Storage.prototype.setItem;window.__quotaLimit=5*1024*1024;
+      Storage.prototype.setItem=function(key,value){const data=new Map(Object.keys(this).map(k=>[k,this.getItem(k)]));data.set(String(key),String(value));const bytes=[...data].reduce((n,[k,v])=>n+2*(k.length+v.length),0);if(bytes>window.__quotaLimit)throw new DOMException('The quota has been exceeded.','QuotaExceededError');return window.__quotaSetItem.call(this,key,value)};
+      localStorage.setItem('jsbsim-script-editor:quota.xml','preserve saved script');localStorage.setItem('jsbsim-global-variables','{"keep":42}');
+      localStorage.setItem('jsbsim-remote-baseline:quota-history',JSON.stringify({aircraft:{name:'history'},nodes:[],edges:[],vendor:'历史原始 XML '+('x'.repeat(100000))}));
+      window.__historyBefore=window.cache.getItem('jsbsim-remote-baseline:quota-history');
+      const bytes=Object.keys(localStorage).reduce((n,k)=>n+2*(k.length+localStorage.getItem(k).length),0);
+      localStorage.setItem('px4-parameter-metadata:quota-fill','m'.repeat(Math.floor((window.__quotaLimit-bytes-8192)/2)));
+      try{localStorage.setItem('jsbsim-project',JSON.stringify(window.__largeProject));window.__plainWriteFailed=false}catch(e){window.__plainWriteFailed=e.name==='QuotaExceededError'}
+    })()`);
+    assert.equal(await evaluate('window.__plainWriteFailed'),true,'actual large model reproduces the original plain-storage failure');
+    await openPull();await evaluate(`(()=>{const e=document.querySelector('.model-pull-dialog select');e.value='XCD20_FlightIdentified';e.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.model-pull-dialog footer .primary').click()})()`);
+    await until(`document.querySelector('.model-pull-review-footer')`);
+    await evaluate(`document.querySelector('.model-pull-review-footer .primary').click()`);
+    await until(`!document.querySelector('.model-pull-review-footer')&&!document.querySelector('.model-sync-error')&&localStorage.getItem('jsbsim-remote-model')==='XCD20_FlightIdentified'`);
+    assert.equal(await evaluate(`window.store.getState().xmlFiles.find(f=>f.path.endsWith('/GuideRailsXML.xml')).originalXml`),docs['aircraft/'+model+'/GuideRailsXML.xml']);
+    assert.equal(await evaluate(`window.store.getState().xmlFiles.find(f=>f.path.endsWith('/SceneParameters.xml')).currentXml`),docs['aircraft/'+model+'/SceneParameters.xml']);
+    assert.equal(await evaluate(`localStorage.getItem('jsbsim-project').startsWith('!jsbsim:gzip:1:')`),true);
+    assert.equal(await evaluate(`JSON.parse(window.cache.getItem('jsbsim-project')).xmlFiles.find(f=>f.path.endsWith('/GuideRailsXML.xml')).originalXml`),docs['aircraft/'+model+'/GuideRailsXML.xml']);
+    assert.equal(await evaluate(`window.cache.getItem('jsbsim-remote-baseline:quota-history')===window.__historyBefore`),true);
+    assert.equal(await evaluate(`localStorage.getItem('jsbsim-script-editor:quota.xml')`),'preserve saved script');
+    assert.equal(await evaluate(`localStorage.getItem('jsbsim-global-variables')`),'{'+'"keep":42'+'}');
+    assert.equal(await evaluate('window.__writes.length'),writesBeforePull);
+    await send('Page.captureScreenshot',{format:'png'}).then(async r=>writeFile('/tmp/jsbsim-model-pull-quota.png',Buffer.from(r.data,'base64')));
+    await evaluate(`localStorage.setItem('jsbsim-quota-reload-fixture','true');Storage.prototype.setItem=window.__quotaSetItem`);
+    await send('Page.reload');await until(`document.querySelector('.toolbar')`);
+    await evaluate(`window.store=(await import('/src/store/flowStore.ts')).useFlowStore;window.cache=(await import('/src/utils/modelStorage.ts')).modelStorage`);
+    await until(`window.store.getState().xmlFiles.some(f=>f.path.endsWith('/GuideRailsXML.xml'))`);
+    assert.equal(await evaluate(`window.store.getState().xmlFiles.find(f=>f.path.endsWith('/GuideRailsXML.xml')).currentXml`),docs['aircraft/'+model+'/GuideRailsXML.xml']);
+    assert.equal(await evaluate(`window.store.getState().aircraft.name`),model);
+    console.log('PASS: actual identified rail model pulls under a reproduced 5 MiB quota, keeps historical baselines/scripts/preferences, preserves complete XML and restores after reload.');
+  }
   console.log('PASS: XML sync and pull: staged full-model comparison, current graph edits, additions/removals/comments/environment, cancellation, list retry, missing references, concurrent edits, cache rollback, confirmed read-only replacement and empty-editor model selection');
 } finally {
   socket?.close(); chrome.kill('SIGTERM'); vite.kill('SIGTERM'); server.close();
