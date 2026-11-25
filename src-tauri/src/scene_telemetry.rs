@@ -47,7 +47,7 @@ fn visual_property(path: &str, id: u8) -> Option<String> {
     }
     path = path.strip_prefix("jsbsim/").unwrap_or(path);
     let path = format!("/{path}");
-    let platform = ["/moving-platform/enabled", "/moving-platform/contact-mode", "/moving-platform/deck-length-m",
+    let platform = ["/moving-platform/rail/contact-mask", "/moving-platform/rail/valid-mask", "/moving-platform/rail/released-mask", "/moving-platform/rail/travel-m", "/moving-platform/rail/travel-m[1]", "/moving-platform/enabled", "/moving-platform/contact-mode", "/moving-platform/deck-length-m",
         "/moving-platform/deck-width-m", "/moving-platform/deck-z-m", "/guide-rail/length-m",
         "/guide-rail/spacing-m", "/guide-rail/cg-z-m", "/guide-rail/sleeve-m"].contains(&path.as_str())
         || (0..3).any(|i| {
@@ -198,14 +198,17 @@ impl SceneTelemetry {
             let mut properties = Map::new();
             let mut ages = Map::new();
             let mut sources = Map::new();
+            let mut times = Map::new();
             for (path, sample) in &entry.properties {
                 properties.insert(path.clone(), sample.value.clone());
                 ages.insert(path.clone(), json!(sample.seen.elapsed().as_millis().min(u128::from(u32::MAX))));
                 sources.insert(path.clone(), json!(sample.source));
+                times.insert(path.clone(), json!(sample.sample_time));
             }
             frame["properties"] = Value::Object(properties);
             frame["scene_property_age_ms"] = Value::Object(ages);
             frame["scene_property_sources"] = Value::Object(sources);
+            frame["scene_property_time_sec"] = Value::Object(times);
             (*id, frame)
         }).collect();
         result.sort_by_key(|(id, _)| *id);
@@ -278,6 +281,7 @@ mod tests {
         assert_eq!(snapshot["properties"]["/atmosphere/total-wind-east-fps"],20.0);
         assert_eq!(snapshot["properties"]["/atmosphere/total-wind-down-fps"],-1.0);
         assert_eq!(snapshot["scene_property_sources"]["/atmosphere/total-wind-east-fps"],"monitor");
+        assert_eq!(snapshot["scene_property_time_sec"]["/atmosphere/total-wind-east-fps"],1.1);
         cache.ingest(&frame(0.0, 2));
         assert!(cache.snapshots()[0]["properties"].as_object().unwrap().is_empty());
     }

@@ -23,6 +23,21 @@ mod ftp_sync {
 }
 
 #[test]
+#[ignore = "requires the explicitly selected simulator; reads mounted roots and router config only"]
+fn live_firmware_file_picker_roots() {
+    transport::set_mode("network").unwrap();
+    let volumes=sim_files::storage().unwrap();
+    for volume in volumes.iter().filter(|v|v.total_bytes.is_some()) {
+        let entries=sim_files::list(volume.volume).unwrap();
+        println!("{} -> {}: {} entries",volume.mount_path,volume.volume,entries.len());
+    }
+    let data=volumes.iter().find(|v|v.volume=="data"&&v.total_bytes.is_some()).unwrap();
+    let path=sim_files::managed_file_path(&format!("{}/mavlink-router.conf",data.mount_path)).unwrap();
+    assert_eq!(path,"data/mavlink-router.conf");
+    assert!(!sim_files::read_limited(&path,4096).unwrap().is_empty());
+}
+
+#[test]
 #[ignore = "requires the simulator; writes and removes only its own temporary data directory"]
 fn live_network_file_manager() {
     use std::time::{SystemTime, UNIX_EPOCH};

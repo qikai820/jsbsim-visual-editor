@@ -2,6 +2,7 @@ import { modelStorage } from './utils/modelStorage';
 import { useState, useCallback, useEffect, useRef, useMemo, Component, type ReactNode, Suspense, lazy } from 'react';
 import { disabledDependencies } from './utils/disabledGraph';
 import { ReactFlowProvider } from '@xyflow/react';
+import { shallow } from 'zustand/shallow';
 import Toolbar from './components/Toolbar';
 import RuntimeTuningPanel from './components/RuntimeTuningPanel';
 import XmlDiagnosticDialog from './components/XmlDiagnosticDialog';
@@ -22,6 +23,8 @@ import './App.css';
 import './components/monitor/monitor.css';
 import ScopeWindow from './components/monitor/ScopeWindow';
 import { useSignalMonitor } from './sim/useSignalMonitor';
+import { useFlightTestStore, testIsActive } from './flight-test/session';
+import { xcd20ObservationKeys } from './flight-test/xcd20Monitor';
 import { sceneMonitorKeys, type SceneMonitorTarget } from './sim/sceneSignals';
 import { useSignalMonitorStore } from './store/signalMonitorStore';
 import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simInstanceControl, simInstanceSnapshot, simSyncTime, usbConsoleRead, type SimInstanceSummary } from './utils/tauriApi';
@@ -31,6 +34,27 @@ import { installDialogDragging } from './utils/dialogDragging';
 import { defaultFleetSlots, fleetSlotIds, normalizeFleetInitialOverrides, normalizeFleetNetworkOverrides, normalizeFleetSlots, type FleetInitialOverrides, type FleetNetworkOverrides, type FleetModelGroup } from './utils/fleetModelGroups';
 
 const FlightScene = lazy(() => import('./components/flight-scene/FlightScene'));
+
+function sameHistoryValue(previous: unknown, next: unknown): boolean {
+  return previous === next || JSON.stringify(previous) === JSON.stringify(next);
+}
+
+function sameHistoryList<T>(previous: readonly T[], next: readonly T[], equal: (a: T, b: T) => boolean = sameHistoryValue): boolean {
+  return previous === next || (previous.length === next.length &&
+    previous.every((entry, index) => equal(entry, next[index])));
+}
+
+function sameGraphEntry<T extends { selected?: boolean }>(previous: T, next: T): boolean {
+  if (previous === next) return true;
+  const { selected: _oldSelection, ...oldContent } = previous;
+  const { selected: _newSelection, ...newContent } = next;
+  return shallow(oldContent, newContent) || sameHistoryValue(oldContent, newContent);
+}
+
+function floatingWindowStyle({ x, y }: { x: number; y: number }) {
+  if (!x && !y) return undefined;
+  return { position: 'absolute' as const, top: 0, right: 0, transform: `translate(${x}px, ${y}px)` };
+}
 
 // Check WebGL before loading Three.js - must actually work, not just exist
 function checkWebGL(): boolean {
@@ -223,7 +247,6 @@ function AppContent() {
   const [jsbsimLogs, setJsbsimLogs] = useState<string[]>([]);
   const [showNshPrints, setShowNshPrints] = useState(() => modelStorage.getItem('jsbsim-log-show-nsh') === 'true');
   const nshCursor = useRef(0);
-  const [logReservedHeight, setLogReservedHeight] = useState(82);
   const [dragType, setDragType] = useState<ComponentType | null>(null);
   const [paletteCollapsed, setPaletteCollapsed] = useState(() => modelStorage.getItem('jsbsim-palette-collapsed') === 'true');
   const [paletteWidth, setPaletteWidth] = useState(() => Number(modelStorage.getItem('jsbsim-palette-width') || 250));
@@ -253,8 +276,14 @@ function AppContent() {
   const { telemetry, connected } = useSimSocket();
   const [sceneMonitorTarget, setSceneMonitorTarget] = useState<SceneMonitorTarget | null>(null);
   const [sceneToolbarHost, setSceneToolbarHost] = useState<HTMLDivElement | null>(null);
-  useSignalMonitor(sceneMonitorTarget?.instance ?? activeInstance,
-    sceneMonitorTarget ? sceneMonitorKeys(sceneMonitorTarget.model, sceneMonitorTarget.extraKeys) : []);
+  // Test observations share the existing simulator monitor. Their freshness
+  // must not depend on whether the optional 3-D view is open.
+  const testDocument = useFlightTestStore(state => state.starting || testIsActive(state.snapshot) ? state.runDocument : null);
+  const testInstance = useFlightTestStore(state => state.runInstance);
+  const testKeys = xcd20ObservationKeys(testDocument);
+  const monitorInstance = testKeys.length && testInstance !== null ? String(testInstance).padStart(2, '0') : sceneMonitorTarget?.instance ?? activeInstance;
+  const sceneKeys = sceneMonitorTarget?.instance === monitorInstance ? sceneMonitorKeys(sceneMonitorTarget.model, sceneMonitorTarget.extraKeys) : [];
+  useSignalMonitor(monitorInstance, [...testKeys, ...sceneKeys]);
   const armedScope = useSignalMonitorStore(state => state.armedScope);
   const monitorWindow = useSignalMonitorStore(state => state.openScope);
   const monitorError = useSignalMonitorStore(state => state.error);
@@ -361,9 +390,10 @@ function AppContent() {
 
   useEffect(() => {
     historyCurrent.current = snapshotProject();
-    return useFlowStore.subscribe(state => {
+    return useFlowStore.subscribe((state, before) => {
+      if (applyingHistory.current || (state.nodes === before.nodes && state.edges === before.edges &&
+          state.aircraft === before.aircraft && state.subFiles === before.subFiles && state.xmlFiles === before.xmlFiles)) return;
       const next = { nodes: state.nodes, edges: state.edges, aircraft: state.aircraft, subFiles: state.subFiles, xmlFiles: state.xmlFiles, monitoring: useSignalMonitorStore.getState().project };
-      if (applyingHistory.current || JSON.stringify(next) === JSON.stringify(historyCurrent.current)) return;
       const previous = historyCurrent.current;
       // Loading another aircraft replaces the whole project in one store
       // update. That is navigation, not an edit to the newly selected model;
@@ -381,9 +411,10 @@ function AppContent() {
       // Upload/readback advances XML source snapshots without changing the
       // editable model. It must not create an undo step that restores stale
       // source bytes while leaving parameter values unchanged.
-      const editable = (project: any) => JSON.stringify({ nodes: project.nodes, edges: project.edges,
-        aircraft: project.aircraft, subFiles: project.subFiles, monitoring: project.monitoring });
-      if (previous && editable(previous) === editable(next)) {
+      if (previous && sameHistoryList(previous.nodes, next.nodes, sameGraphEntry) &&
+          sameHistoryList(previous.edges, next.edges, sameGraphEntry) &&
+          sameHistoryValue(previous.aircraft, next.aircraft) && sameHistoryList(previous.subFiles, next.subFiles) &&
+          sameHistoryValue(previous.monitoring, next.monitoring)) {
         historyCurrent.current = next;
         return;
       }
@@ -476,15 +507,6 @@ function AppContent() {
   }, [draggingHud]);
 
   useEffect(() => {
-    if (!showJsbsimLog || !logWindowRef.current) return;
-    const update = () => setLogReservedHeight(Math.max(72, Math.min(window.innerHeight - 270, logWindowRef.current?.getBoundingClientRect().height || 40) + 40));
-    const observer = new ResizeObserver(update);
-    observer.observe(logWindowRef.current);
-    update();
-    return () => observer.disconnect();
-  }, [showJsbsimLog, jsbsimLogs.length]);
-
-  useEffect(() => {
     let active = true;
     let dispose: (() => void) | undefined;
     listenJsbsimLog((payload: any) => {
@@ -573,12 +595,14 @@ function AppContent() {
     }
   }, []);
 
-  // Auto-save to localStorage on state changes (debounced)
+  // Debounce writes for changes to the saved project.
   useEffect(() => {
-    const unsub = useFlowStore.subscribe((state) => {
-      if (state.nodes.length === 0) return;
+    const scheduleSave = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      if (useFlowStore.getState().nodes.length === 0) return;
       saveTimer.current = setTimeout(() => {
+        saveTimer.current = null;
         try {
           const { nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline } = useFlowStore.getState();
           modelStorage.setItem('jsbsim-project', JSON.stringify({ nodes, edges, aircraft, subFiles, xmlFiles, xmlEditBaseline: cachedEditBaseline({ nodes, edges, aircraft, subFiles, xmlFiles }, xmlEditBaseline), monitoring: useSignalMonitorStore.getState().project }));
@@ -586,8 +610,17 @@ function AppContent() {
           console.warn('[AutoSave] Failed:', e);
         }
       }, 500);
+    };
+    const stopFlow = useFlowStore.subscribe((state, previous) => {
+      if (state.aircraft !== previous.aircraft || state.subFiles !== previous.subFiles ||
+          state.xmlFiles !== previous.xmlFiles || state.xmlEditBaseline !== previous.xmlEditBaseline ||
+          !sameHistoryList(previous.nodes, state.nodes, sameGraphEntry) ||
+          !sameHistoryList(previous.edges, state.edges, sameGraphEntry)) scheduleSave();
     });
-    return () => { unsub(); if (saveTimer.current) clearTimeout(saveTimer.current); };
+    const stopMonitor = useSignalMonitorStore.subscribe((state, previous) => {
+      if (state.project !== previous.project) scheduleSave();
+    });
+    return () => { stopFlow(); stopMonitor(); if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, []);
 
   const handleDragStart = useCallback((type: ComponentType) => {
@@ -875,40 +908,38 @@ function AppContent() {
             <Palette onDragStart={handleDragStart} collapsed={paletteCollapsed} onToggle={() => setPaletteCollapsed(value => !value)} width={paletteWidth}
               onResizeStart={e => { e.preventDefault(); paletteResize.current = { x: e.clientX, width: paletteWidth }; }} />
             <Canvas dragType={dragType} onDragStart={handleDragStart} />
-            {(selectedNodeId || editingSubFileId) && <div className={`right-sidebar${showJsbsimLog ? ' has-detached-log' : ''}`} style={showJsbsimLog ? { paddingTop: logReservedHeight } : undefined}>
-              <PropertyPanel /><FileManager />
-            </div>}
           </>
         )}
-      </div>
-
-      {/* Keep the log independent from the property sidebar.  It docks below
-       * the HUD by default but remains draggable like the HUD itself. */}
-      {showJsbsimLog && (
-        <div className="jsbsim-log-sidebar jsbsim-log-detached" style={logPos.x || logPos.y ? { transform: `translate(${logPos.x}px, ${logPos.y}px)` } : undefined}>
-          <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button, input, label')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><label className="jsbsim-log-nsh-toggle" title="通过 USB 显示板端调试控制台的打印"><input type="checkbox" checked={showNshPrints} onChange={event => { const enabled = event.target.checked; setShowNshPrints(enabled); modelStorage.setItem('jsbsim-log-show-nsh', String(enabled)); }} />NSH 打印</label><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)}>×</button></div></div>
-          <div ref={logWindowRef} className="sim-log-window jsbsim-log-sidebar-window" onScroll={event => {
-            const element = event.currentTarget;
-            followLogTailRef.current =
-              element.scrollHeight - element.scrollTop - element.clientHeight < 24;
-          }}>
-            {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
+        <div className="right-workspace-dock">
+          {hudVisible && workspace === 'editor' && !focusedModule && !show3D && !showLogCenter && (
+            <div className="jsbsim-hud-window" style={floatingWindowStyle(hudPos)}>
+              <div className="jsbsim-hud-window-head" onPointerDown={e => {
+                if ((e.target as HTMLElement).closest('button')) return;
+                hudDrag.current = { x: e.clientX, y: e.clientY, left: hudPos.x, top: hudPos.y };
+                setDraggingHud(true);
+              }}><span>HUD · {activeInstance} · FLIGHT DISPLAY</span><span className="hud-window-actions"><span>↕ 拖动</span><button onClick={() => setHudVisible(false)} title="隐藏 HUD" aria-label="隐藏 HUD">×</button></span></div>
+              <FlightHud telemetry={hudTelemetry} connected={hudConnected} />
+            </div>
+          )}
+          <div className="right-dock-panels">
+            {showJsbsimLog && (
+              <div className="jsbsim-log-sidebar jsbsim-log-detached" style={floatingWindowStyle(logPos)}>
+                <div className="jsbsim-log-sidebar-head" onPointerDown={e => { if ((e.target as HTMLElement).closest('button, input, label')) return; logDrag.current = { x: e.clientX, y: e.clientY, left: logPos.x, top: logPos.y }; setDraggingLog(true); }}><span>🖥️ JSBSim 信息</span><div><label className="jsbsim-log-nsh-toggle" title="通过 USB 显示板端调试控制台的打印"><input type="checkbox" checked={showNshPrints} onChange={event => { const enabled = event.target.checked; setShowNshPrints(enabled); modelStorage.setItem('jsbsim-log-show-nsh', String(enabled)); }} />NSH 打印</label><button className="jsbsim-log-clear" onClick={() => setJsbsimLogs([])}>清理</button><button onClick={() => setShowJsbsimLog(false)} aria-label="关闭 JSBSim 信息">×</button></div></div>
+                <div ref={logWindowRef} className="sim-log-window jsbsim-log-sidebar-window" onScroll={event => {
+                  const element = event.currentTarget;
+                  followLogTailRef.current =
+                    element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+                }}>
+                  {jsbsimLogs.length === 0 ? <span className="sim-log-empty">暂无信息</span> : jsbsimLogs.map((line, i) => <div key={`${i}-${line}`} className="sim-log-line">{line}</div>)}
+                </div>
+              </div>
+            )}
+            {workspace === 'editor' && !focusedModule && (selectedNodeId || editingSubFileId) && <div className="right-sidebar">
+              <PropertyPanel /><FileManager />
+            </div>}
           </div>
         </div>
-      )}
-
-      {/* HUD belongs to the main model canvas. Full-screen editors and viewers
-       * deliberately do not render it, so it cannot cover their controls. */}
-      {hudVisible && workspace === 'editor' && !focusedModule && !show3D && !showLogCenter && (
-        <div className="jsbsim-hud-window" style={{ transform: `translate(${hudPos.x}px, ${hudPos.y}px)` }}>
-          <div className="jsbsim-hud-window-head" onPointerDown={e => {
-            if ((e.target as HTMLElement).closest('button')) return;
-            hudDrag.current = { x: e.clientX, y: e.clientY, left: hudPos.x, top: hudPos.y };
-            setDraggingHud(true);
-          }}><span>HUD · {activeInstance} · FLIGHT DISPLAY</span><span className="hud-window-actions"><span>↕ 拖动</span><button onClick={() => setHudVisible(false)} title="隐藏 HUD" aria-label="隐藏 HUD">×</button></span></div>
-          <FlightHud telemetry={hudTelemetry} connected={hudConnected} />
-        </div>
-      )}
+      </div>
 
       {workspace !== 'scene' && <RuntimeTuningPanel />}
       {monitorWindow && <ScopeWindow key={monitorWindow} />}

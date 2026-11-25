@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { createHash } from 'node:crypto';
 const work = await mkdtemp(path.join(tmpdir(), 'moving-platform-scene-'));
 try {
   const output = path.join(work, 'test.cjs');
@@ -71,5 +72,9 @@ try {
   const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)));
   assert(json.images.every(image => image.bufferView !== undefined && !image.uri));
   assert(json.buffers.every(buffer => !buffer.uri));
+  const provenance=JSON.parse(await readFile(new URL('../client/public/scenery/moving-platform/visual-model.json',import.meta.url),'utf8'));
+  assert.equal(provenance.collision.sourceSha256,createHash('sha256').update(glb).digest('hex'),'native collision geometry must refer to the exact bundled visual GLB');
+  assert.equal(provenance.collision.triangles,367);
+  assert.equal(provenance.collision.removedDegenerateTriangles,7);
   console.log('PASS moving platform: native geometry alignment, coherent measured pose, lifecycle, VMON budgets, offline GLB');
 } finally { await rm(work, { recursive: true, force: true }); }

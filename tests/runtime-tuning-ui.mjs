@@ -73,6 +73,7 @@ try {
  const first=await evaluate(`window.__record('01','test/gain').firstTime`);
  await setField('限幅上限',.5);await until('window.__tuning.getState().applied===2');
  assert.deepEqual((await evaluate('window.__calls.at(-1).args.edits')).map(edit=>edit.value),[.5,-10],'first edit on an XML-imported gain applies upper 0.5 and its paired lower');
+ assert.match(await evaluate(`document.querySelector('[data-testid="runtime-tuning-panel"]').textContent`),/已应用 2 项/,'the panel shows the runtime acknowledgement');
  await edit(3,false);await new Promise(r=>setTimeout(r,350));
  assert.equal(await evaluate('window.__calls.length'),1,'typing a draft never changes the running model');
  await evaluate(`document.activeElement.blur()`);await until('window.__tuning.getState().applied===3');

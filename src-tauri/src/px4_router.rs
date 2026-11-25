@@ -22,6 +22,7 @@ pub struct Snapshot {
     pub simulator: String,
     pub state: String,
     pub source: Option<String>,
+    pub log_cache: bool,
     pub config: Config,
     pub active_config: Config,
     pub routes: Vec<Route>,
@@ -92,7 +93,8 @@ fn parse_status(host: Ipv4Addr, status: &str, original: String) -> Result<Snapsh
     }
     if routes.len()!=2 {return Err("仿真机未返回完整的两路转发统计".into());}
     let config=parse_config(&original)?;
-    Ok(Snapshot{simulator:host.to_string(),state:state.into(),source,config,active_config,routes,original})
+    let log_cache=fields.get("log_cache")==Some(&"1");
+    Ok(Snapshot{simulator:host.to_string(),state:state.into(),source,log_cache,config,active_config,routes,original})
 }
 trait Board {
     fn snapshot(&mut self) -> Result<Snapshot,String>;
@@ -174,7 +176,7 @@ mod tests {
     use super::*;
     fn config()->Config {Config{device:"/dev/ttyACM0".into(),baud:921600,host:"192.168.3.109".into(),qgc_port:14550,toolbox_port:14553}}
     fn snapshot(state:&str)->Snapshot {
-        let c=config();Snapshot{simulator:"192.168.3.82".into(),state:state.into(),source:None,config:c.clone(),active_config:c.clone(),routes:vec![],original:serialize(&c)}
+        let c=config();Snapshot{simulator:"192.168.3.82".into(),state:state.into(),source:None,log_cache:false,config:c.clone(),active_config:c.clone(),routes:vec![],original:serialize(&c)}
     }
     struct Mock { value:Snapshot, calls:Vec<String>, fail_start:bool, fail_after_start:bool }
     impl Board for Mock {
@@ -187,8 +189,11 @@ mod tests {
         let text="\x1b[KMAVLINK_ROUTER state=running device=/dev/ttyACM0 baud=921600 host=192.168.3.109 qgc_port=14550 toolbox_port=14553\nMAVLINK_ROUTE name=qgc rx_bytes=1234 tx_bytes=56 errors=0 last_error=0\nMAVLINK_ROUTE name=px4-toolbox rx_bytes=1234 tx_bytes=7 errors=2 last_error=98\n";
         let s=parse_status("192.168.3.82".parse().unwrap(),text,serialize(&config())).unwrap();assert_eq!(s.routes[1].last_error,98);assert_eq!(s.config,config());
         assert_eq!(s.source,None);
-        let udp=text.replace("state=running", "state=running source=udp");
-        assert_eq!(parse_status("192.168.3.82".parse().unwrap(),&udp,serialize(&config())).unwrap().source.as_deref(),Some("udp"));
+        assert!(!s.log_cache);
+        let udp=text.replace("state=running", "state=running source=udp log_cache=1");
+        let s=parse_status("192.168.3.82".parse().unwrap(),&udp,serialize(&config())).unwrap();
+        assert_eq!(s.source.as_deref(),Some("udp"));
+        assert!(s.log_cache);
         assert!(parse_status("192.168.3.82".parse().unwrap(),"Unknown option",serialize(&config())).is_err());
         assert!(parse_config(&(serialize(&config())+"host=192.168.3.1\n")).is_err());
         for change in ["qgc_port=14553","host=0.0.0.0","device=/dev/ttyACM0;reboot","baud=12"] {

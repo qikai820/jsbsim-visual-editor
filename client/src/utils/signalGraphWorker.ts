@@ -1,7 +1,9 @@
 import type { Edge, InternalNode, Node } from '@xyflow/react';
-import SignalGraphWorker from './signalGraph.worker?worker';
+import SignalGraphWorker from './signalGraph.worker?worker&inline';
+import wasmUrl from '../../../node_modules/libavoid-js/dist/libavoid.wasm?url';
 
 export interface SignalWorkerRequest {
+  wasmUrl: string;
   nodes: Node[];
   edges: Edge[];
   geometry: { id: string; measured: InternalNode['measured']; handleBounds: InternalNode['internals']['handleBounds'] }[];
@@ -18,10 +20,10 @@ export function solveSignalGraph(
   return new Promise((resolve, reject) => {
     const aborted = () => new DOMException('Signal graph job cancelled', 'AbortError');
     if (options.signal?.aborted) { reject(aborted()); return; }
-    // Vite selects a module worker in dev and a self-contained classic worker
-    // in production. Desktop WebViews need not load a chain of worker modules.
+    // Vite embeds the classic worker in the production bundle so the desktop
+    // WebView can start it without requesting a script from its custom scheme.
     let worker: Worker;
-    try { worker = new SignalGraphWorker(); }
+    try { worker = new SignalGraphWorker({ name: 'signal-graph' }); }
     catch (error) {
       reject(new Error(`无法启动连线计算线程：${error instanceof Error ? error.message : String(error)}`));
       return;
@@ -49,6 +51,8 @@ export function solveSignalGraph(
       // Send geometry only. Node data and edge labels may contain React values
       // or functions, and copying entire expression trees is unnecessary.
       const request: SignalWorkerRequest = {
+        // The bundled worker's blob URL cannot resolve relative assets.
+        wasmUrl: new URL(wasmUrl, window.location.href).href,
         nodes: nodes.map(({ id, type, position, hidden, width, height, measured }) =>
           ({ id, type, position, hidden, width, height, measured, data: {} })),
         edges: edges.map(({ id, source, sourceHandle, target, targetHandle, hidden, data }) =>

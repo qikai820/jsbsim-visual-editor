@@ -20,6 +20,28 @@ pub fn storage() -> Result<Vec<crate::storage_usage::StorageUsage>, String> {
     } else { network::storage() }
 }
 
+/// File operations use sd/... and data/...; native/MCP pickers may also supply
+/// an absolute path shown by the simulator. Resolve only its actual volume root.
+pub fn managed_file_path(path: &str) -> Result<String, String> {
+    if !path.starts_with('/') {
+        managed_volume(path)?;
+        return Ok(path.into());
+    }
+    managed_file_path_at(path, &storage()?)
+}
+
+fn managed_file_path_at(path: &str, volumes: &[crate::storage_usage::StorageUsage]) -> Result<String, String> {
+    for volume in volumes {
+        if let Some(tail) = path.strip_prefix(volume.mount_path).and_then(|s| s.strip_prefix('/')) {
+            if volume.total_bytes.is_none() { return Err(format!("{} 未挂载", volume.mount_path)); }
+            let managed = format!("{}/{tail}", volume.volume);
+            managed_volume(&managed)?;
+            return Ok(managed);
+        }
+    }
+    Err("固件路径必须位于仿真机当前挂载的数据盘或 SD 卡内".into())
+}
+
 pub fn list(path: &str) -> Result<Vec<UsbFileEntry>, String> {
     if crate::ftp_sync::use_usb() { usb::list(path) } else { network::list(path) }
 }
@@ -82,4 +104,24 @@ pub fn transfer(source: &str, destination: &str, move_source: bool) -> Result<()
 
 pub fn remove_tree(path: &str, directory: bool) -> Result<(), String> {
     if directory { delete_directory_tree(path) } else { delete(path) }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    #[test]
+    fn absolute_firmware_paths_follow_actual_ssd_emmc_and_sd_mounts() {
+        let header="Size Blocks Used Available Mounted on\n";
+        let ssd=crate::storage_usage::parse(&format!("{header}4096 100 0 100 /mnt/home\n512 100 0 100 /mnt/sdcard\n")).unwrap();
+        assert_eq!(managed_file_path_at("/mnt/home/firmware/a.px4",&ssd).unwrap(),"data/firmware/a.px4");
+        assert_eq!(managed_file_path_at("/mnt/sdcard/a.px4",&ssd).unwrap(),"sd/a.px4");
+        let emmc=crate::storage_usage::parse(&format!("{header}4096 100 0 100 /data\n")).unwrap();
+        assert_eq!(managed_file_path_at("/data/a.px4",&emmc).unwrap(),"data/a.px4");
+        assert_eq!(managed_file_path("data/firmware/a.px4").unwrap(),"data/firmware/a.px4");
+        for path in ["/data/a.px4","/mnt/home-other/a.px4","/etc/a.px4","/mnt/home/../a.px4","/mnt/home//a.px4","/mnt/home/"] {
+            assert!(managed_file_path_at(path,&ssd).is_err(),"{path}");
+        }
+        assert!(managed_file_path_at("/mnt/sdcard/a.px4",&emmc).unwrap_err().contains("未挂载"));
+        assert!(managed_file_path_at(&format!("/mnt/home/{}.px4","x".repeat(65)),&ssd).is_err());
+    }
 }

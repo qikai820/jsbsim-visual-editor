@@ -24,5 +24,14 @@
     "rodSpacingM": 0.36,
     "contactMode": 2,
     "generator": "createMovingPlatformModel / three.js GLTFExporter; tests/moving-platform-scene-ui.mjs"
+  },
+  "collision": {
+    "sourceSha256": "50c6b814a680f181a6bd6e1592181171c705335f9463943d09979cf327b6f517",
+    "hullTriangles": 355,
+    "deckTriangles": 12,
+    "triangles": 367,
+    "removedDegenerateTriangles": 7,
+    "runtimeCapability": "moving_platform_mesh=1",
+    "generator": "scripts/generate-moving-platform-hull.py"
   }
 }

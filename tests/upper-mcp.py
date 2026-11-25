@@ -87,7 +87,7 @@ class ProxyTests(unittest.TestCase):
         self.endpoint.unlink()
         self.send("tools/list", 2)
         tools = self.receive()["result"]["tools"]
-        self.assertEqual(len(tools), 18)
+        self.assertEqual(len(tools), 20)
         self.assertEqual(self.requests, [])
         self.send("tools/call", 3, {"name": "upper_get_status"})
         self.assertTrue(self.receive()["result"]["isError"])
@@ -106,6 +106,8 @@ class ProxyTests(unittest.TestCase):
             ("upper_firmware_start", {"selectionId":1,"port":"/dev/ttyACM0"}),
             ("upper_firmware_prepare", {"path":"/data/a.px4","source":"unknown"}),
             ("upper_firmware_cancel", {"id":0}),
+            ("upper_firmware_select", {"simulator":"192.0.2.1","firmwareId":"../file"}),
+            ("upper_firmware_select", {"simulator":"invalid","firmwareId":"a"*64}),
         ]
         for index, (name, args) in enumerate(cases, 10):
             self.send("tools/call", index, {"name": name, "arguments": args})
@@ -114,7 +116,9 @@ class ProxyTests(unittest.TestCase):
 
     def test_simulator_firmware_tools_share_authenticated_proxy(self):
         self.initialize()
-        calls=[("upper_firmware_prepare",{"path":"/mnt/home/fw.px4","source":"simulator"}),
+        calls=[("upper_firmware_library",{}),
+               ("upper_firmware_select",{"simulator":"192.0.2.1","firmwareId":"a"*64}),
+               ("upper_firmware_prepare",{"path":"/mnt/home/fw.px4","source":"simulator"}),
                ("upper_firmware_prepare",{"path":"/tmp/fw.px4","source":"local"}),
                ("upper_firmware_start",{"selectionId":3,"simulator":"192.0.2.1","port":"/dev/ttyACM0"}),
                ("upper_firmware_cancel",{"id":4})]

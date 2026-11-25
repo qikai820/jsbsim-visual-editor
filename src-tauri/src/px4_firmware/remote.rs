@@ -69,6 +69,7 @@ pub fn ports() -> Result<Vec<UsbTarget>, String> {
 pub struct RemoteWire {
     stream: TcpStream,
     pub healthy: bool,
+    pub local_flash: bool,
 }
 impl RemoteWire {
     pub fn connect(target: &UsbTarget) -> Result<Self, String> {
@@ -121,6 +122,9 @@ impl RemoteWire {
         let mut wire = Self {
             stream,
             healthy: true,
+            local_flash: result
+                .lines()
+                .any(|l| l.trim() == "PX4_FIRMWARE_LOCAL protocol=1"),
         };
         wire.reply()?;
         Ok(wire)
@@ -157,6 +161,99 @@ impl RemoteWire {
             return Err(e.to_string());
         }
         self.reply().map(|_| ())
+    }
+    pub fn flash_local(
+        &mut self,
+        firmware: &protocol::Firmware,
+        board: &protocol::Board,
+        progress: &mut impl FnMut(&str, usize, usize),
+    ) -> Result<(), String> {
+        if !self.local_flash {
+            return Err("仿真机不支持本机刷写".into());
+        }
+        protocol::compatible(firmware, board)?;
+        let result = (|| {
+            self.stream
+                .set_read_timeout(Some(Duration::from_secs(45)))
+                .map_err(|e| e.to_string())?;
+            self.stream
+                .set_write_timeout(Some(Duration::from_secs(30)))
+                .map_err(|e| e.to_string())?;
+            let mut request = vec![2, 0, 0, 0, 0, 0, 0, 0, 0];
+            for n in [
+                firmware.image.len() as u32,
+                board.board_id,
+                board.flash_size as u32,
+                board.protocol,
+                firmware.crc(firmware.image.len()),
+                firmware.crc(board.flash_size),
+            ] {
+                request.extend_from_slice(&n.to_le_bytes());
+            }
+            self.stream.write_all(&request).map_err(|e| e.to_string())?;
+            if !self.reply()?.is_empty() {
+                return Err("仿真机上传握手无效；未请求擦除".into());
+            }
+            progress("upload", 0, firmware.image.len());
+            for (index, chunk) in firmware.image.chunks(65536).enumerate() {
+                self.stream
+                    .write_all(chunk)
+                    .map_err(|e| format!("固件上传中断；未自动重试：{e}"))?;
+                progress("upload", index * 65536 + chunk.len(), firmware.image.len());
+            }
+            self.stream
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .map_err(|e| e.to_string())?;
+            let (mut previous, mut previous_done) = (0, 0);
+            loop {
+                let event = match self.reply() {
+                    Ok(event) => event,
+                    Err(error) if self.healthy => return Err(error),
+                    Err(error) => return Err(format!("{error}；若已擦除，仿真机会继续本轮本机刷写，请等待并检查飞控，勿立即重试")),
+                };
+                if event.len() != 16 || &event[..4] != b"P4FW" {
+                    return Err("仿真机刷写进度帧无效；未自动重试".into());
+                }
+                let number = |offset| {
+                    u32::from_le_bytes(event[offset..offset + 4].try_into().unwrap()) as usize
+                };
+                let (stage, done, total) = (number(4), number(8), number(12));
+                let image_stage = stage == 2 || stage == 3;
+                if !(1..=5).contains(&stage)
+                    || stage < previous
+                    || stage > previous + 1
+                    || (stage == previous && done < previous_done)
+                    || (stage != previous
+                        && (previous == 2 || previous == 3)
+                        && previous_done != firmware.image.len())
+                    || total != if image_stage { firmware.image.len() } else { 0 }
+                    || done > total
+                {
+                    return Err("仿真机刷写进度顺序或长度无效；未自动重试".into());
+                }
+                previous = stage;
+                previous_done = done;
+                if stage < 5 {
+                    progress(
+                        ["", "erase", "program", "verify", "reboot"][stage],
+                        done,
+                        total,
+                    );
+                }
+                // Piggyback the TCP acknowledgement on this byte so NuttX's
+                // unbuffered send never waits for the desktop's delayed ACK.
+                self.stream
+                    .write_all(&[0x06])
+                    .map_err(|e| format!("升级进度连接中断；勿立即重试：{e}"))?;
+                if stage == 5 {
+                    return Ok(());
+                }
+            }
+        })();
+        if result.is_err() {
+            self.healthy = false;
+        }
+        result
     }
     fn raw(&mut self, command: &[u8], count: usize, timeout: Duration) -> Result<Vec<u8>, String> {
         let mut packet = vec![1];
@@ -201,6 +298,136 @@ impl Wire for RemoteWire {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn local_fixture() -> (protocol::Firmware, protocol::Board) {
+        (
+            protocol::Firmware {
+                info: protocol::ImageInfo {
+                    name: "test.px4".into(),
+                    source: "test".into(),
+                    board_id: 1179,
+                    board_revision: 0,
+                    image_size: 1024,
+                    description: String::new(),
+                    git_identity: String::new(),
+                    hardware:"MicoAir H743-v2".into(),
+                    compiled_at:None,
+                    package_built_at:None,
+                },
+                image: (0..1024).map(|v| v as u8).collect(),
+                package:vec![],
+            },
+            protocol::Board {
+                protocol: 5,
+                board_id: 1179,
+                board_revision: 0,
+                flash_size: 4096,
+            },
+        )
+    }
+    fn local_event(stage: u32, done: u32, total: u32) -> Vec<u8> {
+        let mut bytes = vec![0, 16, 0, b'P', b'4', b'F', b'W'];
+        for n in [stage, done, total] {
+            bytes.extend_from_slice(&n.to_le_bytes());
+        }
+        bytes
+    }
+    #[test]
+    fn local_upload_streams_once_and_acknowledges_progress_without_block_rpcs() {
+        use std::net::TcpListener;
+        let (firmware, board) = local_fixture();
+        let expected = firmware.image.clone();
+        let expected_crc = firmware.crc(board.flash_size);
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            let mut header = [0; 33];
+            stream.read_exact(&mut header).unwrap();
+            assert_eq!(&header[..9], &[2, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(u32::from_le_bytes(header[9..13].try_into().unwrap()), 1024);
+            assert_eq!(
+                u32::from_le_bytes(header[29..33].try_into().unwrap()),
+                expected_crc
+            );
+            stream.write_all(&[0, 0, 0]).unwrap();
+            let mut image = vec![0; 1024];
+            stream.read_exact(&mut image).unwrap();
+            assert_eq!(image, expected);
+            for (stage, done, total) in [
+                (1, 0, 0),
+                (2, 0, 1024),
+                (2, 1024, 1024),
+                (3, 0, 1024),
+                (3, 1024, 1024),
+                (4, 0, 0),
+                (5, 0, 0),
+            ] {
+                let event = local_event(stage, done, total);
+                // TCP may fragment any header or payload boundary.
+                stream.write_all(&event[..5]).unwrap();
+                stream.write_all(&event[5..]).unwrap();
+                let mut ack = [0];
+                stream.read_exact(&mut ack).unwrap();
+                assert_eq!(ack, [0x06]);
+            }
+        });
+        let mut wire = RemoteWire {
+            stream: TcpStream::connect(address).unwrap(),
+            healthy: true,
+            local_flash: true,
+        };
+        let mut progress = Vec::new();
+        wire.flash_local(&firmware, &board, &mut |stage, done, total| {
+            progress.push((stage.to_string(), done, total))
+        })
+        .unwrap();
+        assert!(progress.contains(&("upload".into(), 1024, 1024)));
+        assert!(progress.contains(&("verify".into(), 1024, 1024)));
+        assert_eq!(progress.last().unwrap().0, "reboot");
+        peer.join().unwrap();
+    }
+    #[test]
+    fn local_flash_failure_or_invalid_progress_never_falls_back_or_resends() {
+        use std::net::{Shutdown, TcpListener};
+        for invalid_progress in [false, true] {
+            let (firmware, board) = local_fixture();
+            let server = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = server.local_addr().unwrap();
+            let peer = std::thread::spawn(move || {
+                let (mut stream, _) = server.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut header = [0; 33];
+                stream.read_exact(&mut header).unwrap();
+                stream.write_all(&[0, 0, 0]).unwrap();
+                let mut image = vec![0; 1024];
+                stream.read_exact(&mut image).unwrap();
+                if invalid_progress {
+                    stream.write_all(&local_event(3, 0, 1024)).unwrap();
+                } else {
+                    stream.write_all(&[1, 3, 0, b'b', b'a', b'd']).unwrap();
+                }
+                let mut next = [0; 9];
+                assert_eq!(
+                    stream.read(&mut next).unwrap(),
+                    0,
+                    "must close without another flash request"
+                );
+            });
+            let mut wire = RemoteWire {
+                stream: TcpStream::connect(address).unwrap(),
+                healthy: true,
+                local_flash: true,
+            };
+            assert!(wire
+                .flash_local(&firmware, &board, &mut |_, _, _| {})
+                .is_err());
+            assert!(!wire.healthy);
+            wire.stream.shutdown(Shutdown::Both).unwrap();
+            peer.join().unwrap();
+        }
+    }
     #[test]
     fn simulator_capability_and_identity_are_required() {
         let host = "192.0.2.1".parse().unwrap();
@@ -250,6 +477,7 @@ mod tests {
         let mut wire = RemoteWire {
             stream,
             healthy: true,
+            local_flash: false,
         };
         wire.reset().unwrap();
         wire.exchange(&[0x21], 0, Duration::from_secs(1)).unwrap();

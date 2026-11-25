@@ -12,7 +12,7 @@ use std::{
 pub const MAX_PACKAGE: usize = 32 * 1024 * 1024;
 pub const MAX_IMAGE: usize = 16 * 1024 * 1024;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
     pub name: String,
@@ -22,10 +22,14 @@ pub struct ImageInfo {
     pub image_size: usize,
     pub description: String,
     pub git_identity: String,
+    pub hardware: String,
+    pub compiled_at: Option<String>,
+    pub package_built_at: Option<u64>,
 }
 pub struct Firmware {
     pub info: ImageInfo,
     pub image: Vec<u8>,
+    pub package: Vec<u8>,
 }
 #[derive(Deserialize)]
 struct Package {
@@ -39,6 +43,89 @@ struct Package {
     description: String,
     #[serde(default)]
     git_identity: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    build_time: Option<serde_json::Value>,
+}
+// ver.cpp prints __DATE__/__TIME__. Linkers pool the date across translation
+// units, so do not pair it with an arbitrary nearby time elsewhere in the image.
+// Accept only one date and one time adjacent to ver's exact format string.
+fn compiled_at(image: &[u8]) -> Option<String> {
+    fn date(s: &[u8]) -> Option<String> {
+        let s = std::str::from_utf8(s).ok()?;
+        if s.len() != 11 {
+            return None;
+        }
+        let months = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let month = months.iter().position(|m| s.get(..3) == Some(*m))? + 1;
+        if s.as_bytes()[3] != b' ' || s.as_bytes()[6] != b' ' {
+            return None;
+        }
+        let day = s.get(4..6)?.trim().parse::<u32>().ok()?;
+        let year = s.get(7..)?.parse::<u32>().ok()?;
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let max = if month == 2 {
+            if leap {
+                29
+            } else {
+                28
+            }
+        } else if [4, 6, 9, 11].contains(&month) {
+            30
+        } else {
+            31
+        };
+        if !(2000..=2099).contains(&year) || day == 0 || day > max {
+            return None;
+        }
+        Some(format!("{year:04}-{month:02}-{day:02}"))
+    }
+    fn time(s: &[u8]) -> Option<&str> {
+        let s = std::str::from_utf8(s).ok()?;
+        let p = s.split(':').collect::<Vec<_>>();
+        if s.len() != 8
+            || p.len() != 3
+            || p.iter()
+                .any(|p| p.len() != 2 || !p.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return None;
+        }
+        if p[0].parse::<u8>().ok()? > 23
+            || p[1].parse::<u8>().ok()? > 59
+            || p[2].parse::<u8>().ok()? > 59
+        {
+            return None;
+        }
+        Some(s)
+    }
+    let parts = image
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    let dates = parts
+        .iter()
+        .filter_map(|s| date(s))
+        .collect::<std::collections::BTreeSet<_>>();
+    if dates.len() != 1 {
+        return None;
+    }
+    let mut times = std::collections::BTreeSet::new();
+    for (i, s) in parts.iter().enumerate() {
+        if *s == b"Build datetime: %s %s\n" || *s == b" Build datetime: %s %s\n" {
+            for n in [i.checked_sub(1), i.checked_add(1)].into_iter().flatten() {
+                if let Some(t) = parts.get(n).and_then(|s| time(s)) {
+                    times.insert(t);
+                }
+            }
+        }
+    }
+    if times.len() != 1 {
+        return None;
+    }
+    Some(format!("{} {}", dates.first()?, times.first()?))
 }
 impl Firmware {
     pub fn parse(name: String, source: String, bytes: &[u8]) -> Result<Self, String> {
@@ -73,6 +160,13 @@ impl Firmware {
         while image.len() % 4 != 0 {
             image.push(0xff);
         }
+        let compiled_at = compiled_at(&image);
+        let hardware = match package.board_id {
+            1179 => "MicoAir H743-v2".into(),
+            7000 => "CUAV 7 Nano".into(),
+            id if package.summary.trim().is_empty() => format!("Board ID {id}"),
+            _ => package.summary.chars().take(160).collect(),
+        };
         Ok(Self {
             info: ImageInfo {
                 name,
@@ -82,8 +176,12 @@ impl Firmware {
                 image_size: package.image_size,
                 description: package.description,
                 git_identity: package.git_identity,
+                hardware,
+                compiled_at,
+                package_built_at: package.build_time.and_then(|v| v.as_u64()),
             },
             image,
+            package: bytes.to_vec(),
         })
     }
     pub fn crc(&self, flash_size: usize) -> u32 {
@@ -297,6 +395,30 @@ mod tests {
             &serde_json::to_vec(&p).unwrap(),
         )
         .unwrap()
+    }
+    #[test]
+    fn compile_time_uses_ver_literals_and_never_package_or_nearby_time() {
+        let image = b"17:00:00\0Nov 24 2026\0other\0 Build datetime: %s %s\n\0\0\017:18:09\0";
+        let mut p = package(image);
+        p["build_time"] = serde_json::json!(1795515741u64);
+        let f = Firmware::parse(
+            "test.px4".into(),
+            "local".into(),
+            &serde_json::to_vec(&p).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(f.info.compiled_at.as_deref(), Some("2026-11-24 17:18:09"));
+        assert_eq!(f.info.package_built_at, Some(1795515741));
+        assert_eq!(f.package, serde_json::to_vec(&p).unwrap());
+        assert_eq!(compiled_at(b"Nov 24 2026\0other\017:00:00\0"), None);
+        assert_eq!(
+            compiled_at(b"Nov 24 2026\0Nov 23 2026\0 Build datetime: %s %s\n\017:18:09\0"),
+            None
+        );
+        assert_eq!(
+            compiled_at(b"Feb 30 2026\0 Build datetime: %s %s\n\017:18:09\0"),
+            None
+        );
     }
     fn board(protocol: u32) -> Board {
         Board {

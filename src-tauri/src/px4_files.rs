@@ -236,7 +236,16 @@ fn begin(destination: PathBuf, size: u64) -> Result<u64, String> {
     );
     Ok(id)
 }
-fn write_chunk(id: u64, offset: u64, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn pending_size(id: u64) -> Result<u64, String> {
+    downloads()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&id)
+        .map(|job| job.expected)
+        .ok_or("下载任务已结束".into())
+}
+
+pub(crate) fn write_chunk(id: u64, offset: u64, bytes: &[u8]) -> Result<(), String> {
     let mut jobs = downloads().lock().map_err(|e| e.to_string())?;
     let job = jobs.get_mut(&id).ok_or("下载任务已结束")?;
     if bytes.is_empty()

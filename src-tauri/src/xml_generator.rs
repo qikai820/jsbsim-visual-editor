@@ -1220,7 +1220,15 @@ fn build_external_reactions(groups: &std::collections::HashMap<String, Vec<&Valu
         let version=get_val_or(&p["version"],"1");let mut properties=Vec::new();
         if let Some(params)=p.as_object() {for (key,value) in params {
             if key.starts_with("moving-platform/") || key.starts_with("guide-rail/") || key.starts_with("scenario/") {
-                if let Some(value)=get_val(value) {properties.push(xml_element("property",&[("value",&value)],Some(key),2));}
+                if let Some(value) = get_val(value) {
+                    // Older v1 engines reject unknown properties. Keep zero tilt implicit.
+                    if matches!(key.as_str(), "moving-platform/fixed-pitch-deg" | "moving-platform/fixed-roll-deg")
+                        && value.parse::<f64>() == Ok(0.0)
+                    {
+                        continue;
+                    }
+                    properties.push(xml_element("property", &[("value", &value)], Some(key), 2));
+                }
             }
         }}
         let xml=xml_element_raw("moving_platform",&[("name",&name),("version",&version)],Some(&properties.join("\n")),1);

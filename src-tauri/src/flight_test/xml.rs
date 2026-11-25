@@ -93,7 +93,7 @@ pub fn writable(path: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"_-/".contains(&c))
         && ((parts.len() == 3 && parts[0] == "test" && parts[1] == "requirements"
-            && ["manual-tilt-deg","altitude-tilt-deg","vector-tilt-deg"].contains(&parts[2]))
+            && ["manual-tilt-deg","altitude-tilt-deg","vector-tilt-deg","xcd20-takeoff"].contains(&parts[2]))
             || (parts.len() == 4
             && parts[0] == "test"
             && parts[1] == "channel"
@@ -102,7 +102,7 @@ pub fn writable(path: &str) -> bool {
             || (parts.len() == 4
             && parts[0] == "test"
             && parts[1] == "flow"
-            && ["started", "done", "cancelled", "deadline", "choice"].contains(&parts[3]))
+            && ["started", "done", "cancelled", "deadline", "choice", "minimum", "maximum", "watchdog"].contains(&parts[3]))
             || (parts.len() == 4
                 && parts[0] == "test"
                 && parts[1] == "input"
@@ -173,6 +173,7 @@ pub fn writable(path: &str) -> bool {
             .contains(&path))
 }
 pub fn readonly(path: &str) -> bool {
+    if ["contact-mask","valid-mask","released-mask"].iter().any(|k|path==format!("test/sim/rail-{k}")){return true;}
     ["origin-x-m","origin-y-m","heading-deg"].iter().any(|k| path == format!("test/reference/{k}"))
         || ["active","target-rad","target-deg","relative-target-deg","error-deg","held-s","position-error-m"].iter().any(|k| path == format!("test/heading/{k}"))
         || path == "simulation/sim-time-sec"
@@ -219,7 +220,7 @@ pub fn readonly(path: &str) -> bool {
             "armed",
             "hil",
             "mode",
-            "relative-alt-m",
+            "relative-alt-m", "height-above-launch-m", "yaw-rate-abs-rad-s",
             "altitude-msl-m",
             "roll-deg",
             "roll-abs-deg",

@@ -5,6 +5,7 @@ import { ScenePlaybackClock } from './scenePlayback';
 import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
 import { SCENE_WIND_KEYS, type SceneWind } from './sceneWind';
 import { PLATFORM_SIGNAL_KEYS, readMovingPlatform, type PlatformReading } from './sceneMovingPlatform';
+import { ScenePlatformTimeline, type PlatformFrame } from './scenePlatformPlayback';
 
 export type ScenePacket = Record<string, unknown>;
 export type SceneOrigin = { latitude: number; longitude: number; altitude: number };
@@ -27,7 +28,10 @@ export type ScenePose = {
   platformAvailable?: boolean; platformEnabled?: boolean; platformEnabledAt?: number | null; platform?: PlatformReading | null;
 };
 type SceneAircraft = { latest: ScenePose; samples: ScenePose[]; trail: ScenePose[]; history: ScenePose[]; groundOrigin?: SceneOrigin;
-  retired: string[]; source: 'scene' | 'fallback'; telemetryTime?: number; playback: ScenePlaybackClock };
+  retired: string[]; source: 'scene' | 'fallback'; telemetryTime?: number; playback: ScenePlaybackClock;
+  platformTimeline: ScenePlatformTimeline;
+  platformWorld: (PlatformFrame & { anchor: SceneOrigin; offset: Vector3; quaternion: Quaternion })[];
+  renderedPlatform?: { anchor: SceneOrigin; offset: Vector3; quaternion: Quaternion; sampleAt: number; time: number } };
 export const SCENE_COLORS = ['#3b82f6', '#12b9b1', '#e7a43a', '#a77beb', '#ee718b', '#63a878', '#6f91c6', '#bf946d'];
 export const STALE_MS = 2000;
 const rad = Math.PI / 180;
@@ -41,20 +45,26 @@ const number = (...values: unknown[]) => values.find(finite) as number | undefin
 const canonical = (path: string) => path.replace(/\[0\]/g, '').replace(/^\/(?:\d+\/)?jsbsim\//, '/');
 const scenePropertyKeys = new Set([...sceneSignalKeys('voliro_t'), ...sceneSignalKeys('F450'), ...sceneSignalKeys('MorphQuad'), ...PLATFORM_SIGNAL_KEYS].map(key => canonical('/' + key)));
 
-export interface ScenePropertyReading { value: number; age: number; source: 'monitor' | 'tree' }
+export interface ScenePropertyReading { value: number; age: number; source: 'monitor' | 'tree'; time?: number; timeInferred?: boolean }
 /** Keep measured values separate from freshness; a rotating tree is not a 2 s stream. */
 export function scenePropertyReading(packet: ScenePacket, path: string): ScenePropertyReading | undefined {
   const properties = packet.properties as Record<string, unknown> | undefined;
   const ages = packet.scene_property_age_ms as Record<string, unknown> | undefined;
   const sources = packet.scene_property_sources as Record<string, unknown> | undefined;
+  const times = packet.scene_property_time_sec as Record<string, unknown> | undefined;
   const target = canonical('/' + path.replace(/^\//, ''));
   for (const [key, value] of Object.entries(properties || {})) {
     const owner = key.match(/^\/(\d+)\//)?.[1];
     if (owner && Number(owner) !== Number(packet.instance_id ?? '01')) continue;
     if (canonical(key.startsWith('/') ? key : '/' + key) !== target || !finite(value)) continue;
     const age = ages?.[key];
-    if (finite(age) && age >= 0) return { value, age: Math.max(age, finite(packet.age_ms) ? packet.age_ms : 0),
-      source: sources?.[key] === 'monitor' ? 'monitor' : 'tree' };
+    if (finite(age) && age >= 0) {
+      const frameAge = finite(packet.age_ms) ? packet.age_ms : 0;
+      const frameTime = number(packet.timestamp, packet.t);
+      return { value, age: Math.max(age, frameAge), source: sources?.[key] === 'monitor' ? 'monitor' : 'tree',
+        timeInferred: !finite(times?.[key]),
+        time: finite(times?.[key]) ? times[key] as number : frameTime === undefined ? undefined : frameTime - Math.max(0, age - frameAge) / 1000 };
+    }
   }
   return undefined;
 }
@@ -230,7 +240,7 @@ export class FlightSceneFeed {
         time: tuple[1], sequence: monitor.sequence });
     }
     this.monitor.set(id, cache);
-    if (entry) entry.latest = this.withMonitor(entry.latest, now);
+    if (entry) { entry.latest = this.withMonitor(entry.latest, now); this.observePlatform(entry, now); }
     // The monitor sends at most four channels per packet. Publish only after
     // all six measured pose channels have advanced, with bounded sample skew.
     // Servo-only traffic, cached IPC frames and partial cycles never revive pose.
@@ -270,6 +280,7 @@ export class FlightSceneFeed {
       timestamp: pose.time, latitude_deg: pose.latitude, longitude_deg: pose.longitude, altitude_m: pose.altitude,
       roll_deg: pose.roll, pitch_deg: pose.pitch, yaw_deg: pose.yaw, properties,
       scene_property_age_ms: Object.fromEntries([...cache.values].map(([key, sample]) => [key, Math.max(0, now - sample.seen)])),
+      scene_property_time_sec: Object.fromEntries([...cache.values].map(([key, sample]) => [key, sample.time])),
       scene_property_sources: Object.fromEntries([...cache.values].map(([key]) => [key, 'monitor'])) }, now)!;
     const prefer = (fastAt: number | null, baseAt: number | null) => fastAt !== null &&
       (baseAt === null || fastAt > baseAt || now - fastAt < STALE_MS && pose.tiltSource !== 'monitor');
@@ -349,6 +360,7 @@ export class FlightSceneFeed {
             platformAvailable: pose.platformAvailable, platformEnabled: pose.platformEnabled, platformEnabledAt: pose.platformEnabledAt, platform: pose.platform,
             wind: pose.wind, windSampleAt: pose.windSampleAt,
             rpmModelVersion: pose.rpmModelVersion, rpmTailCalibrated: pose.rpmTailCalibrated }, now);
+          this.observePlatform(existing!, now);
         }
         return false;
       }
@@ -358,20 +370,23 @@ export class FlightSceneFeed {
   }
   private commitPose(pose: ScenePose, existing: SceneAircraft | undefined, changed: boolean, rewound: boolean, source: 'scene' | 'fallback', now: number) {
     const entry: SceneAircraft = !existing || changed || rewound
-      ? { latest: pose, samples: [], trail: [], history: [], retired: rewound ? [] : changed ? [...existing!.retired, `${existing!.latest.model}:${existing!.latest.generation}`].slice(-8) : existing?.retired || [], source, playback: new ScenePlaybackClock() }
+      ? { latest: pose, samples: [], trail: [], history: [], retired: rewound ? [] : changed ? [...existing!.retired, `${existing!.latest.model}:${existing!.latest.generation}`].slice(-8) : existing?.retired || [], source, playback: new ScenePlaybackClock(), platformTimeline: new ScenePlatformTimeline(), platformWorld: [] }
       : existing;
     if (entry.samples.length && (pose.receivedAt - entry.latest.receivedAt >= STALE_MS
-      || pose.state !== entry.latest.state)) {
+      || pose.state !== entry.latest.state && !entry.platformTimeline.samples.length)) {
       // Resume from the new measured pose, without interpolating through a pause
       // or replaying the samples retained from before a connection outage.
       entry.samples = [];
       entry.playback = new ScenePlaybackClock();
+      entry.platformTimeline.reset();
+      entry.platformWorld = [];
     }
     entry.source = source;
     entry.latest = pose;
     if (pose.poseSource === 'telemetry') entry.telemetryTime = pose.time;
     entry.samples.push(pose);
-    if (entry.samples.length > 64) entry.samples.shift();
+    if (entry.samples.length > 128) entry.samples.shift();
+    this.observePlatform(entry, now);
     entry.playback.observe(entry.samples, now);
     const lastHistory = entry.history[entry.history.length - 1];
     if (!lastHistory || pose.time - lastHistory.time >= .1) entry.history.push(pose);
@@ -381,6 +396,31 @@ export class FlightSceneFeed {
     if (entry.trail.length > 600) entry.trail.shift();
     this.aircraft.set(pose.id, entry);
     if (!this.origin) this.recenter(pose.id);
+  }
+  private observePlatform(entry: SceneAircraft, now: number) {
+    if (entry.latest.platformEnabled === false) {
+      entry.platformTimeline.reset(); entry.platformWorld = []; entry.renderedPlatform = undefined;
+    } else if (entry.latest.platform) {
+      const epoch = entry.platformTimeline.epoch;
+      entry.platformTimeline.observe(entry.latest.platform, entry.latest.time, now);
+      if (epoch !== entry.platformTimeline.epoch) entry.platformWorld = [];
+      for (const frame of entry.platformTimeline.samples) {
+        if (entry.platformWorld.length && frame.time <= entry.platformWorld[entry.platformWorld.length - 1].time) continue;
+        if (!entry.samples.length || frame.time < entry.samples[0].time || frame.time > entry.latest.time) continue;
+        let a = entry.samples[0], b = entry.latest;
+        for (let i = 1; i < entry.samples.length; i++) if (entry.samples[i].time >= frame.time) { a = entry.samples[i - 1]; b = entry.samples[i]; break; }
+        const f = b.time > a.time ? Math.max(0, Math.min(1, (frame.time - a.time) / (b.time - a.time))) : 0;
+        const longitudeDelta = ((b.longitude - a.longitude + 540) % 360) - 180;
+        const anchor = { latitude: a.latitude + (b.latitude - a.latitude) * f,
+          longitude: a.longitude + longitudeDelta * f, altitude: a.altitude + (b.altitude - a.altitude) * f };
+        const [roll, pitch, yaw] = frame.angles.map(v => v / rad);
+        const quaternion = sceneAttitude({ roll, pitch, yaw });
+        const [north, east, down] = frame.relative;
+        const offset = new Vector3(east, -down, -north).applyQuaternion(quaternion);
+        entry.platformWorld.push({ ...frame, anchor, offset, quaternion });
+        if (entry.platformWorld.length > 128) entry.platformWorld.shift();
+      }
+    }
   }
   recenter(id: string) {
     const pose = this.aircraft.get(id)?.latest;
@@ -393,14 +433,33 @@ export class FlightSceneFeed {
     if (!entry || !this.origin) return null;
     const latest = entry.latest;
     const stale = now - latest.receivedAt > STALE_MS;
-    const target = entry.playback.sample(entry.samples, now, latest.state !== 'running' || stale);
+    const timeline = entry.platformTimeline, frames = entry.platformWorld;
+    const paired = latest.platformEnabled !== false && frames.length > 0 && now - timeline.sampleAt < STALE_MS
+      && frames[frames.length - 1].time >= entry.samples[0].time && frames[0].time <= latest.time;
+    const target = entry.playback.sample(entry.samples, now, latest.state !== 'running' || stale, paired ? {
+      oldest: frames[0].time, latest: frames[frames.length - 1].time, bufferMs: timeline.bufferMs,
+    } : undefined);
     let a = entry.samples[0], b = latest;
     for (let i = 1; i < entry.samples.length; i++) {
       if (entry.samples[i].time >= target) { a = entry.samples[i - 1]; b = entry.samples[i]; break; }
     }
     const fraction = a === b || b.time <= a.time ? 1 : Math.max(0, Math.min(1, (target - a.time) / (b.time - a.time)));
-    return { time: target, position: localPosition(a, this.origin).lerp(localPosition(b, this.origin), fraction),
-      quaternion: sceneAttitude(a).slerp(sceneAttitude(b), fraction), stale, pose: latest };
+    const position = localPosition(a, this.origin).lerp(localPosition(b, this.origin), fraction);
+    if (paired) {
+      let before = frames[0], after = frames[frames.length - 1];
+      for (let i = 1; i < frames.length; i++) if (frames[i].time >= target) { before = frames[i - 1]; after = frames[i]; break; }
+      const f = after.time > before.time ? Math.max(0, Math.min(1, (target - before.time) / (after.time - before.time))) : 0;
+      const quaternion = before.quaternion.clone().slerp(after.quaternion, f);
+      const vessel = localPosition(before.anchor, this.origin).sub(before.offset)
+        .lerp(localPosition(after.anchor, this.origin).sub(after.offset), f);
+      const anchor = before.anchor;
+      const offset = localPosition(anchor, this.origin).sub(vessel);
+      entry.renderedPlatform = { anchor, offset, quaternion, sampleAt: timeline.sampleAt, time: target };
+    }
+    const rendered = entry.renderedPlatform;
+    return { time: target, position, quaternion: sceneAttitude(a).slerp(sceneAttitude(b), fraction), stale, pose: latest,
+      platform: rendered && latest.platformEnabled !== false ? { position: localPosition(rendered.anchor, this.origin).sub(rendered.offset),
+        quaternion: rendered.quaternion.clone(), sampleAt: rendered.sampleAt, time: rendered.time, stale: !paired || stale } : null };
   }
 }
 

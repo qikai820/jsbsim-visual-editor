@@ -39,6 +39,12 @@ try {
   await evaluate(`(async()=>{const{preloadMovingPlatformAsset:load}=await import('/src/components/flight-scene/useMovingPlatformAsset.ts');const[a,b]=await Promise.all([load(),load()]);if(a!==b)throw Error('Asset decode is not shared')})()`);
   assert.equal(await evaluate(`window.__vesselRequests`), 1, 'preload and preview share one decoded vessel');
   assert.equal(await evaluate(`${scene}.getObjectByName('moving-platform-model').userData.geometry.length`), 4);
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='碰撞网格');b.click()})()`);
+  await until(`${scene}.getObjectByName('moving-platform-collision-wire').visible`);
+  await new Promise(r => setTimeout(r, 300));
+  const wireImage=await send('Page.captureScreenshot',{format:'png'});await writeFile('/tmp/moving-platform-collision-preview.png',Buffer.from(wireImage.data,'base64'));
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='碰撞网格');b.click()})()`);
+  await until(`!${scene}.getObjectByName('moving-platform-collision-wire').visible`);
   await new Promise(r => setTimeout(r, 600));
   const image = await send('Page.captureScreenshot', { format: 'png' }); await writeFile('/tmp/moving-platform-preview.png', Buffer.from(image.data, 'base64'));
   const exported = await evaluate(`(async()=>{const{GLTFExporter}=await import('/${name}-roots.ts');const bytes=new Uint8Array(await new GLTFExporter().parseAsync(${scene}.getObjectByName('moving-platform-model'),{binary:true}));const chunks=[];for(let i=0;i<bytes.length;i+=8192)chunks.push(String.fromCharCode(...bytes.subarray(i,i+8192)));return btoa(chunks.join(''))})()`);
@@ -65,7 +71,7 @@ try {
   // Core telemetry deliberately omits EVERY platform property. Only the keys
   // actively requested by the scene are returned, four channels per 100 ms.
   // The original code waited indefinitely here for the slow full-tree cycle.
-  await evaluate(`(async()=>{const{PLATFORM_SIGNAL_KEYS:keys}=await import('/src/sim/sceneMovingPlatform.ts');const{publishSceneMonitor}=await import('/src/sim/sceneSignals.ts');const values=[1,0,0,0,0,0,0,2,4,3,.25,1.5,.36,0,.1];window.__packet={instance_id:'01',model:'XCD20',tree_generation:1,state:'running',timestamp:10,latitude_deg:34,longitude_deg:109,altitude_m:502.27,roll_deg:0,pitch_deg:0,yaw_deg:0,properties:Object.fromEntries(keys.map((key,i)=>['/'+key,values[i]])),scene_property_age_ms:Object.fromEntries(keys.map(key=>['/'+key,0]))};window.__packet.properties['/position/terrain-elevation-asl-ft']=500/.3048;window.__packet.scene_property_age_ms['/position/terrain-elevation-asl-ft']=0;window.__startupAt=performance.now();window.__emit('scene-frames',[{...window.__packet,properties:{'/position/terrain-elevation-asl-ft':500/.3048},scene_property_age_ms:{'/position/terrain-elevation-asl-ft':0}}]);let previous='',cursor=0,seq=0;window.__monitorTimer=setInterval(()=>{const requested=window.__target?.extraKeys||[],signature=requested.join();if(signature!==previous){previous=signature;cursor=0}if(!requested.length)return;const sampleTime=10+(++seq)*.1;const selected=Array.from({length:Math.min(4,requested.length)},()=>requested[(cursor++)%requested.length]);const samples=Object.fromEntries(selected.map(key=>[key,[values[keys.indexOf(key)],sampleTime,false]]));publishSceneMonitor({...window.__packet,timestamp:sampleTime,properties:{},monitor:{version:1,revision:1,sequence:seq,samples}})},100);})()`);
+  await evaluate(`(async()=>{const{PLATFORM_SIGNAL_KEYS:keys}=await import('/src/sim/sceneMovingPlatform.ts');const{publishSceneMonitor}=await import('/src/sim/sceneSignals.ts');const values=[1,0,0,0,0,0,0,2,4,3,.25,1.5,.36,0,.1];window.__packet={instance_id:'01',model:'XCD20',tree_generation:1,state:'running',timestamp:10,latitude_deg:34,longitude_deg:109,altitude_m:502.27,roll_deg:0,pitch_deg:0,yaw_deg:0,properties:Object.fromEntries(keys.map((key,i)=>['/'+key,values[i]])),scene_property_age_ms:Object.fromEntries(keys.map(key=>['/'+key,0]))};window.__packet.properties['/position/terrain-elevation-asl-ft']=500/.3048;window.__packet.scene_property_age_ms['/position/terrain-elevation-asl-ft']=0;window.__startupAt=performance.now();window.__emit('scene-frames',[{...window.__packet,properties:{'/position/terrain-elevation-asl-ft':500/.3048},scene_property_age_ms:{'/position/terrain-elevation-asl-ft':0}}]);let previous='',cursor=0,seq=0;window.__monitorTimer=setInterval(()=>{const requested=window.__target?.extraKeys||[],signature=requested.join();if(signature!==previous){previous=signature;cursor=0}if(!requested.length)return;const sampleTime=10+(++seq)*.1;window.__packet.timestamp=sampleTime;window.__emit('scene-frames',[{...window.__packet,properties:{'/position/terrain-elevation-asl-ft':500/.3048},scene_property_age_ms:{'/position/terrain-elevation-asl-ft':0}}]);const selected=Array.from({length:Math.min(4,requested.length)},()=>requested[(cursor++)%requested.length]);const samples=Object.fromEntries(selected.map(key=>[key,[values[keys.indexOf(key)],sampleTime,false]]));publishSceneMonitor({...window.__packet,timestamp:sampleTime,properties:{},monitor:{version:1,revision:1,sequence:seq,samples}})},100);})()`);
   await until(`${scene}.getObjectByName('scene-moving-platform-01')?.visible && ${scene}.getObjectByName('downloaded-kenney-vessel')`);
   const startupMs = await evaluate(`performance.now()-window.__startupAt`);
   assert(startupMs < 2500, `startup without a property-tree cycle took ${startupMs} ms`);
@@ -74,23 +80,25 @@ try {
   await until(`window.__target?.extraKeys.includes('moving-platform/angles-rad[2]')`);
   const initial = await evaluate(`${scene}.getObjectByName('scene-moving-platform-01').position.toArray()`);
   assert(Math.abs(initial[1] - 2.27) < 1e-6);
-  await evaluate(`(()=>{window.__packet={...window.__packet,timestamp:11,properties:{...window.__packet.properties,'/moving-platform/relative-position-m[1]':2,'/moving-platform/angles-rad[2]':Math.PI/2}};window.__emit('scene-frames',[window.__packet])})()`);
+  await evaluate(`(()=>{window.__packet={...window.__packet,timestamp:window.__packet.timestamp+.05,properties:{...window.__packet.properties,'/moving-platform/relative-position-m[1]':2,'/moving-platform/angles-rad[2]':Math.PI/2}};window.__emit('scene-frames',[window.__packet]);window.__steadyTimer=setInterval(()=>{window.__packet={...window.__packet,timestamp:window.__packet.timestamp+.05};window.__emit('scene-frames',[window.__packet])},50)})()`);
   await until(`Math.abs(${scene}.getObjectByName('scene-moving-platform-01').position.z+2)<.001`);
+  await evaluate(`clearInterval(window.__steadyTimer)`);
+  assert(await evaluate(`Math.abs(${scene}.getObjectByName('scene-moving-platform-01').userData.displayTime-${scene}.getObjectByName('scene-aircraft-01').userData.displayTime)<1e-9`), 'real rendered aircraft/vessel must use the same display time');
   await new Promise(r => setTimeout(r, 2200));
   const frozen = await evaluate(`${scene}.getObjectByName('scene-moving-platform-01').position.toArray()`);
-  await evaluate(`window.__emit('scene-frames',[{...window.__packet,timestamp:12,altitude_m:510,properties:{},scene_property_age_ms:{}}])`);
+  await evaluate(`window.__emit('scene-frames',[{...window.__packet,timestamp:window.__packet.timestamp+1,altitude_m:510,properties:{},scene_property_age_ms:{}}])`);
   await new Promise(r => setTimeout(r, 400));
   assert.deepEqual(await evaluate(`${scene}.getObjectByName('scene-moving-platform-01').position.toArray()`), frozen, 'stale platform does not follow fresh aircraft');
-  await evaluate(`window.__emit('scene-frames',[{...window.__packet,timestamp:13,properties:{'/moving-platform/enabled':0},scene_property_age_ms:{'/moving-platform/enabled':0}}])`);
+  await evaluate(`window.__emit('scene-frames',[{...window.__packet,timestamp:window.__packet.timestamp+2,properties:{'/moving-platform/enabled':0},scene_property_age_ms:{'/moving-platform/enabled':0}}])`);
   await until(`!${scene}.getObjectByName('scene-moving-platform-01')`);
   await evaluate(`window.__showScene(false)`); await until(`!document.querySelector('canvas')`);
   await evaluate(`window.__showScene(true)`); await until(`window.__events?.get('scene-frames')?.size && window.__roots?.get(document.querySelector('canvas'))`);
-  await evaluate(`window.__emit('scene-frames',[{...window.__packet,timestamp:14}])`);
+  await evaluate(`window.__emit('scene-frames',[{...window.__packet,timestamp:window.__packet.timestamp+3}])`);
   await until(`${scene}.getObjectByName('downloaded-kenney-vessel')`);
   assert.equal(await evaluate(`window.__vesselRequests`), 1, 'reentering the scene reuses the decoded vessel');
-  await evaluate(`window.__emit('scene-frames',[{...window.__packet,tree_generation:2,timestamp:15,properties:{},scene_property_age_ms:{}}])`);
+  await evaluate(`window.__emit('scene-frames',[{...window.__packet,tree_generation:2,timestamp:window.__packet.timestamp+4,properties:{},scene_property_age_ms:{}}])`);
   await until(`window.__target?.extraKeys.includes('moving-platform/enabled')`);
-  await evaluate(`(async()=>{const{publishSceneMonitor}=await import('/src/sim/sceneSignals.ts');publishSceneMonitor({...window.__packet,tree_generation:2,timestamp:15,monitor:{version:1,revision:2,sequence:1,samples:{'moving-platform/enabled':[null,null,false]}}})})()`);
+  await evaluate(`(async()=>{const{publishSceneMonitor}=await import('/src/sim/sceneSignals.ts');publishSceneMonitor({...window.__packet,tree_generation:2,timestamp:window.__packet.timestamp+4,monitor:{version:1,revision:2,sequence:1,samples:{'moving-platform/enabled':[null,null,false]}}})})()`);
   await until(`!window.__target?.extraKeys.includes('moving-platform/enabled')`);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({passed:true,startupWithoutTreeMs:Math.round(startupMs),vesselRequests:await evaluate('window.__vesselRequests'),checks:'parameter editing, VMON discovery, cached decode, scene reentry, missing module, rotation, stale freeze, disable',preview:'/tmp/moving-platform-preview.png'}));

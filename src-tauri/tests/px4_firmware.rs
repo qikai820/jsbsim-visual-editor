@@ -48,7 +48,11 @@ mod transport {
         None
     }
 }
+mod ftp_sync {pub static FTP_LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());}
+mod usb_file {pub fn nsh_execute(_: &str)->Result<String,String>{Err("offline".into())}}
+#[path="../src/storage_usage.rs"] mod storage_usage;
 mod sim_files {
+    pub fn managed_file_path(_: &str) -> Result<String,String> { Err("offline test".into()) }
     pub fn source() -> &'static str {
         "offline"
     }

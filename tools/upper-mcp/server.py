@@ -17,7 +17,7 @@ import threading
 
 VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 MAX_MESSAGE = 8 * 1024 * 1024
-BUILTIN = {"type": "string", "enum": ["morphquad_complete"]}
+BUILTIN = {"type": "string", "enum": ["morphquad_complete", "xcd20_normal_takeoff", "xcd20_rail_takeoff"]}
 
 
 def tool(name, description, properties=None, required=(), read_only=True):
@@ -37,7 +37,7 @@ TOOLS = [
     tool("upper_get_script", "读取内置脚本 XML。", {"script": BUILTIN}, ("script",)),
     tool("upper_validate_script", "解析脚本，不向飞控发送指令。source 或 script 二选一。",
          {"source": {"type": "string"}, "script": BUILTIN}),
-    tool("upper_start_test", "通过上位机共享测试引擎启动；source 或 script 二选一。显式 dryRun=true 为干跑，false 才控制 HIL。需要已在工具箱连接；50 Hz、实时时钟，完成/中止均降落。不覆盖正在编辑的脚本，不自动修改参数。",
+    tool("upper_start_test", "通过上位机共享测试引擎启动；source 或 script 二选一。显式 dryRun=true 为干跑，false 才控制 HIL。需要已在工具箱连接；50 Hz、实时时钟，按已校验模板的完成和中止策略退出；双杆中止保持保护。不覆盖正在编辑的脚本，不自动修改参数。",
          {"source": {"type": "string"}, "script": BUILTIN, "dryRun": {"type": "boolean"}}, ("dryRun",), False),
     tool("upper_stop_test", "停止指定 id 的当前测试，等待原退出策略完成；UI 仍可查看状态。",
          {"id": {"type": "integer", "minimum": 1}}, ("id",), False),
@@ -45,11 +45,14 @@ TOOLS = [
          {"offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 0, "maximum": 1000}}),
     tool("upper_save_report", "将已退出测试的完整记录保存到上位机应用数据目录 test-reports，返回绝对路径。", read_only=False),
     tool("upper_firmware_status", "读取升级进度和仿真机上的 USB 飞控目标；不打开电脑串口。"),
+    tool("upper_firmware_library", "列出当前仿真机持久固件库，含固件 ID、编译时间、支持硬件、保存和使用时间；不刷写。"),
+    tool("upper_firmware_select", "从当前仿真机固件库按 ID 选择并重新校验原始 .px4，返回 selectionId；不刷写。simulator 和 firmwareId 必须来自最新固件库列表。",
+         {"simulator":{"type":"string","minLength":7,"maxLength":15},"firmwareId":{"type":"string","minLength":64,"maxLength":64}},("simulator","firmwareId"),False),
     tool("upper_firmware_prepare", "从仿真机（默认）或本地校验并暂存 .px4 固件包，返回 selectionId 和板型；不刷写。",
          {"path": {"type": "string", "minLength": 1, "maxLength": 4096}, "source":{"type":"string","enum":["simulator","local"]}}, ("path",), False),
-    tool("upper_firmware_start", "通过仿真机独占 USB 通道执行一次已选固件升级；需当前 selectionId、simulator 和 port；先停止模型、上锁飞控。等待 Bootloader，核对板型/容量，擦除写入后 CRC 校验。控制操作不要自动重试。",
+    tool("upper_firmware_start", "先将原始固件和本次使用记录保存并回读校验到目标仿真机固件库，再通过独占 USB 执行一次升级；归档失败不刷写。需当前 selectionId、simulator 和 port；停止模型、上锁飞控。擦除写入后 CRC 校验。控制操作不要自动重试。",
          {"selectionId": {"type": "integer", "minimum": 1}, "simulator":{"type":"string","minLength":7,"maxLength":15}, "port": {"type": "string", "minLength": 1, "maxLength": 256}}, ("selectionId", "simulator", "port"), False),
-    tool("upper_firmware_cancel", "取消当前升级的 Bootloader 等待；擦除开始后不能取消。", {"id":{"type":"integer","minimum":1}}, ("id",), False),
+    tool("upper_firmware_cancel", "取消当前升级的归档或 Bootloader 等待；已完成的固件归档会保留，擦除开始后不能取消。", {"id":{"type":"integer","minimum":1}}, ("id",), False),
     tool("upper_sim_start", "通过上位机现有任务机控制通道启动主实例模型一次；不另建 UDP/飞控连接。需要飞控连接新鲜且上锁、测试空闲。script 或显式地面坐标二选一；超时不重发。",
          {"model":{"type":"string"},"script":{"type":"string"},"latitudeDeg":{"type":"number"},"longitudeDeg":{"type":"number"},"terrainAltitudeM":{"type":"number"},"rollDeg":{"type":"number"},"pitchDeg":{"type":"number"},"yawDeg":{"type":"number"}},("model",),False),
     tool("upper_sim_stop", "通过上位机现有通道停止主实例一次；需要飞控上锁、测试空闲。UI 终止始终有效。",read_only=False),
@@ -93,6 +96,11 @@ def validate(name, arguments):
     if name == "upper_firmware_prepare":
         if not arguments["path"] or len(arguments["path"]) > 4096 or not Path(arguments["path"]).is_absolute() or not arguments["path"].lower().endswith(".px4"):
             raise ValueError("Provide an absolute .px4 path")
+    if name == "upper_firmware_select":
+        ipaddress.IPv4Address(arguments["simulator"])
+        identity=arguments["firmwareId"]
+        if len(identity)!=64 or any(c not in '0123456789abcdef' for c in identity):
+            raise ValueError("Provide a current firmware library ID")
     if name == "upper_firmware_start":
         ipaddress.IPv4Address(arguments["simulator"])
         if not arguments["port"] or len(arguments["port"]) > 256:

@@ -48,6 +48,8 @@ mod flight_test;
 mod mcp;
 mod mcp_logs;
 mod px4_files;
+mod px4_log_relay;
+mod px4_log_relay_wire;
 mod px4_sitl;
 mod local_sim;
 mod builtin_sim;
@@ -596,6 +598,9 @@ fn sim_start_blocking(
                     let capabilities=nsh_execute_inner("jsbsim --hil-capabilities")?;
                     if !capabilities.split_whitespace().any(|token|token=="moving_platform_version=1") {
                         return Err("该模型需要移动平台 C++ 模块 v1，请先升级任务机固件。".into());
+                    }
+                    if !capabilities.split_whitespace().any(|token|token=="moving_platform_mesh=1") {
+                        return Err("船体网格碰撞与甲板降落需要 moving_platform_mesh=1 固件，请先升级任务机固件。".into());
                     }
                 }
             }
@@ -1747,6 +1752,8 @@ fn main() {
             px4_firmware::px4_firmware_remote,
             px4_firmware::px4_firmware_start,
             px4_firmware::px4_firmware_cancel,
+            px4_firmware::px4_firmware_library,
+            px4_firmware::px4_firmware_select,
             simulator_transport_get,
             simulator_network_target_get,
             px4_router_read,
@@ -1770,6 +1777,8 @@ fn main() {
             px4_files::px4_log_transfer_error,
             px4_files::px4_log_transfer_received,
             px4_files::px4_log_write,
+            px4_log_relay::px4_log_relay,
+            px4_log_relay::px4_log_relay_progress,
             px4_files::px4_log_finish,
             px4_files::px4_log_cancel,
             px4_sitl::px4_sitl_inspect,

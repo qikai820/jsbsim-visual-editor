@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 interface ModelSyncBarProps {
   paths: string[];
@@ -21,21 +21,9 @@ function SyncIcon({ kind }: { kind: 'pending' | 'save' | 'undo' | 'file' }) {
 export default function ModelSyncBar({ paths, initialUpload, busy, canDiscard, onSave, onDiscard }: ModelSyncBarProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const continueButton = useRef<HTMLButtonElement>(null);
-  const bar = useRef<HTMLDivElement>(null);
   const [discardError, setDiscardError] = useState('');
-  useEffect(() => {
-    const element = bar.current;
-    const parent = element?.parentElement;
-    if (!element || !parent) return;
-    // Floating HUD windows start below the notice, including when it wraps.
-    const update = () => parent.style.setProperty('--model-sync-height', `${element.offsetHeight}px`);
-    const observer = new ResizeObserver(update);
-    update();
-    observer.observe(element);
-    return () => { observer.disconnect(); parent.style.removeProperty('--model-sync-height'); };
-  }, []);
   return <>
-    <div ref={bar} className="model-sync-bar" role="status" aria-label="模型待保存状态">
+    <div className="model-sync-bar" role="status" aria-label="模型待保存状态">
       <span className="model-sync-mark"><SyncIcon kind="pending" /></span>
       <div className="model-sync-summary">
         <div className="model-sync-heading">

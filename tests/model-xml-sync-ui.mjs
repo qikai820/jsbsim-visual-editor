@@ -153,6 +153,91 @@ try {
   await until(`document.querySelector('.toolbar')`);
   await evaluate(`(async()=>{window.store=(await import('/src/store/flowStore.ts')).useFlowStore;window.sync=(await import('/src/utils/modelXmlSync.ts'));window.changes=(await import('/src/utils/modelChanges.ts'));window.api=(await import('/src/utils/tauriApi.ts'));})()`);
   await until(`window.store.getState().nodes.length > 0`);
+  await until(`document.querySelector('.react-flow__node[data-id]')`);
+  await new Promise(resolve => setTimeout(resolve, 650));
+  const selectionWork = await evaluate(`(async()=>{
+    const stringify = JSON.stringify, setItem = Storage.prototype.setItem;
+    const work = { fullSnapshots: 0, projectWrites: 0 };
+    JSON.stringify = function(value, ...args) {
+      if (value?.nodes && value?.edges && value?.aircraft) work.fullSnapshots++;
+      return stringify.call(this, value, ...args);
+    };
+    Storage.prototype.setItem = function(key, value) {
+      if (key === 'jsbsim-project') work.projectWrites++;
+      return setItem.call(this, key, value);
+    };
+    try {
+      const state = window.store.getState();
+      let selected;
+      for (let i = 0; i < 20; i++) {
+        const id = state.nodes[i % state.nodes.length].id;
+        const changes = selected ? [{ type: 'select', id: selected, selected: false }] : [];
+        state.onNodesChange([...changes, { type: 'select', id, selected: true }]);
+        state.setSelectedNode(id);
+        selected = id;
+      }
+      state.onNodesChange([{ type: 'select', id: selected, selected: false }]);
+      state.setSelectedNode(null);
+      await new Promise(resolve => setTimeout(resolve, 650));
+      return work;
+    } finally {
+      JSON.stringify = stringify;
+      Storage.prototype.setItem = setItem;
+    }
+  })()`);
+  assert.deepEqual(selectionWork, { fullSnapshots: 0, projectWrites: 0 }, 'Viewing properties does not serialize or save the project');
+  await evaluate(`(()=>{const state=window.store.getState();state.setSelectedNode(state.nodes.find(node=>node.data.componentType==='output').id);})()`);
+  await until(`document.querySelector('.property-panel .signal-path-trigger')`);
+  await evaluate(`localStorage.setItem('jsbsim-available-variables', JSON.stringify(['test/just-discovered-signal']));
+    document.querySelector('.property-panel .signal-path-trigger').click();`);
+  await until(`document.querySelector('.signal-path-menu')?.textContent.includes('test/just-discovered-signal')`);
+  await evaluate(`document.querySelector('.property-panel .signal-path-trigger').click()`);
+  await until(`!document.querySelector('.signal-path-menu')`);
+  const dockLayout = () => evaluate(`Object.fromEntries(
+    Object.entries({ content: '.main-content', sidebar: '.right-sidebar', hud: '.jsbsim-hud-window', log: '.jsbsim-log-detached' })
+      .map(([name, selector]) => [name, document.querySelector(selector)?.getBoundingClientRect().toJSON() ?? null])
+  )`);
+  const atWorkspaceTop = (panel, layout) => {
+    assert.ok(Math.abs(layout[panel].top - layout.content.top) < 1, `${panel} aligns with the workspace top`);
+    assert.ok(Math.abs(layout.content.right - layout[panel].right - 8) < 1, `${panel} aligns with the workspace right edge`);
+  };
+  const toggleDisplay = async label => {
+    await evaluate(`[...document.querySelectorAll('.toolbar button')].find(button=>button.textContent.includes('显示')).click()`);
+    const item = `[...document.querySelectorAll('.toolbar [role="menuitem"]')].find(button=>button.textContent.includes(${JSON.stringify(label)}))`;
+    await until(item);
+    await evaluate(`${item}.click()`);
+  };
+  let layout = await dockLayout();
+  atWorkspaceTop('hud', layout);
+  assert.ok(layout.sidebar.top >= layout.hud.bottom);
+  await toggleDisplay('JSBSim 信息');
+  await until(`document.querySelector('.jsbsim-log-detached')`);
+  layout = await dockLayout();
+  assert.ok(layout.log.top >= layout.hud.bottom && layout.sidebar.top >= layout.log.bottom);
+  await evaluate(`document.querySelector('[aria-label="隐藏 HUD"]').click()`);
+  await until(`!document.querySelector('.jsbsim-hud-window')`);
+  atWorkspaceTop('log', await dockLayout());
+  const dragLog = async delta => {
+    const { log } = await dockLayout();
+    const x = log.left + 45, y = log.top + 12;
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + delta, y, buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + delta, y, button: 'left', buttons: 0, clickCount: 1 });
+  };
+  await dragLog(-340);
+  await until(`document.querySelector('.jsbsim-log-detached').style.position === 'absolute'`);
+  atWorkspaceTop('sidebar', await dockLayout());
+  await dragLog(340);
+  await until(`!document.querySelector('.jsbsim-log-detached').style.position`);
+  await evaluate(`document.querySelector('[aria-label="关闭 JSBSim 信息"]').click()`);
+  await until(`!document.querySelector('.jsbsim-log-detached')`);
+  atWorkspaceTop('sidebar', await dockLayout());
+  await send('Emulation.setDeviceMetricsOverride', { width: 600, height: 720, deviceScaleFactor: 1, mobile: false });
+  await until(`innerWidth === 600`);
+  atWorkspaceTop('sidebar', await dockLayout());
+  await send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await toggleDisplay('HUD');
+  await evaluate(`window.store.getState().setSelectedNode(null)`);
   // Opening/closing a module and reserializing equal model data must never
   // flash a pending notice. A completed empty preparation is authoritative.
   await evaluate(`(()=>{window.__sawNoopNotice=false;window.__noopObserver=new MutationObserver(()=>{if(document.querySelector('.model-sync-bar'))window.__sawNoopNotice=true;});window.__noopObserver.observe(document.body,{childList:true,subtree:true});const s=window.store.getState(),n=s.nodes.find(n=>n.data.componentType==='system');s.setFocusedNodeId(n.id);})()`);
@@ -267,6 +352,7 @@ try {
   await until(`document.querySelector('.model-sync-bar')`);
   await new Promise(resolve => setTimeout(resolve, 3800));
   assert.match(await evaluate(`document.querySelector('.model-sync-bar').textContent`), /需要保存到仿真机/);
+  atWorkspaceTop('hud', await dockLayout());
   await evaluate(`[...document.querySelectorAll('.toolbar button')].find(button=>button.textContent.includes('📁 文件')).click()`);
   await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(button=>button.textContent.trim()==='💾 保存').click()`);
   await until(`window.__alerts.some(message=>message.includes('工程已保存'))`);

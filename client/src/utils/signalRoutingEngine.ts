@@ -4,10 +4,9 @@ import { separateSignalTracks } from './separateSignalTracks';
 import { mergeSignalBranches } from './mergeSignalBranches';
 import type { SignalRoute } from './signalLayout';
 import { AvoidLib } from '../../../node_modules/libavoid-js/dist/index.js';
-import wasmUrl from '../../../node_modules/libavoid-js/dist/libavoid.wasm?url';
 
 let library: Promise<any> | undefined;
-function loadRouter() {
+function loadRouter(wasmUrl: string) {
   return library ??= (async () => {
     await AvoidLib.load(wasmUrl);
     return AvoidLib.getInstance();
@@ -53,8 +52,10 @@ function addJunctions(edges: Edge[]) {
 
 /** Route without moving any node. libavoid separates parallel paths globally;
  * shared output pins remain non-exclusive so a signal can branch naturally. */
-export async function computeSignalRoutes(nodes: Node[], edges: Edge[], getInternalNode: (id: string) => InternalNode | undefined): Promise<Edge[]> {
-  const a = await loadRouter();
+export async function computeSignalRoutes(
+  nodes: Node[], edges: Edge[], getInternalNode: (id: string) => InternalNode | undefined, wasmUrl: string,
+): Promise<Edge[]> {
+  const a = await loadRouter(wasmUrl);
   const router = new a.Router(2); // Avoid::OrthogonalRouting bit flag
   const temporaries: any[] = [];
   const keep = <T,>(object: T): T => { temporaries.push(object); return object; };

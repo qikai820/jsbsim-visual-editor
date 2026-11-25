@@ -23,6 +23,8 @@ mod sim_validation;
 const MAX_REQUEST: usize = 8 * 1024 * 1024;
 const BUILTIN: &str =
     include_str!("../../examples/flight-tests/morphquad-attitude/10_four_mode_complete.xml");
+const XCD20_NORMAL:&str=include_str!("../../examples/flight-tests/xcd20-takeoff/XCD20_NormalTakeoff.xml");
+const XCD20_RAIL:&str=include_str!("../../examples/flight-tests/xcd20-takeoff/XCD20_RailTakeoff.xml");
 static NEXT: AtomicU64 = AtomicU64::new(1);
 static SERVICE: OnceLock<Service> = OnceLock::new();
 struct Service {
@@ -167,6 +169,19 @@ fn arguments(value: &Value, allowed: &[&str]) -> Result<(), String> {
 }
 async fn dispatch(app: tauri::AppHandle, name: &str, args: Value) -> Result<Value, String> {
     match name {
+        "upper_firmware_library"=>{
+            arguments(&args,&[])?;
+            crate::run_blocking(||Ok(json!(crate::px4_firmware::library_list()?))).await
+        }
+        "upper_firmware_select"=>{
+            arguments(&args,&["simulator","firmwareId"])?;
+            let simulator=args["simulator"].as_str().filter(|s|s.parse::<std::net::Ipv4Addr>().is_ok()).ok_or("A current simulator IPv4 is required")?.to_owned();
+            let id=args["firmwareId"].as_str().filter(|s|s.len()==64&&s.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))).ok_or("A current firmware library ID is required")?.to_owned();
+            crate::run_blocking(move||{
+                let mut value=json!(crate::px4_firmware::library_select(simulator,id)?);
+                value["selectionId"]=value["id"].clone();Ok(value)
+            }).await
+        }
         "upper_firmware_status" => {
             arguments(&args, &[])?;
             crate::run_blocking(|| { let ports=crate::px4_firmware::ports(); Ok(json!({"ports":ports.as_ref().ok(),"portsError":ports.as_ref().err(),"status":crate::px4_firmware::status()?})) }).await
@@ -231,15 +246,13 @@ async fn dispatch(app: tauri::AppHandle, name: &str, args: Value) -> Result<Valu
         "upper_list_scripts" => {
             arguments(&args, &[])?;
             Ok(
-                json!({"scripts":[{"id":"morphquad_complete","name":"MorphQuad 完整测试","source":"current desktop build"}]}),
+                json!({"scripts":[{"id":"morphquad_complete","name":"MorphQuad 完整测试","source":"current desktop build"},{"id":"xcd20_normal_takeoff","name":"XCD20 普通起飞 · 手动/定高/定点","source":"current desktop build"},{"id":"xcd20_rail_takeoff","name":"XCD20 双杆自动起飞 → 定点悬停与刹停","source":"current desktop build"}]}),
             )
         }
         "upper_get_script" => {
             arguments(&args, &["script"])?;
-            if args["script"] != "morphquad_complete" {
-                return Err("Unknown script".into());
-            }
-            Ok(json!({"script":"morphquad_complete","source":BUILTIN}))
+            let source=script_source(&args)?;
+            Ok(json!({"script":args["script"],"source":source}))
         }
         "upper_validate_script" => {
             arguments(&args, &["source", "script"])?;
@@ -328,7 +341,9 @@ fn script_source(args: &Value) -> Result<String, String> {
     match (args.get("source"), args.get("script")) {
         (Some(Value::String(s)), None) if !s.is_empty() => Ok(s.clone()),
         (None, Some(Value::String(s))) if s == "morphquad_complete" => Ok(BUILTIN.into()),
-        _ => Err("Provide exactly one nonempty source or script=morphquad_complete".into()),
+        (None, Some(Value::String(s))) if s == "xcd20_normal_takeoff" => Ok(XCD20_NORMAL.into()),
+        (None, Some(Value::String(s))) if s == "xcd20_rail_takeoff" => Ok(XCD20_RAIL.into()),
+        _ => Err("Provide exactly one nonempty source or a listed built-in script".into()),
     }
 }
 async fn connection(stream: tokio::net::TcpStream, app: tauri::AppHandle) {

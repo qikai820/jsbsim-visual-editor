@@ -1,16 +1,16 @@
-// Production routing in the Linux desktop WebView, over HTTP and tauri://.
+// Routing in the Linux desktop WebView, via Vite and production assets.
 // Optional project snapshot is read only; no application profile is opened.
 // Usage: node tests/signal-routing-webkit.mjs [path/to/model.project.json]
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { build, preview } from 'vite';
+import { build, createServer, preview } from 'vite';
 
 const root = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const work = await mkdtemp('/tmp/signal-routing-webkit-');
 const entry = root + '/client/.' + work.split('/').pop() + '.html';
 const module = entry.replace(/\.html$/, '.tsx');
-let server;
+let dev, server;
 let cases = [{ name: 'Routing smoke', params: { channels: JSON.stringify([{ name: 'Test', items: [
   { type: 'summer', name: 'test/sum', componentProps: { inputs: ['test/a', 'test/b'] } },
   { type: 'pure_gain', name: 'test/gain', componentProps: { input: { value: 'test/sum' }, gain: { value: '2' } } },
@@ -39,10 +39,10 @@ const nativeWorker=window.Worker;
 let failWorker=false, edits=0, rf, saved, version=0;
 window.Worker=class extends nativeWorker {
   constructor(url,options){
-    if(String(url).includes('signalGraph.worker')){
+    if(options?.name==='signal-graph'||String(url).includes('signalGraph.worker')){
       // Emulate a desktop that cannot load module workers. The production
       // bundle must route using a single classic worker instead.
-      check(options?.type!=='module','Production routing requires a module worker');
+      check(import.meta.env.DEV||options?.type!=='module','Production routing requires a classic worker');
       if(failWorker)throw Error('Intentional routing startup failure');
     }
     super(url,options);
@@ -61,11 +61,12 @@ const mount=(item,layout)=>{
 };
 const ready=()=>rf&&rf.getNodes().length&& !document.querySelector('.expr-layout-btn')?.disabled
   &&!document.body.innerText.includes('加载画布…')&&!document.body.innerText.includes('整理连线…');
-const settled=()=>ready()&&saved;
+const routed=()=>rf.getEdges().filter(e=>!e.hidden).every(e=>e.data?.elkRoute?.points.length>=2&&typeof e.data.routingBlocked==='boolean');
+const settled=()=>ready()&&(saved&&routed()||document.body.innerText.includes('连线整理未完成'));
 const verify=()=>{
   check(!document.body.innerText.includes('连线整理未完成'),'Routing failed: '+document.body.innerText.slice(0,500));
   const edges=rf.getEdges().filter(e=>!e.hidden),nodes=rf.getNodes().filter(n=>!n.hidden);
-  check(edges.every(e=>e.data?.elkRoute?.points.length>=2),'All visible edges have computed routes');
+  check(routed(),'All visible edges have computed routes');
   check(document.querySelectorAll('.react-flow__edge-path').length===edges.length,'All connections remain visible');
   check(document.querySelectorAll('.react-flow__node').length===nodes.length,'All nodes remain visible');
   check(edits===0,'Routing must not edit the model');
@@ -91,11 +92,10 @@ const verify=()=>{
   report({passed:true,results,failureRecovery:true,modelEdits:edits});root.unmount();
 })().catch(error=>report({error:String(error),stack:error.stack}));
 `);
-  await build({ configFile: root + '/vite.config.ts', logLevel: 'error', build: {
-    outDir: work + '/dist', rollupOptions: { input: entry },
-  } });
-  server = await preview({ configFile: root + '/vite.config.ts', logLevel: 'error',
-    build: { outDir: work + '/dist' }, preview: { host: '127.0.0.1', port: 0 } });
+  dev = await createServer({ configFile: root + '/vite.config.ts', logLevel: 'error',
+    cacheDir: work + '/vite-cache',
+    server: { host: 'localhost', port: 0, strictPort: false, hmr: false } });
+  await dev.listen();
   await writeFile(work + '/probe.py', `
 import gi, json, sys, pathlib
 from urllib.parse import urlparse
@@ -108,6 +108,12 @@ context=WebKit2.WebContext.new_ephemeral()
 def resource(request):
     try:
         name=urlparse(request.get_uri()).path.lstrip('/')
+        # Reproduce the desktop failing to load a standalone worker script.
+        if name.startswith('assets/signalGraph.worker-'):
+            response=WebKit2.URISchemeResponse.new(Gio.MemoryInputStream.new(),0)
+            response.set_status(404,'Not Found')
+            request.finish_with_response(response)
+            return
         data=(root/name).read_bytes()
         stream=Gio.MemoryInputStream.new_from_bytes(GLib.Bytes.new(data))
         response=WebKit2.URISchemeResponse.new(stream,len(data))
@@ -142,7 +148,7 @@ GLib.timeout_add_seconds(150,timeout)
 Gtk.main()
 sys.exit(0 if passed else 1)
 `);
-  for (const origin of ['http://127.0.0.1:' + server.httpServer.address().port, 'tauri://localhost']) {
+  const probe = async origin => {
     const result = await new Promise((resolve, reject) => {
       const child = spawn('xvfb-run', ['-a', '/usr/bin/python3', work + '/probe.py', work + '/dist', origin + '/' + entry.split('/').pop()], {
         env: { ...process.env, WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1',
@@ -155,8 +161,19 @@ sys.exit(0 if passed else 1)
     });
     assert.equal(result.code, 0, result.out + result.err);
     console.log(origin, result.out.trim());
-  }
+  };
+  await probe('http://localhost:' + dev.httpServer.address().port);
+  await dev.close();
+  dev = undefined;
+  await build({ configFile: root + '/vite.config.ts', logLevel: 'error', build: {
+    outDir: work + '/dist', rollupOptions: { input: entry },
+  } });
+  server = await preview({ configFile: root + '/vite.config.ts', logLevel: 'error',
+    build: { outDir: work + '/dist' }, preview: { host: '127.0.0.1', port: 0 } });
+  await probe('http://127.0.0.1:' + server.httpServer.address().port);
+  await probe('tauri://localhost');
 } finally {
+  if (dev) await dev.close();
   if (server) await new Promise(resolve => server.httpServer.close(resolve));
   await Promise.all([rm(entry, { force: true }), rm(module, { force: true }), rm(work, { recursive: true, force: true })]);
 }

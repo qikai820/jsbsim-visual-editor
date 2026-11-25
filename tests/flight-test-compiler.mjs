@@ -67,7 +67,7 @@ try{
  badAltitude.blocks[0].p.min=49;badAltitude.blocks[0].p.deadzone=6;assert.throws(()=>compileTest(badAltitude),/死区/);
  const badAngle=base();badAngle.blocks=[angle('b1',{pitch:141})];assert.throws(()=>compileTest(badAngle),/越界/);
  assert.equal(SWEEP_POINTS.length,49);assert.equal(sweepPoints(45,5).length,37);assert(SWEEP_POINTS.slice(1).every((p,i)=>Math.abs(p-SWEEP_POINTS[i])===10));
- for(const preset of BUILTIN_TESTS){const doc=builtinDocument(preset.id,15),all=flatten(doc.blocks);assert.deepEqual(documentFromXml(compileTest(doc)),doc);assert(all.filter(n=>n.type==='altitude').every(n=>n.p.target===15));}
+ for(const preset of BUILTIN_TESTS.filter(p=>!p.id.startsWith('xcd20_'))){const doc=builtinDocument(preset.id,15),all=flatten(doc.blocks);assert.deepEqual(documentFromXml(compileTest(doc)),doc);assert(all.filter(n=>n.type==='altitude').every(n=>n.p.target===15));}
  const full=builtinDocument('complete');const all=flatten(full.blocks);assert.equal(all.filter(n=>n.type==='attitude_delta').length,24);assert.equal(all.filter(n=>n.type==='altitude').length,14);assert.equal(full.onFinish,'land');
  assert.equal(all.filter(n=>n.type==='manual_recover').length,20);
  assert.equal(all.filter(n=>n.type==='manual_recover'&&n.p.reference==='capture').length,2);

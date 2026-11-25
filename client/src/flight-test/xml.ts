@@ -1,4 +1,4 @@
-import { AXES, childLanes, copy, MAX_EXECUTION_NODES, MAX_TEST_BYTES, MODES, TestBlock, TestDocument, validateDocument } from './model';
+import { fieldPath, AXES, childLanes, copy, MAX_EXECUTION_NODES, MAX_TEST_BYTES, MODES, TestBlock, TestDocument, validateDocument } from './model';
 export const esc=(s:unknown)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 type Cond=string|{logic:'AND'|'OR';terms:Cond[]};
 const and=(...terms:Cond[]):Cond=>({logic:'AND',terms});
@@ -17,7 +17,10 @@ export function compileTest(document:TestDocument,metadata=true):string{
   prop('test/rc/enabled',1);
   const set=(path:string,value:number)=>`<set name="${esc(path)}" value="${value}"/>`;
   const deadline=(path:string,seconds:number)=>`<set name="${path}"><function><sum><property>simulation/sim-time-sec</property><value>${seconds}</value></sum></function></set>`;
-  const event=(name:string,c:Cond,sets:string[],notify=false,notifyProperties:string[]=[])=>{events.push(`    <event name="${esc(name)}">\n      ${typeof c==='string'?`<condition>${esc(c)}</condition>`:conditionXml(c)}\n      ${sets.join('\n      ')}${notify?'\n      <notify>'+notifyProperties.map(path=>`<property caption="${esc(path.split('/').slice(-1)[0])}">${esc(path)}</property>`).join('')+'</notify>':''}\n    </event>`);};
+  const event=(name:string,c:Cond,sets:string[],notify=false,notifyProperties:string[]=[],continuous=false)=>{events.push(`    <event name="${esc(name)}"${continuous?' continuous="true"':''}>\n      ${typeof c==='string'?`<condition>${esc(c)}</condition>`:conditionXml(c)}\n      ${sets.join('\n      ')}${notify?'\n      <notify>'+notifyProperties.map(path=>`<property caption="${esc(path.split('/').slice(-1)[0])}">${esc(path)}</property>`).join('')+'</notify>':''}\n    </event>`);};
+  const launchReference='test/flow/xcd20_launch/choice';
+  const launchHeight=Object.prototype.hasOwnProperty.call(document.requirements??{},'xcd20-takeoff');
+  const relativeTarget=(path:string,value:number)=>`<set name="${path}"><function><difference><sum><property>${launchReference}</property><value>${value}</value></sum><difference><property>test/fc/altitude-msl-m</property><property>test/fc/relative-alt-m</property></difference></difference></function></set>`;
   const global:Cond=and('test/runtime/ready eq 1','test/runtime/complete eq 0','test/runtime/failed eq 0');
   type Handle={done:string;cancel:string;all:string[];inputs:string[];commands:string[]};
   function block(n:TestBlock,activate:Cond,ancestors:Cond[],parallelDepth:number):Handle{
@@ -29,6 +32,23 @@ export function compileTest(document:TestDocument,metadata=true):string{
     const timeout=(seconds:number)=>{event(n.id+'::timeout',and(running,`simulation/sim-time-sec ge ${until}`),[set('test/runtime/failed',1)],true);};
     const append=(v:Handle)=>{h.all.push(...v.all);h.inputs.push(...v.inputs);h.commands.push(...v.commands);};
     const activeChildren=[...ancestors,`${started} eq 1`,`${done} eq 0`,`${cancel} eq 0`];
+    if(n.type==='launch_reference'){
+      if(!launchHeight||parallelDepth)throw Error('起飞高度基准只能用于 XCD20 串行测试');
+      prop(launchReference);
+      const ground=Number(document.requirements?.['xcd20-takeoff'])===1?'test/sim/rail-contact-mask eq 3':'test/fc/landed eq 1';
+      event(n.id+'::capture',and(start,'test/fc/armed eq 0',ground),[...begin,`<set name="${launchReference}"><function><property>test/fc/altitude-msl-m</property></function></set>`,...finish],true,['test/fc/relative-alt-m']);
+      event(n.id+'::not_grounded',and(start,or('test/fc/armed ne 0',Number(document.requirements?.['xcd20-takeoff'])===1?'test/sim/rail-contact-mask ne 3':'test/fc/landed ne 1')),[set('test/runtime/failed',1)],true);return h;
+    }
+    if(n.type==='observe'){
+      const field=fieldPath(String(p.field)),minimum=prop(base+'/minimum'),maximum=prop(base+'/maximum'),watchdog=prop(base+'/watchdog');
+      const bound=(path:string,value:number)=>p.reference==='start'?`<set name="${path}"><function><sum><property>${field}</property><value>${value}</value></sum></function></set>`:set(path,value);
+      const good=and(`${field} ge ${minimum}`,`${field} le ${maximum}`);
+      event(n.id+'::observe',start,[...begin,bound(minimum,Number(p.min)),bound(maximum,Number(p.max)),deadline(until,Number(p.duration)),deadline(watchdog,.3)],true,[field]);
+      event(n.id+'::sample',and(running,good),[deadline(watchdog,.3)],false,[],true);
+      event(n.id+'::out_of_range',and(running,or(`${field} lt ${minimum}`,`${field} gt ${maximum}`)),[set('test/runtime/failed',1)],true,[field,minimum,maximum]);
+      event(n.id+'::missing',and(running,`simulation/sim-time-sec ge ${watchdog}`),[set('test/runtime/failed',1)],true,[field]);
+      event(n.id+'::done',and(running,good,`simulation/sim-time-sec ge ${until}`),finish,true,[field]);return h;
+    }
     if(n.type==='channel'){
       if(parallelDepth)throw Error('通道控制应放在并行组之外设置或释放，通道值会持续保持');
       const base='test/channel/'+p.channel,enabled=prop(base+'/enabled'),value=prop(base+'/value-norm');
@@ -56,6 +76,7 @@ export function compileTest(document:TestDocument,metadata=true):string{
         }
         if(n.type==='attitude_delta')for(const axis of ['roll','pitch'])begin.push(`<set name="test/target/${axis}-deg"><function><sum><property>test/target/${axis}-deg</property><value>${p[axis]}</value></sum></function></set>`);
       }
+      if(launchHeight&&['altitude','manual_takeoff'].includes(n.type))begin.push(relativeTarget(input+'/height-target-m',Number(p.target)));
       const enabled=prop(input+'/enabled');h.inputs.push(enabled);begin.push(set(enabled,1),deadline(until,angle||heading||manualTakeoff||manualRecover?Number(p.timeout):n.type==='neutral'?1/document.rateHz:Number(p.duration)));finish.unshift(set(enabled,0));
       event(n.id+'::start',start,begin,true,angle?[input+'/angle-roll-deg',input+'/angle-pitch-deg']:heading?[input+'/heading-target-deg']:[]);
       const reached=angle?prop('test/attitude/'+id+'/status'):heading?prop('test/heading/'+id+'/status'):manualTakeoff?prop('test/altitude/'+id+'/status'):manualRecover?prop('test/manual/'+id+'/status'):null;
@@ -66,6 +87,7 @@ export function compileTest(document:TestDocument,metadata=true):string{
     if(['mode','arm','disarm','takeoff','land'].includes(n.type)){
       const command='test/command/'+id,kind=({arm:1,disarm:2,mode:3,takeoff:4,land:5}as Record<string,number>)[n.type];
       prop(command+'/kind',kind);prop(command+'/argument',n.type==='mode'?MODES[String(p.mode)]:n.type==='takeoff'?Number(p.altitude):0);prop(command+'/status');
+      if(launchHeight&&n.type==='takeoff')begin.push(relativeTarget(command+'/argument',Number(p.altitude)));
       const request=prop(command+'/request');h.commands.push(request);begin.push(set(request,1),deadline(until,Number(p.timeout)));finish.unshift(set(request,0));
       event(n.id+'::start',start,begin,true);event(n.id+'::done',and(running,`${command}/status eq 1`),finish);
       event(n.id+'::rejected',and(running,`${command}/status lt 0`),[set('test/runtime/failed',1)],true);timeout(Number(p.timeout));return h;
@@ -78,7 +100,7 @@ export function compileTest(document:TestDocument,metadata=true):string{
     }
     if(n.type==='wait_state'||n.type==='assert'){
       event(n.id+'::start',start,[...begin,deadline(until,Number(p.timeout))],true);
-      event(n.id+'::done',and(running,`test/fc/${p.field} ${p.op} ${p.value}`),finish);timeout(Number(p.timeout));return h;
+      event(n.id+'::done',and(running,`${fieldPath(String(p.field))} ${p.op} ${p.value}`),finish);timeout(Number(p.timeout));return h;
     }
     if(n.type==='loop'){
       event(n.id+'::start',start,begin,true);let activation:Cond=`${started} eq 1`;
@@ -86,7 +108,7 @@ export function compileTest(document:TestDocument,metadata=true):string{
       event(n.id+'::done',and(running,activation),finish);return h;
     }
     if(n.type==='branch'){
-      const choice=prop(base+'/choice',-1),pred=`test/fc/${p.field} ${p.op} ${p.value}`,opposite=`test/fc/${p.field} ${inverse[String(p.op)]} ${p.value}`;
+      const choice=prop(base+'/choice',-1),pred=`${fieldPath(String(p.field))} ${p.op} ${p.value}`,opposite=`${fieldPath(String(p.field))} ${inverse[String(p.op)]} ${p.value}`;
       event(n.id+'::start',start,begin,true);
       event(n.id+'::then',and(running,`${choice} eq -1`,pred),[set(choice,1)]);event(n.id+'::else',and(running,`${choice} eq -1`,opposite),[set(choice,0)]);
       const yes=sequence(n.yes!,`${choice} eq 1`,activeChildren,parallelDepth),no=sequence(n.no!,`${choice} eq 0`,activeChildren,parallelDepth);append(yes);append(no);

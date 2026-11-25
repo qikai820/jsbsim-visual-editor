@@ -321,7 +321,7 @@ impl Telemetry {
                     "COM_RC_IN_MODE",
                 ]
                 .contains(&name)
-                    || super::channels::is_parameter(name)
+                    || super::channels::is_parameter(name) || super::xcd20::is_parameter(name)
                 {
                     if ![6, 9].contains(&p[24]) { return; }
                     let value = if p[24] == 6 && self.param_bytewise {

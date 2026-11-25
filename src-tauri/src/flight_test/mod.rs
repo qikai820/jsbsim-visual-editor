@@ -5,6 +5,9 @@ mod manual;
 pub mod receiver;
 pub mod channels;
 pub mod engine;
+mod xcd20;
+#[cfg(test)]
+mod xcd20_test;
 pub mod mavlink;
 pub mod xml;
 
@@ -299,6 +302,19 @@ pub fn connection_snapshot() -> serde_json::Value {
         }))).collect::<BTreeMap<_,_>>()
     })
 }
+pub(crate) fn log_relay_generation(session: u64, host: std::net::Ipv4Addr, target: (u8, u8), uid: u64) -> Result<u64, String> {
+    let link = link().lock().map_err(|e| e.to_string())?;
+    let telemetry = &link.telemetry;
+    if !link.connected || !link.forwarded || link.session != session
+        || link.peer.map(|peer| peer.ip()) != Some(host.into())
+        || telemetry.target != Some(target) || telemetry.uid != Some(uid)
+        || !telemetry.heartbeat.is_some_and(|at| at.elapsed() < Duration::from_secs(5))
+        || telemetry.signed || telemetry.armed
+    {
+        return Err("任务机日志下载需要同一飞控的有效连接和上锁心跳".into());
+    }
+    Ok(telemetry.generation)
+}
 pub fn stop(id: Option<u64>) -> Result<Snapshot, String> {
     let handle = {
         let mut c = controller().lock().map_err(|e| e.to_string())?;
@@ -492,6 +508,7 @@ fn preflight(
     manual_takeoff: bool,
     heading_test: bool,
     recovery_test: bool,
+    extra_parameters: &[&str],
 ) -> Result<(Telemetry, (f64, String, u64)), String> {
     let first = telemetry(options)?;
     if !first.fresh(Instant::now()) || !first.hil {
@@ -503,20 +520,28 @@ fn preflight(
     }
     // Legacy angle tests retain optional calibration reads. Heading templates
     // require fresh stick/rate/tilt calibration before any flight actions.
-    let requested = preflight_parameter_names(angles);
-    let required_parameters = if heading_test { requested.clone() } else if recovery_test { vec!["MPC_MAN_TILT_MAX","MPC_TILTMAX_AIR"] } else { vec![] };
+    let mut requested = preflight_parameter_names(angles);
+    requested.extend_from_slice(extra_parameters);
+    let mut required_parameters = if heading_test { requested.clone() } else if recovery_test { vec!["MPC_MAN_TILT_MAX","MPC_TILTMAX_AIR"] } else { vec![] };
+    required_parameters.extend_from_slice(extra_parameters);
     let parameter_since = Instant::now();
     for _ in 0..3 {
         if cancel.load(Ordering::Acquire) {
             return Err("操作已取消".into());
         }
         let sent = Instant::now();
-        for name in &requested {
+        // The hardware parameter responder has a bounded pending queue. Space
+        // read-only requests and retry only responses missing from this run;
+        // sending the entire set in one burst can repeatedly lose one channel.
+        let pending = pending_preflight_parameters(&requested, &telemetry(options)?, parameter_since);
+        for name in pending {
+            if cancel.load(Ordering::Acquire) { return Err("操作已取消".into()); }
             write(
                 options,
                 mavlink::request_param_named((options.system, options.component), name, *sequence),
             )?;
             *sequence = sequence.wrapping_add(1);
+            thread::sleep(Duration::from_millis(35));
         }
         if angles || manual_takeoff {
             write(
@@ -612,6 +637,31 @@ fn manual_takeoff_feedback(t: &Telemetry, now: Instant) -> Result<(), String> {
         ))
     }
 }
+fn pending_preflight_parameters<'a>(names: &[&'a str], t: &Telemetry, since: Instant) -> Vec<&'a str> {
+    let mut pending = Vec::new();
+    for &name in names {
+        if !t.params.get(name).is_some_and(|p| p.2 >= since) && !pending.contains(&name) {
+            pending.push(name);
+        }
+    }
+    pending
+}
+
+#[cfg(test)]
+#[test]
+fn parameter_read_plan_requires_current_run_and_retries_only_missing() {
+    let now = Instant::now();
+    let mut t = Telemetry::default();
+    t.params.insert("SYS_HITL".into(), (1., 6, now));
+    t.params.insert("HIL_ACT_FUNC4".into(), (104., 6, now-Duration::from_millis(1)));
+    let names = ["SYS_HITL", "HIL_ACT_FUNC4", "HIL_ACT_FUNC8", "HIL_ACT_FUNC4"];
+    assert_eq!(pending_preflight_parameters(&names, &t, now), vec!["HIL_ACT_FUNC4", "HIL_ACT_FUNC8"]);
+    t.params.insert("HIL_ACT_FUNC4".into(), (104., 6, now));
+    assert_eq!(pending_preflight_parameters(&names, &t, now), vec!["HIL_ACT_FUNC8"]);
+    t.params.insert("HIL_ACT_FUNC8".into(), (108., 6, now));
+    assert!(pending_preflight_parameters(&names, &t, now).is_empty());
+}
+
 pub fn preflight_parameter_names(angles: bool) -> Vec<&'static str> {
     let mut names = Vec::new();
     if angles {
@@ -1038,6 +1088,7 @@ fn run(
             engine.needs_manual_takeoff(),
             engine.needs_heading(),
             engine.needs_recovery(),
+            &xcd20::parameters(&engine),
         ).and_then(|(t, scene)| {
             if !options.rc_emulation { receiver::require_manual(&options,&t,&mut sequence,&cancel)?; }
             if options.rc_emulation {
@@ -1048,6 +1099,7 @@ fn run(
                 }
             }
             validate_script_parameters(&engine,&t)?;
+            xcd20::preflight(&engine,&t,options.instance)?;
             Ok((t, scene))
         }) {
             Ok((t, scene)) => {
@@ -1224,6 +1276,9 @@ fn run(
             {
                 engine.set(&key, value);
             }
+            engine.properties.retain(|key,_|!key.starts_with("test/sim/"));
+            if !options.dry_run {for (key,value) in xcd20::values(&engine,options.instance)?{engine.set(&key,value);}}
+            xcd20::derived(&mut engine);
             engine.set("test/runtime/ready", 1.);
             if let Some(p) = pending.as_mut() {
                 if engine.value(&format!("{}/request", p.command.owner)) != Some(1.)

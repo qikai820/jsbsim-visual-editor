@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import type { Px4Connection } from '../px4/connection';
 import { copy, defaultDocument, validateDocument, type TestDocument } from './model';
-import { compileTest } from './xml';
+import { compileTest, documentFromXml } from './xml';
 
 export const FLIGHT_TEST_STORAGE = 'px4-flight-test-workspace-v1';
 const DISPLAY_STORAGE = 'jsbsim-scene-flight-test-display-v1';
@@ -163,7 +163,8 @@ export async function startMcpFlightTest(source: string, dryRun: boolean) {
   if (!dryRun) { const reason=rcSourceStartReason(state);if(reason)throw Error(reason); }
   if (!source) throw Error('测试脚本为空');
   if (remoteController) return remoteCommand('starting', () => remoteController!.start(dryRun, source));
-  return startSource(source, dryRun, null, 'mcp');
+  const metadata=documentFromXml(source);
+  return startSource(source, dryRun, metadata, 'mcp',metadata);
 }
 async function startSource(source: string, dryRun: boolean, document: TestDocument | null, origin: 'ui' | 'mcp', runDocument = document) {
   const context = useFlightTestStore.getState().context;

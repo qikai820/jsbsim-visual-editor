@@ -208,7 +208,7 @@ function Aircraft({ id, feed, layers, selected, onSelect, revision, groundY, gro
   const points = useMemo(() => feed.origin ? trail.map(point => localPosition(point, feed.origin!)) : [], [feed.origin, trail, lastTrail]);
   useFrame(({ clock }) => {
     const sample = feed.sample(id, clock.oldTime);
-    if (sample && group.current) { group.current.position.copy(sample.position); group.current.quaternion.copy(sample.quaternion); }
+    if (sample && group.current) { group.current.position.copy(sample.position); group.current.quaternion.copy(sample.quaternion); group.current.userData.displayTime = sample.time; }
     if (shadow.current && shadowMaterial.current) {
       const height = sample ? sample.position.y - groundY : -1;
       shadow.current.visible = groundKnown && height >= 0 && height < 30;

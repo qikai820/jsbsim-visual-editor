@@ -5,6 +5,8 @@ where T: Send + 'static, F: FnOnce() -> Result<T, String> + Send + 'static {
 }
 #[path = "../src/px4_files.rs"]
 mod px4_files;
+#[path = "../src/px4_log_relay_wire.rs"]
+mod px4_log_relay_wire;
 #[path = "../src/mcp_logs.rs"]
 mod mcp_logs;
 #[path = "../src/px4_metadata.rs"]

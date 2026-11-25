@@ -1,5 +1,7 @@
 export type NshRequest = { command: string; timeoutMs?: number };
-export type NshResult = { command: string; output: string; succeeded: boolean; truncated: boolean; durationMs: number; target: { system: number; component: number }; sessionId: number };
+import type { FirmwareUsbTarget } from '../px4/firmwareBootloader';
+
+export type NshResult = { command: string; output: string; succeeded: boolean; truncated: boolean; durationMs: number; target: { system: number; component: number }; sessionId: number; bootloader?: FirmwareUsbTarget };
 export type NshHandler = (request: NshRequest) => Promise<NshResult>;
 let owner: NshHandler | null = null;
 let remote: NshHandler | null = null;

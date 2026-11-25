@@ -23,7 +23,7 @@ export class Px4Connection {
   endpoint = '';
   version = '';
   uid = '';
-  constructor(target: Target, private expectedHost?: string) {
+  constructor(target: Target, readonly expectedHost?: string) {
     this.target = target;
     this.transport.onStatus = (connected, error) => {
       this.connected = connected; if (!connected) { this.lastHeartbeat = 0; this.heartbeatMode = undefined; this.aborter.abort(); if (this.timer) clearInterval(this.timer); this.timer = undefined; }

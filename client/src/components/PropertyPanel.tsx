@@ -5,7 +5,8 @@ import { environmentFromProject, environmentEdits } from '../sim/runtimeParamete
 import { withoutAutomaticRuntimeTuning } from '../sim/runtimeTuningOrigin';
 import { useRuntimeTuningStore, refreshRuntimeSnapshot, submitRuntimeEdits } from '../store/runtimeTuningStore';
 import { displayNumber } from '../utils/displayNumber';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useFlowStore } from '../store/flowStore';
 import { getComponentDef } from '../utils/componentDefs';
 import { getUnitOptions, convertUnit } from '../utils/unitConverter';
@@ -87,9 +88,24 @@ function getUnitStr(p: any, fallback: string): string {
   return fallback;
 }
 
-export default function PropertyPanel() {
-  const windTuning = useRuntimeTuningStore();
-  const { nodes, edges, onConnect, selectedNodeId, updateNodeParams, removeNode, setSelectedNode, setFocusedNodeId, editingSubFileId } = useFlowStore();
+export default memo(function PropertyPanel() {
+  const { node, nodes, edges, onConnect, updateNodeParams, removeNode, setSelectedNode, setFocusedNodeId, editingSubFileId } = useFlowStore(useShallow(state => {
+    const node = state.nodes.find(candidate => candidate.id === state.selectedNodeId);
+    const type = node?.data.componentType;
+    return {
+      node,
+      nodes: type === 'pwm_capture' || type === 'serial_sensor' ? state.nodes : undefined,
+      edges: type === 'serial_sensor' ? state.edges : undefined,
+      onConnect: state.onConnect,
+      updateNodeParams: state.updateNodeParams,
+      removeNode: state.removeNode,
+      setSelectedNode: state.setSelectedNode,
+      setFocusedNodeId: state.setFocusedNodeId,
+      editingSubFileId: state.editingSubFileId,
+    };
+  }));
+  const windTuning = useRuntimeTuningStore(useShallow(({ busy, message, error }) =>
+    node?.data.componentType === 'environment' ? { busy, message, error } : undefined));
   const [sysEditingExpr, setSysEditingExpr] = useState<{ chIdx: number; itemIdx: number } | null>(null);
   const [editingCompProp, setEditingCompProp] = useState<{ chIdx: number; itemIdx: number; field: string } | null>(null);
   const [canvasView, setCanvasView] = useState<
@@ -103,10 +119,10 @@ export default function PropertyPanel() {
   const [dsdlFiles, setDsdlFiles] = useState<string[]>([]);
   const [dsdlLoading, setDsdlLoading] = useState(false);
   const [dsdlError, setDsdlError] = useState('');
-  const selectedNode = nodes.find(node => node.id === selectedNodeId);
+  const selectedType = node?.data.componentType;
 
   useEffect(() => {
-    if (selectedNode?.data.componentType !== 'system' && selectedNode?.data.componentType !== 'flight_control') {
+    if (selectedType !== 'system' && selectedType !== 'flight_control') {
       setSystemFiles([]);
       return;
     }
@@ -116,9 +132,9 @@ export default function PropertyPanel() {
         .map(file => file.replace(/\.xml$/i, ''))
         .sort()))
       .catch(() => setSystemFiles([]));
-  }, [selectedNode?.data.componentType]);
+  }, [selectedType]);
   useEffect(() => {
-    if (selectedNode?.data.componentType !== 'uavcan') {
+    if (selectedType !== 'uavcan') {
       setDsdlFiles([]);
       setDsdlError('');
       setDsdlLoading(false);
@@ -133,9 +149,9 @@ export default function PropertyPanel() {
         setDsdlError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setDsdlLoading(false));
-  }, [selectedNode?.data.componentType]);
+  }, [selectedType]);
   useEffect(() => {
-    if (selectedNode?.data.componentType !== 'engine' && selectedNode?.data.componentType !== 'propeller') {
+    if (selectedType !== 'engine' && selectedType !== 'propeller') {
       setEngineFiles([]);
       setPropellerFiles([]);
       return;
@@ -146,7 +162,7 @@ export default function PropertyPanel() {
       setEngineFiles(clean(engines));
       setPropellerFiles(clean(propellers));
     }).catch(() => { setEngineFiles([]); setPropellerFiles([]); });
-  }, [selectedNode?.data.componentType]);
+  }, [selectedType]);
 
   if (editingSubFileId) return <SubFileEditor />;
 
@@ -176,7 +192,6 @@ export default function PropertyPanel() {
     );
   }
 
-  const node = nodes.find(n => n.id === selectedNodeId);
   if (node?.data.params?.disabled) return <div className="property-panel">
     <h3>模块属性</h3><span className="module-status-badge">已注释 · 不参与计算</span>
     <p className="module-disabled-summary">{node.data.label}</p>
@@ -587,7 +602,7 @@ export default function PropertyPanel() {
           if (!profile.active) edits.push(...environmentEdits(environmentFromProject({ nodes: [node] }) || {}).filter(edit => edit.key.startsWith('atmosphere/wind-')));
           submitRuntimeEdits(edits);
         }).catch(error => useRuntimeTuningStore.setState({ message: String(error), error: true })); }}
-        busy={windTuning.busy} message={windTuning.message === '等待运行端' ? undefined : windTuning.message} error={windTuning.error} />}
+        busy={windTuning?.busy} message={windTuning?.message === '等待运行端' ? undefined : windTuning?.message} error={windTuning?.error} />}
       {Object.entries(def.params)
         .filter(([key]) => {
           if (node.data.componentType === 'environment' && node.data.params.wind_profile?.active && ['wind_north_fps', 'wind_east_fps', 'wind_down_fps'].includes(key)) return false;
@@ -632,11 +647,11 @@ export default function PropertyPanel() {
         .map(([key, paramDef]) => {
           if (node.data.componentType === 'pwm_capture' && key === 'channels') {
             return <PwmCaptureChannels key={key} nodeId={node.id} params={node.data.params}
-              nodes={nodes} onChange={channels => updateNodeParams(node.id, { channels })} />;
+              nodes={nodes ?? []} onChange={channels => updateNodeParams(node.id, { channels })} />;
           }
           if (node.data.componentType === 'serial_sensor' && key === 'logic_name') {
-            const systems = nodes.filter(candidate => candidate.data.componentType === 'system');
-            const sourceId = edges.find(edge => edge.target === node.id &&
+            const systems = (nodes ?? []).filter(candidate => candidate.data.componentType === 'system');
+            const sourceId = edges?.find(edge => edge.target === node.id &&
               systems.some(system => system.id === edge.source))?.source || '';
             return <div className="field-row" key={key}>
               <label>{paramDef.label}</label>
@@ -994,7 +1009,7 @@ export default function PropertyPanel() {
       })()}
     </div>
   );
-}
+});
 
 // ── Table Data Editor Component ────────────────────────────────────────────
 

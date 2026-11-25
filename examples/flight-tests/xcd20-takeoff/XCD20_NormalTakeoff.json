@@ -1,0 +1,2660 @@
+{
+  "version": 1,
+  "name": "XCD20 普通起飞 · 手动 / 定高 / 定点",
+  "aircraft": "XCD20_FlightIdentified",
+  "initialize": "current-instance",
+  "duration": 1200,
+  "rateHz": 50,
+  "throttle": 0,
+  "clock": "realtime",
+  "onFinish": "land",
+  "onAbort": "land",
+  "requirements": {
+    "xcd20-takeoff": 0
+  },
+  "blocks": [
+    {
+      "id": "bmark_1",
+      "type": "mark",
+      "p": {
+        "text": "普通：SLIDE=0；手动/定高/定点各自从地面起飞"
+      }
+    },
+    {
+      "id": "bnormal_input_2",
+      "type": "input_mode",
+      "p": {
+        "input": "normal"
+      }
+    },
+    {
+      "id": "bmark_3",
+      "type": "mark",
+      "p": {
+        "text": "N01 手动起飞；高度辅助仅模拟驾驶员推油门，不代表飞控自动定高"
+      }
+    },
+    {
+      "id": "bmark_4",
+      "type": "mark",
+      "p": {
+        "text": "新测试段：确认落地上锁，重新记录起飞高度"
+      }
+    },
+    {
+      "id": "bcheck_5",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bcheck_6",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bneutral_7",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "blow_8",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bmode_9",
+      "type": "mode",
+      "p": {
+        "mode": "MANUAL",
+        "timeout": 10
+      }
+    },
+    {
+      "id": "blaunch_reference_10",
+      "type": "launch_reference",
+      "p": {}
+    },
+    {
+      "id": "barm_11",
+      "type": "arm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bwait_12",
+      "type": "wait",
+      "p": {
+        "duration": 3
+      }
+    },
+    {
+      "id": "bmanual_takeoff_13",
+      "type": "manual_takeoff",
+      "p": {
+        "target": 3,
+        "climb": 0.5,
+        "tolerance": 0.2,
+        "settle": 2,
+        "timeout": 90,
+        "hover": 50,
+        "max": 70,
+        "slew": 8
+      }
+    },
+    {
+      "id": "bparallel_75",
+      "type": "parallel",
+      "p": {
+        "join": "any",
+        "timeout": 85
+      },
+      "lanes": [
+        [
+          {
+            "id": "bheight_74",
+            "type": "altitude",
+            "p": {
+              "target": 3,
+              "duration": 120,
+              "tolerance": 0.15,
+              "hover": 50,
+              "min": 10,
+              "max": 70,
+              "slew": 10,
+              "response": 8,
+              "damping": 20,
+              "trim": 1.5,
+              "deadzone": 6
+            }
+          }
+        ],
+        [
+          {
+            "id": "bmark_14",
+            "type": "mark",
+            "p": {
+              "text": "MANUAL pitch +20%"
+            }
+          },
+          {
+            "id": "bparallel_17",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bpulse_15",
+                  "type": "pulse",
+                  "p": {
+                    "axis": "pitch",
+                    "value": 20,
+                    "duration": 1
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bresponse_16",
+                  "type": "wait_state",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "op": "ge",
+                    "value": 2,
+                    "timeout": 1
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bneutral_18",
+            "type": "neutral",
+            "p": {}
+          },
+          {
+            "id": "bwait_19",
+            "type": "wait",
+            "p": {
+              "duration": 2
+            }
+          },
+          {
+            "id": "bparallel_23",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_20",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 1,
+                    "max": 1,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_21",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_22",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bmark_24",
+            "type": "mark",
+            "p": {
+              "text": "MANUAL pitch −20%"
+            }
+          },
+          {
+            "id": "bparallel_27",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bpulse_25",
+                  "type": "pulse",
+                  "p": {
+                    "axis": "pitch",
+                    "value": -20,
+                    "duration": 1
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bresponse_26",
+                  "type": "wait_state",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "op": "ge",
+                    "value": 2,
+                    "timeout": 1
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bneutral_28",
+            "type": "neutral",
+            "p": {}
+          },
+          {
+            "id": "bwait_29",
+            "type": "wait",
+            "p": {
+              "duration": 2
+            }
+          },
+          {
+            "id": "bparallel_33",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_30",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 1,
+                    "max": 1,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_31",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_32",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bmark_34",
+            "type": "mark",
+            "p": {
+              "text": "MANUAL roll +20%"
+            }
+          },
+          {
+            "id": "bparallel_37",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bpulse_35",
+                  "type": "pulse",
+                  "p": {
+                    "axis": "roll",
+                    "value": 20,
+                    "duration": 1
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bresponse_36",
+                  "type": "wait_state",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "op": "ge",
+                    "value": 2,
+                    "timeout": 1
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bneutral_38",
+            "type": "neutral",
+            "p": {}
+          },
+          {
+            "id": "bwait_39",
+            "type": "wait",
+            "p": {
+              "duration": 2
+            }
+          },
+          {
+            "id": "bparallel_43",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_40",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 1,
+                    "max": 1,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_41",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_42",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bmark_44",
+            "type": "mark",
+            "p": {
+              "text": "MANUAL roll −20%"
+            }
+          },
+          {
+            "id": "bparallel_47",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bpulse_45",
+                  "type": "pulse",
+                  "p": {
+                    "axis": "roll",
+                    "value": -20,
+                    "duration": 1
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bresponse_46",
+                  "type": "wait_state",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "op": "ge",
+                    "value": 2,
+                    "timeout": 1
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bneutral_48",
+            "type": "neutral",
+            "p": {}
+          },
+          {
+            "id": "bwait_49",
+            "type": "wait",
+            "p": {
+              "duration": 2
+            }
+          },
+          {
+            "id": "bparallel_53",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_50",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 1,
+                    "max": 1,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_51",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_52",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bmark_54",
+            "type": "mark",
+            "p": {
+              "text": "MANUAL yaw +20%"
+            }
+          },
+          {
+            "id": "bparallel_57",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bpulse_55",
+                  "type": "pulse",
+                  "p": {
+                    "axis": "yaw",
+                    "value": 20,
+                    "duration": 1
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bresponse_56",
+                  "type": "wait_state",
+                  "p": {
+                    "field": "yaw-rate-abs-rad-s",
+                    "op": "ge",
+                    "value": 0.02,
+                    "timeout": 1
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bneutral_58",
+            "type": "neutral",
+            "p": {}
+          },
+          {
+            "id": "bwait_59",
+            "type": "wait",
+            "p": {
+              "duration": 2
+            }
+          },
+          {
+            "id": "bparallel_63",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_60",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 1,
+                    "max": 1,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_61",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_62",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bmark_64",
+            "type": "mark",
+            "p": {
+              "text": "MANUAL yaw −20%"
+            }
+          },
+          {
+            "id": "bparallel_67",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bpulse_65",
+                  "type": "pulse",
+                  "p": {
+                    "axis": "yaw",
+                    "value": -20,
+                    "duration": 1
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bresponse_66",
+                  "type": "wait_state",
+                  "p": {
+                    "field": "yaw-rate-abs-rad-s",
+                    "op": "ge",
+                    "value": 0.02,
+                    "timeout": 1
+                  }
+                }
+              ]
+            ]
+          },
+          {
+            "id": "bneutral_68",
+            "type": "neutral",
+            "p": {}
+          },
+          {
+            "id": "bwait_69",
+            "type": "wait",
+            "p": {
+              "duration": 2
+            }
+          },
+          {
+            "id": "bparallel_73",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 2
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_70",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 1,
+                    "max": 1,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_71",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_72",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_76",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bland_77",
+      "type": "land",
+      "p": {
+        "timeout": 60
+      }
+    },
+    {
+      "id": "bcheck_78",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "blow_79",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bdisarm_80",
+      "type": "disarm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bcheck_81",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bwait_82",
+      "type": "wait",
+      "p": {
+        "duration": 3
+      }
+    },
+    {
+      "id": "bmark_83",
+      "type": "mark",
+      "p": {
+        "text": "N02 定高：起飞后关闭测试器控高，使用中位油门检查飞控自身定高"
+      }
+    },
+    {
+      "id": "bmark_84",
+      "type": "mark",
+      "p": {
+        "text": "新测试段：确认落地上锁，重新记录起飞高度"
+      }
+    },
+    {
+      "id": "bcheck_85",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bcheck_86",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bneutral_87",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "blow_88",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bmode_89",
+      "type": "mode",
+      "p": {
+        "mode": "ALTCTL",
+        "timeout": 10
+      }
+    },
+    {
+      "id": "blaunch_reference_90",
+      "type": "launch_reference",
+      "p": {}
+    },
+    {
+      "id": "barm_91",
+      "type": "arm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bwait_92",
+      "type": "wait",
+      "p": {
+        "duration": 3
+      }
+    },
+    {
+      "id": "bmark_93",
+      "type": "mark",
+      "p": {
+        "text": "以当前模式推升降杆起飞；不发送 NAV_TAKEOFF"
+      }
+    },
+    {
+      "id": "bparallel_100",
+      "type": "parallel",
+      "p": {
+        "join": "any",
+        "timeout": 100
+      },
+      "lanes": [
+        [
+          {
+            "id": "bheight_94",
+            "type": "altitude",
+            "p": {
+              "target": 3,
+              "duration": 120,
+              "tolerance": 0.15,
+              "hover": 50,
+              "min": 10,
+              "max": 70,
+              "slew": 10,
+              "response": 8,
+              "damping": 20,
+              "trim": 1.5,
+              "deadzone": 6
+            }
+          }
+        ],
+        [
+          {
+            "id": "bnear_height_95",
+            "type": "wait_state",
+            "p": {
+              "field": "height-above-launch-m",
+              "op": "ge",
+              "value": 2.8,
+              "timeout": 75
+            }
+          },
+          {
+            "id": "bwait_96",
+            "type": "wait",
+            "p": {
+              "duration": 3
+            }
+          },
+          {
+            "id": "bparallel_99",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 3
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_97",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_98",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.2,
+                    "max": 0.2,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bcenter_throttle_101",
+      "type": "throttle",
+      "p": {
+        "value": 50
+      }
+    },
+    {
+      "id": "bwait_102",
+      "type": "wait",
+      "p": {
+        "duration": 1
+      }
+    },
+    {
+      "id": "bcheck_103",
+      "type": "assert",
+      "p": {
+        "field": "mode",
+        "op": "eq",
+        "value": 2,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bparallel_111",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 14
+      },
+      "lanes": [
+        [
+          {
+            "id": "bparallel_109",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 12
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_104",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 2,
+                    "max": 2,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_105",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_106",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.3,
+                    "max": 0.3,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_110",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 12
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_107",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_108",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bmark_112",
+      "type": "mark",
+      "p": {
+        "text": "ALTCTL 升降至本次起飞高度 3.5m，之后中位油门保持"
+      }
+    },
+    {
+      "id": "bparallel_119",
+      "type": "parallel",
+      "p": {
+        "join": "any",
+        "timeout": 80
+      },
+      "lanes": [
+        [
+          {
+            "id": "bheight_113",
+            "type": "altitude",
+            "p": {
+              "target": 3.5,
+              "duration": 100,
+              "tolerance": 0.15,
+              "hover": 50,
+              "min": 10,
+              "max": 70,
+              "slew": 10,
+              "response": 8,
+              "damping": 20,
+              "trim": 1.5,
+              "deadzone": 6
+            }
+          }
+        ],
+        [
+          {
+            "id": "bnear_height_114",
+            "type": "wait_state",
+            "p": {
+              "field": "height-above-launch-m",
+              "op": "ge",
+              "value": 3.3,
+              "timeout": 75
+            }
+          },
+          {
+            "id": "bwait_115",
+            "type": "wait",
+            "p": {
+              "duration": 3
+            }
+          },
+          {
+            "id": "bparallel_118",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 3
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_116",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 3.2,
+                    "max": 3.8,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_117",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.2,
+                    "max": 0.2,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bcenter_120",
+      "type": "throttle",
+      "p": {
+        "value": 50
+      }
+    },
+    {
+      "id": "bparallel_124",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 7
+      },
+      "lanes": [
+        [
+          {
+            "id": "bobserve_121",
+            "type": "observe",
+            "p": {
+              "field": "height-above-launch-m",
+              "min": 3.2,
+              "max": 3.8,
+              "duration": 5,
+              "reference": "absolute"
+            }
+          }
+        ],
+        [
+          {
+            "id": "bobserve_122",
+            "type": "observe",
+            "p": {
+              "field": "mode",
+              "min": 2,
+              "max": 2,
+              "duration": 5,
+              "reference": "absolute"
+            }
+          }
+        ],
+        [
+          {
+            "id": "bobserve_123",
+            "type": "observe",
+            "p": {
+              "field": "climb-rate-mps",
+              "min": -0.3,
+              "max": 0.3,
+              "duration": 5,
+              "reference": "absolute"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bmark_125",
+      "type": "mark",
+      "p": {
+        "text": "ALTCTL 升降至本次起飞高度 3m，之后中位油门保持"
+      }
+    },
+    {
+      "id": "bparallel_132",
+      "type": "parallel",
+      "p": {
+        "join": "any",
+        "timeout": 80
+      },
+      "lanes": [
+        [
+          {
+            "id": "bheight_126",
+            "type": "altitude",
+            "p": {
+              "target": 3,
+              "duration": 100,
+              "tolerance": 0.15,
+              "hover": 50,
+              "min": 10,
+              "max": 70,
+              "slew": 10,
+              "response": 8,
+              "damping": 20,
+              "trim": 1.5,
+              "deadzone": 6
+            }
+          }
+        ],
+        [
+          {
+            "id": "bnear_height_127",
+            "type": "wait_state",
+            "p": {
+              "field": "height-above-launch-m",
+              "op": "ge",
+              "value": 2.8,
+              "timeout": 75
+            }
+          },
+          {
+            "id": "bwait_128",
+            "type": "wait",
+            "p": {
+              "duration": 3
+            }
+          },
+          {
+            "id": "bparallel_131",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 3
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_129",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_130",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.2,
+                    "max": 0.2,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bcenter_133",
+      "type": "throttle",
+      "p": {
+        "value": 50
+      }
+    },
+    {
+      "id": "bparallel_137",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 7
+      },
+      "lanes": [
+        [
+          {
+            "id": "bobserve_134",
+            "type": "observe",
+            "p": {
+              "field": "height-above-launch-m",
+              "min": 2.7,
+              "max": 3.3,
+              "duration": 5,
+              "reference": "absolute"
+            }
+          }
+        ],
+        [
+          {
+            "id": "bobserve_135",
+            "type": "observe",
+            "p": {
+              "field": "mode",
+              "min": 2,
+              "max": 2,
+              "duration": 5,
+              "reference": "absolute"
+            }
+          }
+        ],
+        [
+          {
+            "id": "bobserve_136",
+            "type": "observe",
+            "p": {
+              "field": "climb-rate-mps",
+              "min": -0.3,
+              "max": 0.3,
+              "duration": 5,
+              "reference": "absolute"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_138",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bland_139",
+      "type": "land",
+      "p": {
+        "timeout": 60
+      }
+    },
+    {
+      "id": "bcheck_140",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "blow_141",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bdisarm_142",
+      "type": "disarm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bcheck_143",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bwait_144",
+      "type": "wait",
+      "p": {
+        "duration": 3
+      }
+    },
+    {
+      "id": "bmark_145",
+      "type": "mark",
+      "p": {
+        "text": "N03 定点：当前模式从地面起飞，松杆后由飞控位置环制动"
+      }
+    },
+    {
+      "id": "bmark_146",
+      "type": "mark",
+      "p": {
+        "text": "新测试段：确认落地上锁，重新记录起飞高度"
+      }
+    },
+    {
+      "id": "bcheck_147",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bcheck_148",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bneutral_149",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "blow_150",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bmode_151",
+      "type": "mode",
+      "p": {
+        "mode": "POSCTL",
+        "timeout": 10
+      }
+    },
+    {
+      "id": "blaunch_reference_152",
+      "type": "launch_reference",
+      "p": {}
+    },
+    {
+      "id": "barm_153",
+      "type": "arm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bwait_154",
+      "type": "wait",
+      "p": {
+        "duration": 3
+      }
+    },
+    {
+      "id": "bmark_155",
+      "type": "mark",
+      "p": {
+        "text": "以当前模式推升降杆起飞；不发送 NAV_TAKEOFF"
+      }
+    },
+    {
+      "id": "bparallel_162",
+      "type": "parallel",
+      "p": {
+        "join": "any",
+        "timeout": 100
+      },
+      "lanes": [
+        [
+          {
+            "id": "bheight_156",
+            "type": "altitude",
+            "p": {
+              "target": 3,
+              "duration": 120,
+              "tolerance": 0.15,
+              "hover": 50,
+              "min": 10,
+              "max": 70,
+              "slew": 10,
+              "response": 8,
+              "damping": 20,
+              "trim": 1.5,
+              "deadzone": 6
+            }
+          }
+        ],
+        [
+          {
+            "id": "bnear_height_157",
+            "type": "wait_state",
+            "p": {
+              "field": "height-above-launch-m",
+              "op": "ge",
+              "value": 2.8,
+              "timeout": 75
+            }
+          },
+          {
+            "id": "bwait_158",
+            "type": "wait",
+            "p": {
+              "duration": 3
+            }
+          },
+          {
+            "id": "bparallel_161",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 3
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_159",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_160",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.2,
+                    "max": 0.2,
+                    "duration": 1,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bcenter_throttle_163",
+      "type": "throttle",
+      "p": {
+        "value": 50
+      }
+    },
+    {
+      "id": "bwait_164",
+      "type": "wait",
+      "p": {
+        "duration": 1
+      }
+    },
+    {
+      "id": "bcheck_165",
+      "type": "assert",
+      "p": {
+        "field": "mode",
+        "op": "eq",
+        "value": 3,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bparallel_177",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 14
+      },
+      "lanes": [
+        [
+          {
+            "id": "bparallel_174",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 12
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_166",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 3,
+                    "max": 3,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_167",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_168",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.3,
+                    "max": 0.3,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_175",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 12
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_169",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_170",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_171",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-x-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 10,
+                    "reference": "start"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_176",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 12
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_172",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-y-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 10,
+                    "reference": "start"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_173",
+                  "type": "observe",
+                  "p": {
+                    "field": "groundspeed-mps",
+                    "min": 0,
+                    "max": 0.3,
+                    "duration": 10,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bmark_178",
+      "type": "mark",
+      "p": {
+        "text": "POSCTL pitch +35%：先建立运动，再松杆检查刹停"
+      }
+    },
+    {
+      "id": "bparallel_181",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 5
+      },
+      "lanes": [
+        [
+          {
+            "id": "bpulse_179",
+            "type": "pulse",
+            "p": {
+              "axis": "pitch",
+              "value": 35,
+              "duration": 4
+            }
+          }
+        ],
+        [
+          {
+            "id": "bmoving_180",
+            "type": "wait_state",
+            "p": {
+              "field": "groundspeed-mps",
+              "op": "ge",
+              "value": 0.5,
+              "timeout": 4
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_182",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bbraking_183",
+      "type": "wait_state",
+      "p": {
+        "field": "groundspeed-mps",
+        "op": "le",
+        "value": 0.3,
+        "timeout": 15
+      }
+    },
+    {
+      "id": "bparallel_195",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 9
+      },
+      "lanes": [
+        [
+          {
+            "id": "bparallel_192",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_184",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 3,
+                    "max": 3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_185",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_186",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.3,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_193",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_187",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_188",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_189",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-x-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_194",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_190",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-y-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_191",
+                  "type": "observe",
+                  "p": {
+                    "field": "groundspeed-mps",
+                    "min": 0,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bmark_196",
+      "type": "mark",
+      "p": {
+        "text": "POSCTL pitch −35%：先建立运动，再松杆检查刹停"
+      }
+    },
+    {
+      "id": "bparallel_199",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 5
+      },
+      "lanes": [
+        [
+          {
+            "id": "bpulse_197",
+            "type": "pulse",
+            "p": {
+              "axis": "pitch",
+              "value": -35,
+              "duration": 4
+            }
+          }
+        ],
+        [
+          {
+            "id": "bmoving_198",
+            "type": "wait_state",
+            "p": {
+              "field": "groundspeed-mps",
+              "op": "ge",
+              "value": 0.5,
+              "timeout": 4
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_200",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bbraking_201",
+      "type": "wait_state",
+      "p": {
+        "field": "groundspeed-mps",
+        "op": "le",
+        "value": 0.3,
+        "timeout": 15
+      }
+    },
+    {
+      "id": "bparallel_213",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 9
+      },
+      "lanes": [
+        [
+          {
+            "id": "bparallel_210",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_202",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 3,
+                    "max": 3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_203",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_204",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.3,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_211",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_205",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_206",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_207",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-x-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_212",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_208",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-y-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_209",
+                  "type": "observe",
+                  "p": {
+                    "field": "groundspeed-mps",
+                    "min": 0,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bmark_214",
+      "type": "mark",
+      "p": {
+        "text": "POSCTL roll +35%：先建立运动，再松杆检查刹停"
+      }
+    },
+    {
+      "id": "bparallel_217",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 5
+      },
+      "lanes": [
+        [
+          {
+            "id": "bpulse_215",
+            "type": "pulse",
+            "p": {
+              "axis": "roll",
+              "value": 35,
+              "duration": 4
+            }
+          }
+        ],
+        [
+          {
+            "id": "bmoving_216",
+            "type": "wait_state",
+            "p": {
+              "field": "groundspeed-mps",
+              "op": "ge",
+              "value": 0.5,
+              "timeout": 4
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_218",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bbraking_219",
+      "type": "wait_state",
+      "p": {
+        "field": "groundspeed-mps",
+        "op": "le",
+        "value": 0.3,
+        "timeout": 15
+      }
+    },
+    {
+      "id": "bparallel_231",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 9
+      },
+      "lanes": [
+        [
+          {
+            "id": "bparallel_228",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_220",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 3,
+                    "max": 3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_221",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_222",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.3,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_229",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_223",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_224",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_225",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-x-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_230",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_226",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-y-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_227",
+                  "type": "observe",
+                  "p": {
+                    "field": "groundspeed-mps",
+                    "min": 0,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bmark_232",
+      "type": "mark",
+      "p": {
+        "text": "POSCTL roll −35%：先建立运动，再松杆检查刹停"
+      }
+    },
+    {
+      "id": "bparallel_235",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 5
+      },
+      "lanes": [
+        [
+          {
+            "id": "bpulse_233",
+            "type": "pulse",
+            "p": {
+              "axis": "roll",
+              "value": -35,
+              "duration": 4
+            }
+          }
+        ],
+        [
+          {
+            "id": "bmoving_234",
+            "type": "wait_state",
+            "p": {
+              "field": "groundspeed-mps",
+              "op": "ge",
+              "value": 0.5,
+              "timeout": 4
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_236",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bbraking_237",
+      "type": "wait_state",
+      "p": {
+        "field": "groundspeed-mps",
+        "op": "le",
+        "value": 0.3,
+        "timeout": 15
+      }
+    },
+    {
+      "id": "bparallel_249",
+      "type": "parallel",
+      "p": {
+        "join": "all",
+        "timeout": 9
+      },
+      "lanes": [
+        [
+          {
+            "id": "bparallel_246",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_238",
+                  "type": "observe",
+                  "p": {
+                    "field": "mode",
+                    "min": 3,
+                    "max": 3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_239",
+                  "type": "observe",
+                  "p": {
+                    "field": "height-above-launch-m",
+                    "min": 2.7,
+                    "max": 3.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_240",
+                  "type": "observe",
+                  "p": {
+                    "field": "climb-rate-mps",
+                    "min": -0.3,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_247",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_241",
+                  "type": "observe",
+                  "p": {
+                    "field": "roll-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_242",
+                  "type": "observe",
+                  "p": {
+                    "field": "pitch-abs-deg",
+                    "min": 0,
+                    "max": 8,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_243",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-x-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "id": "bparallel_248",
+            "type": "parallel",
+            "p": {
+              "join": "all",
+              "timeout": 7
+            },
+            "lanes": [
+              [
+                {
+                  "id": "bobserve_244",
+                  "type": "observe",
+                  "p": {
+                    "field": "local-y-m",
+                    "min": -0.7,
+                    "max": 0.7,
+                    "duration": 5,
+                    "reference": "start"
+                  }
+                }
+              ],
+              [
+                {
+                  "id": "bobserve_245",
+                  "type": "observe",
+                  "p": {
+                    "field": "groundspeed-mps",
+                    "min": 0,
+                    "max": 0.3,
+                    "duration": 5,
+                    "reference": "absolute"
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bneutral_250",
+      "type": "neutral",
+      "p": {}
+    },
+    {
+      "id": "bland_251",
+      "type": "land",
+      "p": {
+        "timeout": 60
+      }
+    },
+    {
+      "id": "bcheck_252",
+      "type": "assert",
+      "p": {
+        "field": "landed",
+        "op": "eq",
+        "value": 1,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "blow_253",
+      "type": "throttle",
+      "p": {
+        "value": 0
+      }
+    },
+    {
+      "id": "bdisarm_254",
+      "type": "disarm",
+      "p": {
+        "timeout": 10
+      }
+    },
+    {
+      "id": "bcheck_255",
+      "type": "assert",
+      "p": {
+        "field": "armed",
+        "op": "eq",
+        "value": 0,
+        "timeout": 5
+      }
+    },
+    {
+      "id": "bwait_256",
+      "type": "wait",
+      "p": {
+        "duration": 3
+      }
+    },
+    {
+      "id": "bmark_257",
+      "type": "mark",
+      "p": {
+        "text": "所有测试段完成并确认上锁；结果不代表真实船上飞行验收"
+      }
+    }
+  ]
+}

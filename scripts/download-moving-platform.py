@@ -61,6 +61,11 @@ def main():
             'bytes': len(assembled), 'deckLengthM': 4, 'deckWidthM': 3, 'rodLengthM': 1.5,
             'rodSpacingM': .36, 'contactMode': 2,
             'generator': 'createMovingPlatformModel / three.js GLTFExporter; tests/moving-platform-scene-ui.mjs'}
+    previous = DEST / 'visual-model.json'
+    if previous.exists():
+        collision = json.loads(previous.read_text()).get('collision', {})
+        if collision.get('sourceSha256') == manifest['sha256']:
+            manifest['collision'] = collision
     (DEST / 'visual-model.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(manifest, ensure_ascii=False))
 

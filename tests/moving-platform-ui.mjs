@@ -120,6 +120,7 @@ try {
   const started=Date.now();
   await evaluate(`(()=>{const s=window.store.getState();s.setSelectedNode(s.nodes.find(n=>n.data.componentType==='moving_platform').id);})()`);
   await until(`document.querySelector('[data-testid="moving-platform-editor"]')`);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-testid="moving-platform-editor"] canvas').length`), 0);
   assert.equal(await evaluate(`document.querySelectorAll('[data-testid="moving-platform-editor"] details').length`),5);
   // Edit through the actual grouped component property editor.
   await evaluate(`(()=>{const select=document.querySelector('[data-testid="moving-platform-editor"] select[aria-label="场景"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'3');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -132,6 +133,33 @@ try {
   const reopened=backend('load_model',{model:'XCD20_FlightIdentified',documents:{...documents,[dirty[0].path]:dirty[0].content}});
   assert.equal(reopened.nodes.find(n=>n.data.componentType==='moving_platform').data.params['scenario/mode'],3);
   assert.equal(reopened.nodes.filter(n=>n.data.componentType==='engine').length,8);
+  const tiltFields = [
+    ['固定 Pitch', 'moving-platform/fixed-pitch-deg', 5],
+    ['固定 Roll', 'moving-platform/fixed-roll-deg', -3],
+  ];
+  for (const [label, key, degrees] of tiltFields) {
+    const input = `document.querySelector('input[aria-label="${label}"]')`;
+    assert.equal(await evaluate(`${input}.value`), '0');
+    await evaluate(`(()=>{const field=${input};field.focus();field.select();})()`);
+    await send('Input.insertText', { text: String(degrees) });
+    await evaluate(`${input}.blur()`);
+    await until(`window.store.getState().nodes.find(n=>n.data.componentType==='moving_platform').data.params[${JSON.stringify(key)}]===${degrees}`);
+  }
+  const tilted = await evaluate(`window.sync.prepareModelXml(window.store.getState(),window.__graph,'XCD20_FlightIdentified',window.api)`);
+  const tiltedDirty = tilted.filter(file => file.dirty);
+  assert.deepEqual(tiltedDirty.map(file => file.path), [dirty[0].path]);
+  const tiltedGraph = backend('load_model', {model:'XCD20_FlightIdentified',
+    documents:{...documents,[tiltedDirty[0].path]:tiltedDirty[0].content}});
+  const tiltedParams = tiltedGraph.nodes.find(node => node.data.componentType === 'moving_platform').data.params;
+  for (const [, key, degrees] of tiltFields) assert.equal(tiltedParams[key], degrees);
+  const level = await evaluate(`(async()=>{const state=window.store.getState();
+    const nodes=state.nodes.map(node=>node.data.componentType==='moving_platform'
+      ? {...node,data:{...node.data,params:{...node.data.params,
+          'moving-platform/fixed-pitch-deg':0,'moving-platform/fixed-roll-deg':0}}}
+      : node);
+    return window.sync.prepareModelXml({...state,nodes},window.__graph,'XCD20_FlightIdentified',window.api);
+  })()`);
+  assert.equal(level.find(file => file.path === dirty[0].path).content, expected);
   for(let i=0;i<12;i++)await evaluate(`(()=>{const s=window.store.getState();s.setSelectedNode(null);s.setSelectedNode(s.nodes.find(n=>n.data.componentType==='moving_platform').id);})()`);
   await until(`document.querySelector('[data-testid="moving-platform-editor"]')`);
   await send('Page.captureScreenshot',{format:'png'}).then(result=>writeFile('/tmp/xcd20-moving-platform-ui.png',Buffer.from(result.data,'base64')));

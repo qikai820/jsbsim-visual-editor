@@ -227,10 +227,10 @@ function groups(project: Project): Map<string, Group> {
     let channels: any[];
     try { channels = typeof p.channels === 'string' ? JSON.parse(p.channels) : p.channels; } catch { continue; }
     if (!Array.isArray(channels)) continue;
-    const items = (list: any[]) => { for (const item of list) {
-      if (item.disabled) continue;
-      if (Array.isArray(item.items)) items(item.items);
-      if (!item.name) continue;
+    const channelStructure = (list: any[]): any[] => list.map(item => {
+      if (item.disabled) return item;
+      if (Array.isArray(item.items)) return { ...item, items: channelStructure(item.items) };
+      if (!item.name) return item;
       const edits: RuntimeEdit[] = [], clone = JSON.parse(JSON.stringify(item));
       const add = (field: string, value: any, clear: () => void) => { const n = numeric(value); if (n !== undefined) { edits.push({ key: componentParameterKey(item.name, field), value: n }); clear(); } };
       if (systemFields[item.type]) {
@@ -309,8 +309,10 @@ function groups(project: Project): Map<string, Group> {
       }
       // Identity and structure remain stable; geometry/layout does not affect the FDM.
       result.set(`${node.id}:${item.name}`, { shape: JSON.stringify(canonical(clone)), edits });
-    } };
-    items(channels);
+      // Record component order in the channel. Its fields are compared in its own group.
+      return item.name;
+    });
+    result.set(node.id, { shape: JSON.stringify(canonical(channelStructure(channels))), edits: [] });
   }
   return result;
 }

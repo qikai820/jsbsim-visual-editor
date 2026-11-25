@@ -67,7 +67,7 @@ html, body, #root {
 .app { display: flex; flex-direction: column;
   width: var(--display-viewport-width, 100vw);
   height: var(--display-viewport-height, 100vh); }
-.main-content { display: flex; flex: 1; overflow: hidden; }
+.main-content { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
 /* ========== Toolbar ========== */
 .toolbar {
@@ -385,25 +385,29 @@ html, body, #root {
 }
 
 /* ========== Right Sidebar ========== */
-.right-sidebar {
-  /* This is an overlay, not a flex column: the canvas remains full width. */
-  position: fixed;
-  z-index: 2100;
-  /* Use an explicit viewport offset instead of padding.  This remains below
-   * the fixed HUD even when the desktop webview adds a title-bar inset. */
-  top: 252px;
-  right: 8px;
-  display: flex; flex-direction: column;
-  width: 310px; min-width: 310px;
-  height: calc(100vh - 252px);
-  padding: 0 8px 8px;
-  background: transparent;
-  border: 0;
-  overflow-y: auto;
-  flex-shrink: 0;
+.right-workspace-dock {
+  position: absolute;
+  z-index: 2250;
+  inset: 0 8px 8px auto;
+  width: min(310px, calc(100% - 16px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   pointer-events: none;
 }
-.right-sidebar.has-detached-log { transition: padding-top .2s ease; }
+.right-dock-panels {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+}
+.right-sidebar {
+  display: flex; flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
 .right-sidebar > * { pointer-events: auto; }
 .right-sidebar .property-panel {
   width: 100%; min-width: 0;
@@ -2339,10 +2343,9 @@ html, body, #root {
 .jsbsim-log-popover-head { display: flex; justify-content: space-between; align-items: center; color: var(--text-primary); font-size: 12px; padding: 3px 4px 7px; }
 .jsbsim-log-popover-head button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 11px; }
 
-.jsbsim-log-sidebar { display: flex; flex-direction: column; height: auto; min-height: 0; }
-/* Dock independently below the HUD. It grows to ten lines, then scrolls. */
-.jsbsim-log-sidebar.jsbsim-log-detached { position: fixed; z-index: 2240; right: 8px; left: auto; top: 224px; width: min(310px, calc(100vw - 16px)); max-height: calc(100vh - 236px); background: #f3f7fa; box-shadow: 0 8px 24px rgba(30,64,80,.18); border: 1px solid #b9d4df; border-radius: 10px; overflow: hidden; }
-.jsbsim-log-sidebar-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; color: #315c6b; background: #e8f1f5; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .4px; border-bottom: 1px solid #c9dce4; cursor: grab; user-select: none; }
+.jsbsim-log-sidebar { display: flex; flex-direction: column; min-height: 0; }
+.jsbsim-log-sidebar.jsbsim-log-detached { position: relative; z-index: 1; width: 100%; max-height: min(224px, 55%); background: #f3f7fa; box-shadow: 0 8px 24px rgba(30,64,80,.18); border: 1px solid #b9d4df; border-radius: 10px; overflow: hidden; pointer-events: auto; }
+.jsbsim-log-sidebar-head { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; padding: 8px 12px; color: #315c6b; background: #e8f1f5; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .4px; border-bottom: 1px solid #c9dce4; cursor: grab; user-select: none; }
 .jsbsim-log-sidebar-head:active { cursor: grabbing; }
 .jsbsim-log-sidebar-head > div { display: flex; align-items: center; gap: 8px; }
 .jsbsim-log-sidebar-head .jsbsim-log-nsh-toggle { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; letter-spacing: 0; }
@@ -2352,7 +2355,7 @@ html, body, #root {
 .jsbsim-log-sidebar-window {
   flex: 0 1 auto;
   min-height: 0;
-  max-height: min(184px, calc(100vh - 272px));
+  max-height: 184px;
   overflow-y: auto;
   margin: 0;
   border: 0;
@@ -2360,7 +2363,7 @@ html, body, #root {
   background: #f8fbfc;
   color: #49616d;
 }
-.jsbsim-hud-window { position: fixed; z-index: 2250; right: 8px; top: calc(52px + var(--model-sync-height, 0px)); width: min(310px, calc(100vw - 16px)); border: 0; border-radius: 0; overflow: hidden; background: transparent; box-shadow: none; }
+.jsbsim-hud-window { position: relative; z-index: 2; flex-shrink: 0; width: 100%; max-height: 65%; overflow: hidden; pointer-events: auto; }
 .jsbsim-hud-window-head { display: flex; justify-content: space-between; padding: 7px 12px; color: var(--text-secondary); background: var(--bg-secondary); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 1px; cursor: grab; user-select: none; border-bottom: 1px solid var(--border); }
 .jsbsim-hud-window-head:active { cursor: grabbing; }
 .hud-window-actions { display: flex; align-items: center; gap: 8px; }

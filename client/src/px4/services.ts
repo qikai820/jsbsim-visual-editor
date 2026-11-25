@@ -5,6 +5,7 @@ import { parseMetadata, type MetadataCatalog } from './metadata';
 import { cacheLocalText } from '../utils/browserCache';
 export type Parameter = { name: string; value: number; type: number; index: number };
 export type LogEntry = { id: number; time: number; size: number };
+export type LogDownloadPhase = 'direct' | 'staging' | 'copying';
 export type UlogSummary = { path: string; name: string; size: number; version: number; duration: number | null; topics: Array<{ name: string; multiId: number; samples: number; frequency: number | null }>; parameters: Record<string, number | string>; info: Record<string, string>; dropoutCount: number; dropoutMs: number; truncated: boolean };
 
 export async function readParameter(link: Px4Connection, name: string, signal: AbortSignal): Promise<Parameter> {
@@ -153,23 +154,63 @@ export async function readLogWindow(link: Px4Connection, id: number, offset: num
     if(error)throw Error(error);return bytes;
   }finally{unsubscribe();}
 }
-export async function downloadLog(link: Px4Connection, log: LogEntry, signal: AbortSignal, progress: (bytes: number) => void, managed?: { onBegin:(id:number)=>void }): Promise<UlogSummary | null> {
+export async function downloadLog(
+  link: Px4Connection,
+  log: LogEntry,
+  signal: AbortSignal,
+  progress: (bytes: number, phase: LogDownloadPhase) => void,
+  managed?: { onBegin: (id: number) => void },
+  simulator?: string,
+): Promise<UlogSummary | null> {
   aborted(signal,link.signal);
   const identity={uid:link.uid,boot:link.bootGeneration,heartbeat:link.heartbeatGeneration,session:link.transport.sessionId,system:link.target.system,component:link.target.component};
-  const checkIdentity=()=>{aborted(signal,link.signal);if(!link.alive||link.transport.sessionId!==identity.session||link.bootGeneration!==identity.boot||link.heartbeatGeneration!==identity.heartbeat||(identity.uid&&link.uid!==identity.uid)||link.target.system!==identity.system||link.target.component!==identity.component)throw Error('日志来源飞控或连接已变化，未保存为完整文件');};
+  const checkIdentity=()=>{aborted(signal,link.signal);if(!link.alive||link.transport.sessionId!==identity.session||link.bootGeneration!==identity.boot||(!simulator&&link.heartbeatGeneration!==identity.heartbeat)||(identity.uid&&link.uid!==identity.uid)||link.target.system!==identity.system||link.target.component!==identity.component)throw Error('日志来源飞控或连接已变化，未保存为完整文件');};
+  if (simulator && (link.expectedHost !== simulator || link.armed !== false || !identity.uid || identity.uid === '0')) {
+    throw Error('经任务机下载需要确认飞控已上锁且已识别 UID');
+  }
   const id = managed ? await invoke<number>('px4_log_begin_managed',{logId:log.id,size:log.size,time:log.time,sessionId:identity.session,system:identity.system,component:identity.component,hardwareUid:identity.uid}) : await invoke<number | null>('px4_log_begin', { name: `px4_log_${log.id}.ulg`, size: log.size }); if (id === null) return null;
   try {
     managed?.onBegin(id);
+    if (simulator) {
+      checkIdentity();
+      await link.ready;
+      checkIdentity();
+      const cancel = () => { void invoke('px4_log_cancel', { id }).catch(() => {}); };
+      signal.addEventListener('abort', cancel, { once: true });
+      link.signal.addEventListener('abort', cancel, { once: true });
+      let reporting = true;
+      const timer = setInterval(() => {
+        void invoke<{ staged: number; saved: number; copying: boolean } | null>('px4_log_relay_progress', { id })
+          .then(value => { if (reporting && value && !signal.aborted && !link.signal.aborted) {
+            progress(value.copying ? value.saved : value.staged, value.copying ? 'copying' : 'staging');
+          } }).catch(() => {});
+      }, 250);
+      try {
+        await invoke('px4_log_relay', { id, request: {
+          simulator, sessionId: identity.session, system: identity.system, component: identity.component,
+          hardwareUid: identity.uid, logId: log.id, time: log.time, size: log.size,
+        } });
+      } finally {
+        reporting = false;
+        clearInterval(timer);
+        signal.removeEventListener('abort', cancel);
+        link.signal.removeEventListener('abort', cancel);
+      }
+      checkIdentity();
+      if (link.armed !== false) throw Error('飞控解锁状态已变化，未保存日志');
+      progress(log.size, 'copying');
+      return await invoke<UlogSummary>('px4_log_finish', { id });
+    }
     let lastReceipt=0;
     for (let offset = 0; offset < log.size;) {
-      if(managed)checkIdentity();else aborted(signal,link.signal); const bytes = await readLogWindow(link, log.id, offset, Math.min(262080, log.size-offset), signal, n => {progress(offset+n);if(managed&&Date.now()-lastReceipt>250){lastReceipt=Date.now();void invoke("px4_log_transfer_received",{id,received:offset+n}).catch(()=>{});}});
+      if(managed)checkIdentity();else aborted(signal,link.signal); const bytes = await readLogWindow(link, log.id, offset, Math.min(262080, log.size-offset), signal, n => {progress(offset+n,'direct');if(managed&&Date.now()-lastReceipt>250){lastReceipt=Date.now();void invoke("px4_log_transfer_received",{id,received:offset+n}).catch(()=>{});}});
       for(let start=0;start<bytes.length;start+=65520){aborted(signal,link.signal);await invoke('px4_log_write',{id,offset:offset+start,bytes:Array.from(bytes.subarray(start,start+65520))});}offset+=bytes.length;
     }
     aborted(signal, link.signal);
     if(managed){checkIdentity();const current=(await readLogs(link,()=>{},signal)).find(item=>item.id===log.id);if(!current||current.size!==log.size||current.time!==log.time)throw Error('机载日志在下载期间发生变化，未保存为完整文件');}
     if(managed)checkIdentity();else aborted(signal,link.signal); const summary = await invoke<UlogSummary>('px4_log_finish', { id }); return summary;
   } catch (e) { await invoke('px4_log_cancel', { id }).catch(() => {}); if(managed)await invoke('px4_log_transfer_error',{id,error:String(e),cancelled:signal.aborted}).catch(()=>{}); throw e; }
-  finally { await link.send(122, Uint8Array.of(link.target.system, link.target.component)).catch(() => {}); }
+  finally { if (!simulator) await link.send(122, Uint8Array.of(link.target.system, link.target.component)).catch(() => {}); }
 }
 
 export async function loadVehicleMetadata(link: Px4Connection, signal: AbortSignal): Promise<MetadataCatalog> {

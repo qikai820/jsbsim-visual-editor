@@ -43,7 +43,7 @@ export class Px4Shell implements TerminalChannel {
     const work = this.queue.then(async () => { for (let i = 0; i < bytes.length; i += 70) { if (!this.active) throw Error('终端会话已结束'); await this.link.send(126, this.packet(bytes.subarray(i, i+70))); } });
     this.queue = work.catch(() => {}); return work;
   };
-  async runCommand(command: string, timeoutMs: number, signal: AbortSignal): Promise<Pick<NshResult,'command'|'output'|'succeeded'|'truncated'|'durationMs'>> {
+  async runCommand(command: string, timeoutMs: number, signal: AbortSignal, beforeSend?: () => void): Promise<Pick<NshResult,'command'|'output'|'succeeded'|'truncated'|'durationMs'>> {
     if (!command.trim() || command.length>256 || /[\x00-\x1f\x7f]/.test(command)) throw Error('NSH 只接受一条不超过 256 字符的非交互命令');
     if (!Number.isInteger(timeoutMs) || timeoutMs<1000 || timeoutMs>30000) throw Error('NSH 超时范围为 1000～30000 ms');
     if (this.commandRunning) throw Error('已有 NSH 命令正在执行');
@@ -76,6 +76,7 @@ export class Px4Shell implements TerminalChannel {
         if(this.receiveEpoch===before||!atPrompt())await wait(text=>/(?:^|[\r\n])nsh>\s*$/.test(text)?true:undefined);
       }
       if(!atPrompt())throw Error('终端未就绪，未发送命令');
+      beforeSend?.();
       const token='MCP'+crypto.randomUUID().replace(/-/g,'').slice(0,12);
       const result=wait((tail,output,truncated)=>{
         const lines=tail.replace(/\r/g,'\n').split('\n').map(s=>s.trim());

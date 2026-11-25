@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useSignalIndex } from '../hooks/useSignalIndex';
 import './signalPathInput.css';
@@ -15,9 +15,7 @@ interface Props {
 }
 
 export default function SignalPathInput({ value, onChange, placeholder, style, className, title, multiple, readOnly }: Props) {
-  const signals = useSignalIndex();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -49,7 +47,6 @@ export default function SignalPathInput({ value, onChange, placeholder, style, c
     };
   }, [open]);
 
-  const visible = signals.filter(signal => signal.path.toLowerCase().includes(query.toLowerCase())).slice(0, 100);
   const choose = (path: string) => {
     if (multiple) {
       const cursor = input.current?.selectionStart ?? value.length;
@@ -69,20 +66,31 @@ export default function SignalPathInput({ value, onChange, placeholder, style, c
       readOnly={readOnly} onChange={event => onChange(event.target.value)}
       onKeyDown={event => { if (event.key === 'Escape') setOpen(false); }} />
     {!readOnly && <button type="button" className="signal-path-trigger" title="从全局信号索引选择"
-      aria-label="选择信号" aria-expanded={open} onClick={() => { setQuery(''); placeMenu(); setOpen(!open); }}>⌕</button>}
-    {open && createPortal(<div ref={menu} className="signal-path-menu" role="dialog" aria-label="全局信号索引"
-      style={{ top: menuPosition.top, left: menuPosition.left, width: menuPosition.width }}>
-      <input autoFocus type="search" value={query} placeholder="搜索当前工程和已发现信号"
-        onChange={event => setQuery(event.target.value)} />
-      <div className="signal-path-count">{signals.length} 条信号 · 可继续手动填写</div>
-      <div className="signal-path-results">
-        {visible.map(signal => <button type="button" key={signal.path} title={signal.origins.map(origin => `${origin.source} · ${origin.kind}`).join('\n')}
-          onClick={() => choose(signal.path)}>
-          <code>{signal.path}</code>
-          <small>{signal.origins.some(origin => origin.kind === 'graph-output' || origin.kind === 'xml-definition') ? '工程定义' : signal.origins.some(origin => origin.kind === 'graph-input' || origin.kind === 'xml-reference') ? '工程引用' : '运行缓存'}</small>
-        </button>)}
-        {!visible.length && <p>没有匹配信号；可手动输入新路径</p>}
-      </div>
-    </div>, document.body)}
+      aria-label="选择信号" aria-expanded={open} onClick={() => { placeMenu(); setOpen(!open); }}>⌕</button>}
+    {open && createPortal(<SignalPathMenu menu={menu} position={menuPosition} onChoose={choose} />, document.body)}
+  </div>;
+}
+
+function SignalPathMenu({ menu, position, onChoose }: {
+  menu: RefObject<HTMLDivElement>;
+  position: { top: number; left: number; width: number };
+  onChoose: (path: string) => void;
+}) {
+  const signals = useSignalIndex();
+  const [query, setQuery] = useState('');
+  const search = query.toLowerCase();
+  const visible = signals.filter(signal => signal.path.toLowerCase().includes(search)).slice(0, 100);
+  return <div ref={menu} className="signal-path-menu" role="dialog" aria-label="全局信号索引" style={position}>
+    <input autoFocus type="search" value={query} placeholder="搜索当前工程和已发现信号"
+      onChange={event => setQuery(event.target.value)} />
+    <div className="signal-path-count">{signals.length} 条信号 · 可继续手动填写</div>
+    <div className="signal-path-results">
+      {visible.map(signal => <button type="button" key={signal.path} title={signal.origins.map(origin => `${origin.source} · ${origin.kind}`).join('\n')}
+        onClick={() => onChoose(signal.path)}>
+        <code>{signal.path}</code>
+        <small>{signal.origins.some(origin => origin.kind === 'graph-output' || origin.kind === 'xml-definition') ? '工程定义' : signal.origins.some(origin => origin.kind === 'graph-input' || origin.kind === 'xml-reference') ? '工程引用' : '运行缓存'}</small>
+      </button>)}
+      {!visible.length && <p>没有匹配信号；可手动输入新路径</p>}
+    </div>
   </div>;
 }

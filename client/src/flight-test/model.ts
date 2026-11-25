@@ -3,7 +3,7 @@ export const MAX_TEST_SECONDS=14400;
 export const MAX_TEST_BYTES=4*1024*1024;
 export const MAX_TEST_BLOCKS=400;
 export const MAX_EXECUTION_NODES=1024;
-export type BlockType = 'mode'|'arm'|'disarm'|'takeoff'|'land'|'pulse'|'axes'|'neutral'|'throttle'|'channel'|'altitude'|'manual_takeoff'|'manual_recover'|'input_mode'|'attitude'|'attitude_delta'|'heading'|'wait'|'wait_state'|'assert'|'loop'|'branch'|'parallel'|'mark';
+export type BlockType = 'observe'|'launch_reference'|'mode'|'arm'|'disarm'|'takeoff'|'land'|'pulse'|'axes'|'neutral'|'throttle'|'channel'|'altitude'|'manual_takeoff'|'manual_recover'|'input_mode'|'attitude'|'attitude_delta'|'heading'|'wait'|'wait_state'|'assert'|'loop'|'branch'|'parallel'|'mark';
 export type Params = Record<string, number|string>;
 export type TestBlock = { id:string; type:BlockType; p:Params; body?:TestBlock[]; yes?:TestBlock[]; no?:TestBlock[]; lanes?:TestBlock[][] };
 export type TestDocument = { version:1; name:string; aircraft:string; initialize:string; blocks:TestBlock[]; duration:number; rateHz:number; throttle:number; clock:'realtime'|'simulation'; onFinish:'hold'|'land'|'release'; onAbort:'hold'|'land'|'release'; requirements?:Record<string,number> };
@@ -14,9 +14,12 @@ export const CHANNELS: Record<string,string> = Object.fromEntries([
   ...Array.from({length:18},(_,i)=>['rc'+(i+1),'RC'+(i+1)]),
   ...Array.from({length:6},(_,i)=>['aux'+(i+1),'AUX'+(i+1)]),
 ]);
-export const FIELDS: Record<string,string> = { 'relative-alt-m':'相对高度 m','roll-abs-deg':'横滚绝对值 °','pitch-abs-deg':'俯仰绝对值 °','groundspeed-mps':'地速 m/s','armed':'已解锁','landed':'已落地','mode':'模式代码' };
+export const FIELDS: Record<string,string> = { 'relative-alt-m':'相对高度 m','roll-abs-deg':'横滚绝对值 °','pitch-abs-deg':'俯仰绝对值 °','groundspeed-mps':'地速 m/s','armed':'已解锁','landed':'已落地','mode':'模式代码','height-above-launch-m':'本次起飞高度 m','local-x-m':'本地北向位置 m','local-y-m':'本地东向位置 m','climb-rate-mps':'爬升速度 m/s','yaw-rate-abs-rad-s':'偏航角速度绝对值 rad/s','sim/rail-contact-mask':'仿真·双杆真实接触掩码','sim/rail-valid-mask':'仿真·双杆有效掩码','sim/rail-released-mask':'仿真·双杆已释放掩码' };
+export const fieldPath=(field:string)=>field.startsWith('sim/')?'test/'+field:'test/fc/'+field;
 export const MODES: Record<string,number> = { POSCTL:3,ALTCTL:2,STABILIZED:7,HOLD:4,MANUAL:1,ACRO:5,OFFBOARD:6 };
 export const DEFS: Record<BlockType,{label:string;group:string;p:Params}> = {
+  observe:{label:'连续状态检查',group:'流程控制',p:{field:'height-above-launch-m',min:2.7,max:3.3,duration:10,reference:'absolute'}},
+  launch_reference:{label:'记录本次起飞高度',group:'流程控制',p:{}},
   mode:{label:'模式',group:'飞控动作',p:{mode:'POSCTL',timeout:8}},arm:{label:'解锁',group:'飞控动作',p:{timeout:8}},disarm:{label:'上锁',group:'飞控动作',p:{timeout:8}},
   takeoff:{label:'起飞',group:'飞控动作',p:{altitude:5,timeout:40}},land:{label:'降落',group:'飞控动作',p:{timeout:60}},
   pulse:{label:'打杆',group:'遥控输入',p:{axis:'roll',value:20,duration:1}},axes:{label:'多轴打杆',group:'遥控输入',p:{roll:20,pitch:0,yaw:-15,throttle:50,duration:2}},
@@ -51,7 +54,7 @@ export function validateDocument(input:unknown):asserts input is TestDocument {
   if(!d||d.version!==1||typeof d.name!=='string'||d.name.length>100||typeof d.aircraft!=='string'||!d.aircraft.trim()||d.aircraft.length>128||typeof d.initialize!=='string'||!d.initialize.trim()||d.initialize.length>128||!Array.isArray(d.blocks))throw Error('测试文件结构或机型/初始化标签无效');
   if(!Number.isFinite(d.duration)||d.duration<1||d.duration>MAX_TEST_SECONDS||!Number.isFinite(d.rateHz)||d.rateHz<20||d.rateHz>100||!Number.isFinite(d.throttle)||d.throttle<0||d.throttle>1)throw Error('测试时长、发送频率或基准油门无效');
   if(!['realtime','simulation'].includes(d.clock)||![d.onFinish,d.onAbort].every(v=>['hold','land','release'].includes(v)))throw Error('测试时钟或退出策略无效');
-  if(d.requirements!==undefined&&(!d.requirements||Array.isArray(d.requirements)||Object.entries(d.requirements).some(([k,v])=>!['manual-tilt-deg','altitude-tilt-deg','vector-tilt-deg'].includes(k)||!Number.isFinite(v)||v<=0||v>120)))throw Error('测试所需倾角范围无效');
+  if(d.requirements!==undefined&&(!d.requirements||Array.isArray(d.requirements)||Object.entries(d.requirements).some(([k,v])=>!['manual-tilt-deg','altitude-tilt-deg','vector-tilt-deg','xcd20-takeoff'].includes(k)||!Number.isFinite(v)||(k==='xcd20-takeoff'?![0,1].includes(v):v<=0||v>120))))throw Error('测试所需倾角范围无效');
   const seen=new Set<string>();
   function walk(list:TestBlock[],depth:number){if(depth>8||!Array.isArray(list))throw Error('积木嵌套过深或结构无效');for(const n of list){
     if(!n||typeof n.id!=='string'||!/^b[a-z0-9_]{0,80}$/i.test(n.id)||seen.has(n.id)||!Object.prototype.hasOwnProperty.call(DEFS,n.type)||!n.p||typeof n.p!=='object')throw Error('积木类型或标识无效');seen.add(n.id);if(seen.size>MAX_TEST_BLOCKS)throw Error(`最多支持 ${MAX_TEST_BLOCKS} 个积木`);
@@ -62,6 +65,7 @@ export function validateDocument(input:unknown):asserts input is TestDocument {
     if(n.type==='pulse'){if(!AXES.includes(p.axis as typeof AXES[number]))throw Error('打杆轴无效');num('value',p.axis==='throttle'?0:-100,100);}
     if(n.type==='axes')for(const a of AXES)num(a,a==='throttle'?0:-100,100);
     if(n.type==='throttle')num('value',0,100);if(n.type==='takeoff')num('altitude',.5,1000);
+    if(n.type==='observe'){if(!Object.prototype.hasOwnProperty.call(FIELDS,String(p.field))||!['absolute','start'].includes(String(p.reference))||Number(p.min)>Number(p.max))throw Error('连续状态检查范围或字段无效');num('min',-1e9,1e9);num('max',-1e9,1e9);}
     if(n.type==='channel'){if(!Object.prototype.hasOwnProperty.call(CHANNELS,String(p.channel))||!['set','release'].includes(String(p.action)))throw Error('通道控制目标或动作无效');num('value',-100,100);}
     if(n.type==='altitude'){
       num('target',.5,1000);num('tolerance',.05,5);num('hover',5,95);num('min',0,49);num('max',51,100);num('slew',1,100);num('response',.1,100);num('damping',0,100);num('trim',0,20);num('deadzone',0,20);

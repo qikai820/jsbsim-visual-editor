@@ -1,6 +1,14 @@
 import type { ComponentDef } from '../types';
 export const movingPlatformParameters = [
   {
+    "id": "ShipCollision", "path": "moving-platform/ship-collision", "label": "船体网格与甲板降落",
+    "default": 1, "group": "场景", "unit": "", "min": 0, "max": 1
+  },
+  {
+    "id": "CollisionRadius", "path": "moving-platform/collision-radius-m", "label": "机体碰撞包络半径",
+    "default": 0.2, "group": "甲板", "unit": "m", "min": 0.01, "max": 100
+  },
+  {
     "id": "Enabled",
     "path": "moving-platform/enabled",
     "label": "启用",
@@ -479,6 +487,26 @@ export const movingPlatformParameters = [
     "unit": "m",
     "min": 0.25,
     "max": 100
+  },
+  {
+    "id": "FixedPitch",
+    "path": "moving-platform/fixed-pitch-deg",
+    "label": "固定 Pitch",
+    "default": 0,
+    "group": "场景",
+    "unit": "°",
+    "min": null,
+    "max": null
+  },
+  {
+    "id": "FixedRoll",
+    "path": "moving-platform/fixed-roll-deg",
+    "label": "固定 Roll",
+    "default": 0,
+    "group": "场景",
+    "unit": "°",
+    "min": null,
+    "max": null
   }
 ] as const;
 export const movingPlatformDefinition: ComponentDef = {type:'moving_platform',label:'移动平台起降',category:'实验环境',color:'#167f8b',icon:'⚓',description:'C++ 移动甲板与双杆接触。车船运动、起飞和甲板降落；保存并重新加载生效。',params:{name:{label:'名称',type:'string',default:'移动平台起降'},...Object.fromEntries(movingPlatformParameters.map(p=>[p.path,{label:p.label,type:'number',default:p.default,unit:p.unit}]))},inputs:[],outputs:[{id:'external',label:'接触力与力矩'}]};

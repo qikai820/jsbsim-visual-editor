@@ -1,4 +1,5 @@
 type TimedPose = { time: number; receivedAt: number };
+type PlaybackWindow = { oldest: number; latest: number; bufferMs: number };
 const MIN_BUFFER_MS = 80;
 const MAX_BUFFER_MS = 250;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -33,18 +34,21 @@ export class ScenePlaybackClock {
     }
   }
 
-  sample(samples: readonly TimedPose[], now: number, frozen: boolean): number {
+  sample(samples: readonly TimedPose[], now: number, frozen: boolean, window?: PlaybackWindow): number {
     const oldest = samples[0], latest = samples[samples.length - 1];
-    const desired = latest.time + (now - latest.receivedAt - this.delayMs) * this.rate / 1000;
-    if (frozen) this.time = latest.time;
+    const firstTime = Math.max(oldest.time, window?.oldest ?? oldest.time);
+    const lastTime = Math.min(latest.time, window?.latest ?? latest.time);
+    const delayMs = Math.max(this.delayMs, window?.bufferMs ?? 0);
+    const desired = latest.time + (now - latest.receivedAt - delayMs) * this.rate / 1000;
+    if (frozen) this.time = lastTime;
     else if (this.time === null || this.updatedAt === null || now - this.updatedAt > 2000) {
-      this.time = clamp(desired, oldest.time, latest.time);
+      this.time = clamp(desired, firstTime, lastTime);
     } else {
       const elapsed = Math.max(0, now - this.updatedAt) / 1000;
       // Absorb buffer changes by a small speed adjustment. Changing the delay
       // directly would rewind the airframe whenever the next packet was late.
       const correction = clamp(1 + (desired - this.time) / (.5 * this.rate), .85, 1.15);
-      this.time = clamp(this.time + elapsed * this.rate * correction, oldest.time, latest.time);
+      this.time = clamp(this.time + elapsed * this.rate * correction, firstTime, lastTime);
     }
     this.updatedAt = now;
     return this.time;

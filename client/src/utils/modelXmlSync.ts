@@ -24,7 +24,7 @@ function validateOutputs(project: ModelProject): void {
     for(const def of movingPlatformParameters) {
       const value=Number(p[def.path] ?? def.default);
       if(!Number.isFinite(value) || (def.min!==null && value<def.min) || (def.max!==null && value>def.max)) throw new Error('移动平台参数范围错误：'+def.label);
-      if(['Enabled','ContactMode','Scenario','JamL','JamR','Invalid'].includes(def.id) && !Number.isInteger(value)) throw new Error('移动平台选项必须为整数：'+def.label);
+      if(['Enabled','ShipCollision','ContactMode','Scenario','JamL','JamR','Invalid'].includes(def.id) && !Number.isInteger(value)) throw new Error('移动平台选项必须为整数：'+def.label);
     }
     if(Number(p['moving-platform/static-friction'] ?? .7)<Number(p['moving-platform/dynamic-friction'] ?? .5)) throw new Error('静摩擦系数须大于等于动摩擦系数。');
   }

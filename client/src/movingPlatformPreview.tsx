@@ -19,7 +19,7 @@ function Preview() {
       <a href="/scenery/moving-platform/vessel.glb" download style={{ color: '#85d7d1' }}>原始船体</a>
       <a href="https://kenney.nl/assets/watercraft-kit" style={{ color: '#85d7d1' }}>原始资源与许可 ↗</a>
     </div>
-    <p style={{ fontSize: 12, color: '#8ca7b5', marginTop: 20 }}>本页为模型与摇摆预览。真实视景由 moving-platform 模块遥测驱动；船体和标线仅用于显示，接触范围由甲板与双杆参数决定。</p>
+    <p style={{ fontSize: 12, color: '#8ca7b5', marginTop: 20 }}>本页为模型与摇摆预览。运行视景由平台遥测驱动；船体、驾驶舱与甲板网格随船运动参与碰撞，原起落架负责着舰支撑与摩擦。需更新支持船体网格的仿真固件。</p>
   </main>;
 }
 createRoot(document.getElementById('root')!).render(<Preview />);

@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -15,7 +16,12 @@ export default defineConfig({
   build: {
     outDir: '../dist/client',
     emptyOutDir: true,
-    rollupOptions: { input: { main: 'client/index.html', movingPlatform: 'client/moving-platform-preview.html' } },
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./client/index.html', import.meta.url)),
+        movingPlatform: fileURLToPath(new URL('./client/moving-platform-preview.html', import.meta.url)),
+      },
+    },
   },
   // Tauri uses `tauri://localhost` as origin in production
   clearScreen: false,

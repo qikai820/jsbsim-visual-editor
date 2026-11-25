@@ -17,7 +17,7 @@ use crate::transport::{self, TransportMode};
 // NuttX ftpd and its small TCP pool are easily exhausted by several curl
 // processes connecting at once.  Serialize every FTP transaction in this
 // module and leave a short interval for the server to reclaim the socket.
-static FTP_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static FTP_LOCK: Mutex<()> = Mutex::new(());
 
 struct UsbProbe {
     usable: bool,

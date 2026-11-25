@@ -45,6 +45,8 @@ if(command==='px4_log_begin'){window.job=(window.job||0)+1;window.saved=Array(fi
 if(command==='px4_log_write'){args.bytes.forEach((b,i)=>window.saved[args.offset+i]=b);return;}
 if(command==='px4_log_finish'||command==='px4_log_inspect'||command==='px4_log_pick')return summary;
 if(command==='px4_log_cancel'){window.cancelled=args.id;return;}
+if(command==='px4_log_relay'){window.relayProgress={staged:file.length/2,saved:0,copying:false};await new Promise(resolve=>setTimeout(resolve,500));window.relayProgress={staged:file.length,saved:file.length/2,copying:true};await new Promise(resolve=>setTimeout(resolve,500));window.saved=Array.from(file);return;}
+if(command==='px4_log_relay_progress')return window.relayProgress;
 if(command==='tool_transport_write'){for(const m of parser.push(Uint8Array.from(args.bytes))){const p=m.payload,d=view(p);
  if(m.id===21){event(Uint8Array.from(fixtures.int32));event(Uint8Array.from(fixtures.float));}
  if(m.id===23){const name=new TextDecoder().decode(p.subarray(6,22)).split('\\0')[0];window.paramWrites.push({name,value:p[22]===6?d.getInt32(0,true):d.getFloat32(0,true),bytes:Array.from(p)});const r=parameterReply(name).slice();if(!window.rejectParamWrites){r.set(p.subarray(0,4),0);if(name==='SYS_HITL')window.flight.hitl=d.getInt32(0,true);if(name==='GPS_1_CONFIG')window.flight.gps=d.getInt32(0,true);}paramValues.set(name,r);frame(22,r);}
@@ -172,6 +174,16 @@ try{
  await until('window.job===2');
  await click(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='取消下载')`);
  await until('window.cancelled===2');
+ await ev('window.router.log_cache=true');
+ await until(`document.querySelector('[aria-label="PX4 日志下载路径"]')?.value==='relay'`);
+ await click(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='下载所选（1）')`);
+ await until(`document.querySelector('.px4-download').textContent.includes('接收到任务机')`);
+ await until(`document.querySelector('.px4-download').textContent.includes('下载到电脑')`);
+ await until(`window.calls.filter(c=>c.command==='px4_log_finish').length===2`);
+ assert.deepEqual(await ev(`window.calls.find(c=>c.command==='px4_log_relay').args.request`),{
+   simulator:'127.0.0.1',sessionId:1,system:7,component:1,hardwareUid:'4d2',logId:42,time:1700000000,size:180,
+ });
+ assert.deepEqual(await ev('window.saved'),await ev('window.logBytes'));
  await click(`document.getElementById('px4-tab-nsh')`);
  await until('window.term && window.shellInput.includes("\\n")');
  const terminalText=`Array.from({length:window.term.buffer.active.length},(_,i)=>window.term.buffer.active.getLine(i)?.translateToString(true)||'').join('\\n')`;

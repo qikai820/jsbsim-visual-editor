@@ -1,4 +1,4 @@
-import { Box3, BoxGeometry, CylinderGeometry, Group, Mesh, MeshStandardMaterial, RingGeometry, Vector3, type Object3D } from 'three';
+import { Box3, BoxGeometry, CylinderGeometry, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, RingGeometry, Vector3, type Object3D } from 'three';
 import type { PlatformGeometry } from './sceneMovingPlatform';
 
 /** Local right/up/aft axes; the platform origin is the native module's origin. */
@@ -19,7 +19,17 @@ export function createMovingPlatformModel(vessel: Object3D, g: PlatformGeometry)
   ship.rotation.y = Math.PI;
   ship.position.set(center.x * scale, deckY - 1.48 * scale, -g.length * .65);
   root.add(ship);
-  box('landing-deck', [g.width, .12, g.length], [0, deckY - .06, 0], '#244d53');
+  const deck = box('landing-deck', [g.width, .12, g.length], [0, deckY - .06, 0], '#244d53');
+  // Preview only the physical hull and solid deck. Decorative marks are absent.
+  const collision = new Group(); collision.name = 'moving-platform-collision-wire'; collision.visible = false;
+  const wireMaterial = new MeshBasicMaterial({ color: '#35f1e1', wireframe: true, transparent: true, opacity: .8,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false });
+  for (const shape of [ship, deck]) {
+    const wire = shape.clone(true);
+    wire.traverse(node => { if (node instanceof Mesh) node.material = wireMaterial; });
+    collision.add(wire);
+  }
+  root.add(collision);
   const line = Math.min(.045, g.width * .025, g.length * .025), inset = line * 2;
   for (const side of [-1, 1]) {
     box('deck-safety-edge', [line, .008, Math.max(.01, g.length - inset)], [side * (g.width / 2 - inset), deckY + .005, 0], '#f6cc63');
@@ -41,5 +51,5 @@ export function createMovingPlatformModel(vessel: Object3D, g: PlatformGeometry)
     box('rod-tip', [.045, .06, .045], [side * g.spacing / 2, baseY + g.rodLength, 0], '#f6a443');
   }
   Object.assign(root.userData, { geometry: g, source: 'Kenney / Watercraft Kit / CC0-1.0', deckY });
-  return { root, dispose() { for (const mesh of owned) { mesh.geometry.dispose(); (mesh.material as MeshStandardMaterial).dispose(); } } };
+  return { root, collision, dispose() { wireMaterial.dispose(); for (const mesh of owned) { mesh.geometry.dispose(); (mesh.material as MeshStandardMaterial).dispose(); } } };
 }

@@ -1,3 +1,4 @@
+import {xcd20Document} from './xcd20';
 import { copy, DEFS, Params, TestBlock, TestDocument, validateDocument } from './model';
 
 type Mode = 'MANUAL'|'ALTCTL'|'POSCTL';
@@ -19,6 +20,8 @@ export const BUILTIN_TESTS:readonly BuiltinTest[] = [
   {id:'posctl_roll',label:'普通定点 · Roll 主杆 ±60% / 2s · 回中刹停',file:'06_posctl_roll.xml',mode:'POSCTL',axis:'roll',input:'normal'},
   {id:'vector_pitch',label:'矢量定点 · AUX2 Pitch ±120° / 10°',file:'07_vector_pitch.xml',mode:'POSCTL',axis:'pitch',input:'vector'},
   {id:'vector_roll',label:'矢量定点 · AUX1 Roll ±120° / 10°',file:'08_vector_roll.xml',mode:'POSCTL',axis:'roll',input:'vector'},
+  {id:'xcd20_normal_takeoff',label:'XCD20 普通起飞 · 手动 / 定高 / 定点',file:'XCD20_NormalTakeoff.xml'},
+  {id:'xcd20_rail_takeoff',label:'XCD20 双杆自动起飞 → 定点悬停与刹停',file:'XCD20_RailTakeoff.xml'},
   {id:'posctl_regression',label:'定点专项 · 手动起飞 / 普通打杆刹停 / AUX ±5°',file:'09_posctl_regression.xml'},
 ];
 export function sweepPoints(limit:number,step=10):number[]{
@@ -132,7 +135,8 @@ function fourModeDocument(id:string,height:number):TestDocument{
   validateDocument(doc);return doc;
 }
 /** Local workspace template: loading does not execute or contact a device. */
-export function builtinDocument(id:string,height=10):TestDocument{
+export function builtinDocument(id:string,height=id.startsWith('xcd20_')?3:10):TestDocument{
+  if(id.startsWith('xcd20_'))return xcd20Document(id,height);
   if(!Number.isFinite(height)||height<2||height>100)throw Error('内置测试高度须为 2～100 m');
   const preset=BUILTIN_TESTS.find(p=>p.id===id);if(!preset)throw Error('内置测试不存在');
   if(id.startsWith('four_'))return fourModeDocument(id,height);
