@@ -6,14 +6,17 @@ const source=`import React from 'react';import{createRoot}from'react-dom/client'
 const target={simulator:'192.0.2.1',path:'/dev/ttyACM0',vid:0x1b8c,pid:0x0036,serialNumber:'TEST-FC',label:'/dev/ttyACM0 · PX4 · TEST-FC'};
 const bootloader={...target,path:'/dev/ttyACM1',vid:0x3162,pid:0x004b,label:'/dev/ttyACM1 · PX4 Bootloader'};
 const local={id:1,name:'micoair-test.px4',source:'/tmp/micoair-test.px4',boardId:1179,boardRevision:0,imageSize:1780848,description:'MicoAir H743-v2 固件',gitIdentity:'test-build'};
-const stored={...local,id:'a'.repeat(64),name:'stored.px4',hardware:'MicoAir H743-v2',compiledAt:'2026-11-24 17:18:09',packageBuiltAt:1795515741,packageSize:900000,savedAt:1795513059000,lastUsedAt:1795513109000};
+const stored={...local,id:'a'.repeat(64),name:'stored.px4',hardware:'MicoAir H743-v2',compiledAt:'2026-11-24 17:56:48',packageBuiltAt:1795665496,packageSize:900000,savedAt:1795665930182,lastUsedAt:1795665930627};
+const rebuilt={...stored,id:'c'.repeat(64),name:'rebuilt.px4',packageBuiltAt:1795601180};
+const legacy={...stored,id:'b'.repeat(64),name:'legacy.px4',boardId:7000,hardware:'CUAV 7 Nano',compiledAt:null,packageBuiltAt:null};
+const libraryEntries=[stored,rebuilt,legacy];
 window.snapshot={id:0,running:false,stage:'',completed:0,total:0,message:'',canCancel:false,target:null,firmware:null,board:null};window.calls=[];window.locked=false;
 const rebootLink={expectedHost:'192.0.2.1',alive:true,get armed(){return !!window.armed;},get lastHeartbeat(){return Date.now();},signal:new AbortController().signal};
 const rebootShell={runCommand:async(command,timeout,signal,beforeSend)=>{beforeSend();window.calls.push({command});window.inBootloader=true;throw Error('NSH disconnected on reboot');},close:async()=>{}};
 window.__TAURI_INTERNALS__={invoke:async(command,args)=>{window.calls.push({command,args});
  if(command==='px4_firmware_status')return structuredClone(window.snapshot);
- if(command==='px4_firmware_library'){if(window.libraryFailure)throw Error('固件库暂不可用');return{simulator:'192.0.2.1',root:'/mnt/home/px4-firmware',entries:[stored,{...stored,id:'b'.repeat(64),name:'legacy.px4',boardId:7000,hardware:'CUAV 7 Nano',compiledAt:null}],warnings:[]};}
- if(command==='px4_firmware_select')return{...stored,...(args.firmwareId==='b'.repeat(64)?{name:'legacy.px4',boardId:7000,hardware:'CUAV 7 Nano',compiledAt:null}:{}),id:3,libraryId:args.firmwareId,simulator:args.simulator};
+ if(command==='px4_firmware_library'){if(window.libraryFailure)throw Error('固件库暂不可用');return{simulator:'192.0.2.1',root:'/mnt/home/px4-firmware',entries:libraryEntries,warnings:[]};}
+ if(command==='px4_firmware_select')return{...libraryEntries.find(entry=>entry.id===args.firmwareId),id:3,libraryId:args.firmwareId,simulator:args.simulator};
  if(command==='px4_firmware_ports')return[window.inBootloader?bootloader:target];
  if(command==='sim_status')return{running:false,paused:false,stopped:true,flightController:{usb_connected:true,heartbeat_alive:true,heartbeat_age_ms:500,status_stale:false,armed:false,device_path:target.path,usb_vendor_id:target.vid,usb_product_id:target.pid}};
  if(command==='px4_firmware_pick')return window.pickCancelled?null:local;
@@ -33,12 +36,20 @@ const button=text=>`[...document.querySelectorAll('button')].find(b=>b.textConte
 const clickText=async text=>{await ev(`${button(text)}?.scrollIntoView({block:'center'})`);return click(button(text));};
 const count=cmd=>ev(`window.calls.filter(c=>c.command===${JSON.stringify(cmd)}).length`);
 try{
- await until(`document.querySelectorAll('.firmware-table tbody tr').length===2`);
+ await send('Emulation.setTimezoneOverride',{timezoneId:'Asia/Shanghai'});
+ await until(`document.querySelectorAll('.firmware-table tbody tr').length===3`);
  assert.equal(await ev(`${button('开始升级')}===undefined`),true);
- assert.equal(await ev(`document.querySelector('.firmware-table').innerText.includes('17:18:09')`),true);
+ const timeCells=(label)=>`[...document.querySelectorAll('.firmware-table td[data-label="${label}"]')].map(cell=>cell.querySelector('time')?.dateTime || cell.textContent)`;
+ await until(`${timeCells('固件包生成时间')}[0]==='2026-11-26T11:58:16'`);
+ assert.deepEqual(await ev(timeCells('固件包生成时间')),['2026-11-26T11:58:16','2026-11-25T18:06:20','未提供']);
+ assert.deepEqual(await ev(timeCells('版本模块编译时间')),['2026-11-24T17:56:48','2026-11-24T17:56:48','未提供']);
+ const detailTime=(label)=>ev(`[...document.querySelectorAll('.firmware-detail dt')].find(dt=>dt.textContent===${JSON.stringify(label)}).nextElementSibling.textContent`);
+ assert.equal(await detailTime('固件包生成时间'),'2026-11-26 11:58:16');
+ assert.equal(await detailTime('版本模块编译时间'),'2026-11-24 17:56:48');
  const libraryShot=await send('Page.captureScreenshot',{format:'png'});await writeFile('/tmp/px4-firmware-library-ui.png',Buffer.from(libraryShot.data,'base64'));
  await click(`[...document.querySelectorAll('.firmware-name')].find(b=>b.textContent==='legacy.px4')`);
- assert.equal(await ev(`document.querySelector('.firmware-detail').innerText.includes('未提供')`),true);
+ assert.equal(await detailTime('固件包生成时间'),'未提供');
+ assert.equal(await detailTime('版本模块编译时间'),'未提供');
  await click(`[...document.querySelectorAll('.firmware-name')].find(b=>b.textContent==='stored.px4')`);
  await clickText('使用此固件升级');await until(`document.querySelector('select')?.options.length===2`);
  assert.equal(await ev(`window.calls.find(c=>c.command==='px4_firmware_select').args.firmwareId`),'a'.repeat(64));

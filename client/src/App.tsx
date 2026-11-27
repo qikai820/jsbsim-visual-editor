@@ -25,7 +25,7 @@ import ScopeWindow from './components/monitor/ScopeWindow';
 import { useSignalMonitor } from './sim/useSignalMonitor';
 import { useFlightTestStore, testIsActive } from './flight-test/session';
 import { xcd20ObservationKeys } from './flight-test/xcd20Monitor';
-import { sceneMonitorKeys, type SceneMonitorTarget } from './sim/sceneSignals';
+import { sceneMonitorPlan, type SceneMonitorTarget } from './sim/sceneSignals';
 import { useSignalMonitorStore } from './store/signalMonitorStore';
 import { initializeSimulatorTransport, isTauri, listenJsbsimLog, simInstanceControl, simInstanceSnapshot, simSyncTime, usbConsoleRead, type SimInstanceSummary } from './utils/tauriApi';
 import { systemCanvasChannels, splitSystemCanvasChannels } from './utils/systemSignalCanvas';
@@ -282,8 +282,9 @@ function AppContent() {
   const testInstance = useFlightTestStore(state => state.runInstance);
   const testKeys = xcd20ObservationKeys(testDocument);
   const monitorInstance = testKeys.length && testInstance !== null ? String(testInstance).padStart(2, '0') : sceneMonitorTarget?.instance ?? activeInstance;
-  const sceneKeys = sceneMonitorTarget?.instance === monitorInstance ? sceneMonitorKeys(sceneMonitorTarget.model, sceneMonitorTarget.extraKeys) : [];
-  useSignalMonitor(monitorInstance, [...testKeys, ...sceneKeys]);
+  const monitorTarget = sceneMonitorTarget?.instance === monitorInstance ? sceneMonitorTarget : null;
+  const monitorPlan = sceneMonitorPlan(monitorTarget, testKeys);
+  const monitorKeys = useSignalMonitor(monitorInstance, monitorPlan.keys, monitorPlan.reserved);
   const armedScope = useSignalMonitorStore(state => state.armedScope);
   const monitorWindow = useSignalMonitorStore(state => state.openScope);
   const monitorError = useSignalMonitorStore(state => state.error);
@@ -817,7 +818,7 @@ function AppContent() {
         {workspace === 'scene' ? (
           <Suspense fallback={<div style={{ padding: 24 }}>加载飞行视景…</div>}>
             <FlightScene slots={instanceSlots} initialSelected={multiSelectedInstance}
-              toolbarHost={sceneToolbarHost}
+              toolbarHost={sceneToolbarHost} monitorKeys={monitorTarget ? monitorKeys : []}
               onMonitorTargetChange={setSceneMonitorTarget}
               onClose={() => setWorkspace('editor')} />
           </Suspense>

@@ -64,7 +64,7 @@ if(window.label==='main'){
    return{mode:3,selected:null,actual:null,ready:false,supported:true,switching:false,idleSending:false,feedbackAgeMs:null,reason:'当前为自动／混合输入'};
   }
   if(command==='flight_test_status')return structuredClone(window.snapshot);
-  if(command==='flight_test_start'){window.snapshot={...window.snapshot,id:window.snapshot.id+1,status:'running',name:'独立窗口测试',elapsed:10,dryRun:args.options.dryRun};return structuredClone(window.snapshot);}
+  if(command==='flight_test_start'){window.snapshot={...window.snapshot,id:window.snapshot.id+1,status:'running',name:'独立窗口测试',elapsed:10,runElapsed:3,dryRun:args.options.dryRun,progress:args.progressRoots?.length?{total:args.progressRoots.length,completedAt:[1],activeNodes:[],scriptStartedAt:0,scriptFinishedAt:null}:null};return structuredClone(window.snapshot);}
   if(command==='flight_test_stop'){if(window.rejectStop)throw Error('退出确认失败');window.snapshot={...window.snapshot,status:'stopped',exitResult:'退出已确认'};return structuredClone(window.snapshot);}
   if(command==='flight_test_validate')return{events:10,properties:20};
   return null;
@@ -91,7 +91,8 @@ try{
  const nsh=await ev(`window.mcp({name:'upper_nsh_command',arguments:{command:'param show SYS_HITL'}})`);
  assert.match(nsh.output,/SYS_HITL: 1/);assert.deepEqual(nsh.target,{system:7,component:1});assert.equal(nsh.sessionId,99);
  assert.equal(await ev('window.nshCommands.length'),1);assert.equal(await count('tool_transport_open'),1,'NSH reuses owner connection');
- await ev(`window.store.setState({starting:true})`);assert.match(await ev(`window.mcp({name:'upper_nsh_command',arguments:{command:'status'}}).then(()=>'',e=>String(e))`),/操作进行中/);await ev(`window.store.setState({starting:false})`);
+ const busyNsh=await ev(`(async()=>{window.store.setState({starting:true});try{return await window.mcp({name:'upper_nsh_command',arguments:{command:'status'}}).then(()=>'',e=>String(e));}finally{window.store.setState({starting:false});}})()`);
+ assert.match(busyNsh,/操作进行中/);
  const beforeExpired=await ev('window.nshCommands.length');await child(`window.__emit('px4-toolbox-bridge',{kind:'nsh-command',id:'expired-nsh',deadline:Date.now()-1,request:{command:'status'}})`);assert.equal(await ev('window.nshCommands.length'),beforeExpired,'expired NSH never executes');
 
  assert.equal(await ev('document.querySelector(".px4-toolbox-overlay")'),null,'main has no modal overlay');
@@ -121,6 +122,10 @@ try{
  await child(`Array.from(document.querySelectorAll('.ft-toolbar button')).find(b=>b.textContent==='离线预演').click()`);
  await until('window.store.getState().snapshot?.status==="running"');
  assert.equal(await count('flight_test_start'),1);
+ await until('window.store.getState().runProgress?.runId===window.store.getState().snapshot?.id');
+ assert.equal(await ev('window.store.getState().snapshot.progress.completedAt.length'),1);
+ assert.equal(await child(`document.querySelector('.ft-progress [role=progressbar]').getAttribute('aria-valuenow')`),'33');
+ assert.match(await child(`document.querySelector('.ft-progress').textContent`),/00:03/);
  await childClick('[data-window-action="close"]');await until('!window.store.getState().toolboxVisible');
  assert.equal(await count('flight_test_stop'),0);assert.equal(await count('tool_transport_close'),0);
  assert.equal(await ev('document.querySelector("iframe").hidden'),true);

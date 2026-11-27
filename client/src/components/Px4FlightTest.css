@@ -19,6 +19,29 @@
 .flight-test{position:relative;overflow:hidden;container:flight-test / inline-size}
 .flight-test [hidden]{display:none!important}
 .flight-test .ft-toolbar{padding:7px 10px;flex-shrink:0;gap:8px}
+.ft-progress {
+  flex-shrink: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--pt-line);
+  background: var(--pt-bg);
+}
+.ft-progress > header, .ft-progress-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 9px;
+  color: var(--pt-muted);
+  overflow-wrap: anywhere;
+}
+.ft-progress > header strong, .ft-progress-detail strong { color: var(--pt-text); font-weight: 600; }
+.ft-progress-status { color: var(--pt-blue); }
+.ft-progress-status[data-status="passed"] { color: #247653; }
+.ft-progress-status[data-status="failed"] { color: #b13b41; }
+.ft-progress-status:is([data-status="idle"],[data-status="stopped"]) { color: var(--pt-muted); }
+.ft-progress-detail { max-height: 3.1em; overflow: auto; font-size: 11px; }
+.ft-progress-detail:empty { display: none; }
 .flight-test .ft-document{flex:1;min-width:180px;flex-wrap:nowrap;gap:10px}
 .flight-test input.ft-name{flex:1;width:auto;min-width:80px;max-width:340px;border-color:transparent;background:transparent;font-weight:500}
 .ft-view-switch{display:flex;flex-shrink:0}.ft-view-switch button{white-space:nowrap}
@@ -52,6 +75,7 @@
 .ft-results{padding:0;flex-shrink:0;max-height:190px;min-height:40px;overflow:hidden;background:var(--pt-panel)}
 .ft-results .ft-statusbar{display:flex;flex-wrap:wrap;align-items:center;gap:7px 10px;padding:6px 10px;min-height:40px}
 .ft-statusbar>b{font-weight:500}.ft-statusbar>time{color:var(--pt-muted);font-variant-numeric:tabular-nums}.ft-statusbar>span{color:var(--pt-muted);flex:1;min-width:0;max-height:34px;overflow:auto}
+.ft-statusbar>time{white-space:nowrap}
 .ft-statusbar>div{display:flex;align-items:center;gap:5px;margin-left:auto}.flight-test .ft-statusbar button{white-space:nowrap;font-size:11px}
 .ft-results>div[role=log]{border-top:1px solid var(--pt-line);padding:6px 12px;max-height:130px;overflow:auto}
 .ft-xml{min-height:0;height:calc(100% - 60px)}.flight-test .ft-xml textarea{min-height:180px;resize:none}
@@ -77,3 +101,12 @@
   .ft-statusbar>span{display:none}.ft-statusbar>div{gap:3px}.flight-test .ft-statusbar button{padding-inline:5px}
   .ft-settings{grid-template-columns:1fr}.ft-popover{padding:10px}.ft-focused .ft-canvas{padding-inline:10px}
 }
+
+.ft-statusbar .ft-report-error{display:block;max-width:290px;line-height:1.35;color:var(--pt-muted);overflow-wrap:anywhere}
+.ft-report-history{width:540px}
+.ft-report-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.ft-report-filters input{flex:1;min-width:120px;padding:4px 6px}
+.ft-report-list{list-style:none;padding:0;margin:0}
+.ft-report-list>li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;border-top:1px solid var(--pt-line);padding:8px 0}
+.ft-report-list b,.ft-report-list small{display:block;overflow-wrap:anywhere}
+.ft-report-list small,.ft-report-pending{color:var(--pt-muted)}

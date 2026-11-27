@@ -67,6 +67,15 @@ async fn scene_import_directory(window: tauri::WebviewWindow) -> Result<Option<V
     scene_files::pick_directory(window).await
 }
 
+#[tauri::command]
+async fn flight_test_report_open(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let directory = flight_test::report::directory(&app)?;
+    run_blocking(move || {
+        let path = flight_test::report::html_path(&directory, &id)?;
+        tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+    }).await
+}
+
 // ── Shared application state ────────────────────────────────────────────────
 
 struct AppState {
@@ -1772,6 +1781,9 @@ fn main() {
             flight_test::flight_test_rc_source_select,
             flight_test::flight_test_stop,
             flight_test::flight_test_report,
+            flight_test::report::flight_test_report_list,
+            flight_test::report::flight_test_report_retry,
+            flight_test_report_open,
             px4_files::px4_log_begin,
             px4_files::px4_log_begin_managed,
             px4_files::px4_log_transfer_error,
@@ -1830,11 +1842,13 @@ fn main() {
                 }
             }
             if matches!(event, tauri::RunEvent::Exit) {
+                mcp::shutdown();
+                let _ = flight_test::stop(None);
+                flight_test::wait_for_shutdown();
+                flight_test::report::wait_for_writes();
                 voice::shutdown();
                 let _ = px4_sitl::global().stop();
                 local_sim::shutdown();
-                mcp::shutdown();
-                let _=flight_test::stop(None);
                 telemetry_recorder::global().stop();
                 serial_assistant::global().shutdown();
             }

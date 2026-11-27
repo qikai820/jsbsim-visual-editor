@@ -10,6 +10,7 @@ mod xcd20;
 mod xcd20_test;
 pub mod mavlink;
 pub mod xml;
+pub(crate) mod report;
 
 use crate::serial_assistant::SerialEvent;
 use engine::{Command, Engine};
@@ -17,19 +18,26 @@ use mavlink::{Parser, Telemetry};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex, OnceLock,
+    Arc, Condvar, Mutex, OnceLock,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static LIVE_RUNNING: AtomicBool = AtomicBool::new(false);
+static RUN_COMPLETE: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
 pub fn running() -> bool {
     RUNNING.load(Ordering::Acquire)
 }
 pub fn live_running() -> bool { LIVE_RUNNING.load(Ordering::Acquire) }
+
+pub(crate) fn wait_for_shutdown() {
+    let (gate, done) = &RUN_COMPLETE;
+    drop(done.wait_while(gate.lock().expect("test completion"), |_| running()).expect("test completion"));
+}
 #[derive(Default)]
 struct Link {
     session: u64,
@@ -178,14 +186,16 @@ impl Options {
         Ok(())
     }
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Log {
     pub time: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_elapsed: Option<f64>,
     pub level: String,
     pub message: String,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Binding {
     session_id: u64,
@@ -196,9 +206,32 @@ pub struct Binding {
     hardware_uid: Option<String>,
     model: String,
     scene_epoch: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    firmware_version: Option<u32>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FlowProgress {
+    pub total: usize,
+    pub completed_at: Vec<f64>,
+    pub active_nodes: Vec<String>,
+    pub script_started_at: Option<f64>,
+    pub script_finished_at: Option<f64>,
+}
+
+impl FlowProgress {
+    fn update_completed(&mut self, engine: &Engine, paths: &[String], elapsed: f64) {
+        for path in paths.iter().skip(self.completed_at.len()) {
+            if engine.value(path) != Some(1.) {
+                break;
+            }
+            self.completed_at.push(elapsed);
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Snapshot {
     pub id: u64,
     pub status: String,
@@ -208,11 +241,23 @@ pub struct Snapshot {
     pub binding: Option<Binding>,
     pub elapsed: f64,
     pub real_elapsed: f64,
+    pub run_elapsed: f64,
+    pub progress: Option<FlowProgress>,
     pub rc: [f64; 4],
     pub active_blocks: Vec<String>,
     pub values: BTreeMap<String, f64>,
     pub logs: Vec<Log>,
     pub exit_result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    archive: Option<report::ArchiveStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<report::Outcome>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    report_stages: Vec<report::Stage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aircraft_label: Option<String>,
+    #[serde(skip)]
+    run_started: Option<Instant>,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -225,15 +270,44 @@ impl Default for Snapshot {
             binding: None,
             elapsed: 0.,
             real_elapsed: 0.,
+            run_elapsed: 0.,
+            progress: None,
             rc: [0., 0., 0., 0.5],
             active_blocks: Vec::new(),
             values: BTreeMap::new(),
             logs: Vec::new(),
             exit_result: String::new(),
+            archive: None,
+            outcome: None,
+            report_stages: Vec::new(),
+            aircraft_label: None,
+            run_started: None,
         }
     }
 }
-#[derive(Clone, Serialize)]
+impl Snapshot {
+    fn run_elapsed_now(&self) -> f64 {
+        self.run_started.map_or(self.run_elapsed, |at| at.elapsed().as_secs_f64())
+    }
+
+    fn for_display(&self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.run_elapsed = self.run_elapsed_now();
+        snapshot
+    }
+
+    fn finish(&mut self, status: &str, exit_result: impl Into<String>) {
+        self.run_elapsed = self.run_elapsed_now();
+        self.run_started = None;
+        self.status = status.into();
+        self.exit_result = exit_result.into();
+        self.active_blocks.clear();
+        if let Some(progress) = self.progress.as_mut() {
+            progress.active_nodes.clear();
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Trace {
     time: f64,
     rc: [f64; 4],
@@ -244,7 +318,7 @@ struct Controller {
     worker: Option<JoinHandle<()>>,
     cancel: Arc<AtomicBool>,
     snapshot: Arc<Mutex<Snapshot>>,
-    source: String,
+    source: Arc<str>,
     options: Option<Options>,
     trace: Arc<Mutex<Vec<Trace>>>,
     trace_interval_seconds: f64,
@@ -260,7 +334,7 @@ fn controller() -> &'static Mutex<Controller> {
             worker: None,
             cancel: Arc::new(AtomicBool::new(false)),
             snapshot: Arc::new(Mutex::new(Snapshot::default())),
-            source: String::new(),
+            source: Arc::from(""),
             options: None,
             trace: Arc::new(Mutex::new(Vec::new())),
             trace_interval_seconds: 0.1,
@@ -269,8 +343,10 @@ fn controller() -> &'static Mutex<Controller> {
 }
 fn record(snapshot: &Arc<Mutex<Snapshot>>, time: f64, level: &str, message: impl Into<String>) {
     if let Ok(mut s) = snapshot.lock() {
+        let run_elapsed = Some(s.run_elapsed_now());
         s.logs.push(Log {
             time,
+            run_elapsed,
             level: level.into(),
             message: message.into(),
         });
@@ -283,7 +359,7 @@ pub fn status() -> Snapshot {
     controller()
         .lock()
         .ok()
-        .and_then(|c| c.snapshot.lock().ok().map(|s| s.clone()))
+        .and_then(|c| c.snapshot.lock().ok().map(|s| s.for_display()))
         .unwrap_or_default()
 }
 /// Cache-only observation for MCP. Never opens a transport or requests telemetry.
@@ -330,8 +406,36 @@ pub fn stop(id: Option<u64>) -> Result<Snapshot, String> {
     Ok(status())
 }
 pub fn start(source: String, options: Options) -> Result<Snapshot, String> {
+    start_with_progress(source, options, None)
+}
+
+pub fn start_with_progress(source: String, options: Options, roots: Option<Vec<String>>) -> Result<Snapshot, String> {
+    start_run(source, options, roots, None)
+}
+
+pub(crate) fn start_run(
+    source: String,
+    mut options: Options,
+    roots: Option<Vec<String>>,
+    archive: Option<(Result<PathBuf, String>, report::Metadata)>,
+) -> Result<Snapshot, String> {
     options.validate()?;
     let script = xml::parse(&source)?;
+    // Progress is display metadata. Unknown or duplicated nodes must not
+    // prevent a script that previously ran without progress from executing.
+    let progress_paths = roots
+        .filter(|ids| ids.len() <= 400 && script.properties.contains_key("test/runtime/complete"))
+        .and_then(|ids| {
+            let mut seen = std::collections::BTreeSet::new();
+            ids.iter().map(|id| {
+                let path = format!("test/flow/{id}/done");
+                (seen.insert(id) && script.properties.contains_key(&path)
+                    && script.properties.contains_key(&format!("test/flow/{id}/started")))
+                    .then_some(path)
+            }).collect::<Option<Vec<_>>>()
+        });
+    options.rc_emulation |= channels::VECTOR_TARGETS.iter().any(|target|
+        script.properties.contains_key(&format!("test/channel/{target}/enabled")));
     if receiver::busy() { return Err("遥控器来源切换中，请等待确认后执行测试".into()); }
     let _source_gate = receiver::gate()?;
     if crate::px4_firmware::busy() { return Err("PX4 固件升级进行中，请等待完成后再执行测试".into()); }
@@ -344,30 +448,62 @@ pub fn start(source: String, options: Options) -> Result<Snapshot, String> {
     }
     let id = c.next;
     c.next += 1;
+    let started_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let (directory, metadata) = match archive {
+        Some((directory, metadata)) => (Some(directory), metadata),
+        None => (None, report::Metadata::default()),
+    };
+    let archive_status = directory.as_ref().map(|_| report::ArchiveStatus::new(id, started_at));
+    let report_stages = progress_paths.as_ref().map_or_else(Vec::new, |paths| {
+        paths.iter().enumerate().map(|(index, _)| report::Stage {
+            label: metadata.stage_labels.get(index).filter(|label| !label.trim().is_empty())
+                .map(|label| label.chars().take(180).collect())
+                .unwrap_or_else(|| format!("步骤 {}", index + 1)),
+            state: report::StageState::NotRun,
+            completed_at: None,
+        }).collect()
+    });
     let snapshot = Arc::new(Mutex::new(Snapshot {
         id,
         name: script.name.clone(),
         dry_run: options.dry_run,
         status: "preflight".into(),
-        started_at_unix_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
+        run_started: Some(Instant::now()),
+        progress: progress_paths.as_ref().map(|paths| FlowProgress {
+            total: paths.len(),
+            completed_at: Vec::with_capacity(paths.len()),
+            active_nodes: Vec::new(),
+            script_started_at: None,
+            script_finished_at: None,
+        }),
+        started_at_unix_ms: started_at.as_millis() as u64,
+        archive: archive_status.clone(),
+        report_stages,
+        aircraft_label: metadata.aircraft_label.map(|label| label.chars().take(180).collect()),
         ..Snapshot::default()
     }));
     let cancel = Arc::new(AtomicBool::new(false));
     let trace = Arc::new(Mutex::new(Vec::new()));
     c.cancel = cancel.clone();
     c.snapshot = snapshot.clone();
-    c.source = source;
+    c.source = Arc::from(source);
     c.options = Some(options.clone());
     c.trace = trace.clone();
     c.trace_interval_seconds = trace_interval_seconds(script.end);
+    let capture = directory.zip(archive_status).map(|(directory, status)| {
+        (directory, status.id, report::Capture {
+            snapshot: snapshot.clone(),
+            source: c.source.clone(),
+            options: options.clone(),
+            trace: trace.clone(),
+            interval: c.trace_interval_seconds,
+        })
+    });
     LIVE_RUNNING.store(!options.dry_run, Ordering::Release);
     RUNNING.store(true, Ordering::Release);
     c.worker = Some(thread::spawn(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run(script, options, cancel, &snapshot, &trace)
+            run(script, options, cancel, &snapshot, &trace, progress_paths.as_deref().unwrap_or(&[]))
         }));
         if result.is_err() {
             record(
@@ -377,15 +513,26 @@ pub fn start(source: String, options: Options) -> Result<Snapshot, String> {
                 "测试线程异常；已停止发送，飞控退出状态未确认",
             );
             if let Ok(mut s) = snapshot.lock() {
-                s.status = "failed".into();
-                s.active_blocks.clear();
-                s.exit_result = "退出未确认".into();
+                let previous = s.outcome.take();
+                s.outcome = Some(report::Outcome {
+                    execution_status: previous.as_ref().map_or_else(|| "failed".into(), |v| v.execution_status.clone()),
+                    reason: "测试线程异常".into(),
+                    exit_state: report::ExitState::Unconfirmed,
+                    policy: previous.and_then(|v| v.policy),
+                });
+                s.finish("failed", "退出未确认");
             }
         }
+        if let Some((directory, id, capture)) = capture {
+            report::enqueue(directory, id, capture);
+        }
+        let (gate, done) = &RUN_COMPLETE;
+        let _guard = gate.lock().expect("test completion");
         LIVE_RUNNING.store(false, Ordering::Release);
         RUNNING.store(false, Ordering::Release);
+        done.notify_all();
     }));
-    let result = c.snapshot.lock().map_err(|e| e.to_string())?.clone();
+    let result = c.snapshot.lock().map_err(|e| e.to_string())?.for_display();
     Ok(result)
 }
 fn telemetry(options: &Options) -> Result<Telemetry, String> {
@@ -710,6 +857,27 @@ fn update_attitude_mapping(engine: &mut Engine, t: &Telemetry) {
     }
 }
 fn validate_script_parameters(engine: &Engine, t: &Telemetry) -> Result<(),String> {
+    if engine.needs_vector_rates() && !receiver::configured(t, 0) {
+        return Err("矢量速率模板需要 RC 来源（COM_RC_IN_MODE=0）".into());
+    }
+    if let Some(expected) = engine.value("test/requirements/morphquad-servo-range-deg") {
+        let read = |name:&str| t.params.get(name).filter(|p| p.0.is_finite() && p.2.elapsed() < Duration::from_secs(5))
+            .map(|p| p.0).ok_or_else(|| format!("缺少本次参数回读 {name}"));
+        for name in ["CA_MQ_ARANGE", "CA_MQ_BRANGE"] {
+            let value = read(name)?;
+            if !(1. ..=120.).contains(&expected) || (value - expected).abs() > 0.05 {
+                return Err(format!("{name}={value}° 与此模板的仿真舵机行程 ±{expected}° 不匹配，未开始测试"));
+            }
+        }
+        let rate=read("VEC_ATT_RATE")?;
+        let deadzone=read("MAN_DEADZONE")?;
+        if !(0. ..0.35).contains(&deadzone) || rate*(0.35-deadzone)/(1.-deadzone) <= 0.03_f64.to_degrees() {
+            return Err("VEC_ATT_RATE 与 MAN_DEADZONE 的组合无法让 ±35% 杆量达到模板的角速度判据".into());
+        }
+        if read("VEC_ATT_MAX")? <= 3. {
+            return Err("VEC_ATT_MAX 需大于模板的 ±3° 转动目标".into());
+        }
+    }
     if engine.needs_heading() {
         for name in ["MPC_MAN_TILT_MAX","MPC_TILTMAX_AIR","MPC_MAN_Y_MAX","MAN_DEADZONE","VEC_HEAD_RATE"] {
             if !t.params.get(name).is_some_and(|p| p.2.elapsed() < Duration::from_secs(5)) {
@@ -739,9 +907,13 @@ fn validate_script_parameters(engine: &Engine, t: &Telemetry) -> Result<(),Strin
     }
     Ok(())
 }
-fn channel_profile(options: &Options, cancel: &AtomicBool, sequence: &mut u8, expected: &Telemetry, vector: bool, required_aux: [bool; 6]) -> Result<channels::RcProfile, String> {
+fn channel_profile(options: &Options, cancel: &AtomicBool, sequence: &mut u8, expected: &Telemetry, vector: bool, required_aux: [bool; 6], vector_rates: bool) -> Result<channels::RcProfile, String> {
     let since = Instant::now();
-    let names = if options.rc_emulation { channels::receiver_parameter_names() } else { channels::parameter_names(vector) };
+    let mut names = if options.rc_emulation { channels::receiver_parameter_names() } else { channels::parameter_names(vector) };
+    if vector_rates {
+        names.extend(["RC_MAP_VEC_ROLL", "RC_MAP_VEC_PITCH"].map(str::to_owned));
+        names.extend(channels::VECTOR_RESERVED.map(str::to_owned));
+    }
     if options.rc_emulation {
         write(options, mavlink::command((options.system, options.component), 512, [65., 0., 0., 0., 0., 0., 0.], *sequence))?;
         *sequence = sequence.wrapping_add(1);
@@ -762,7 +934,7 @@ fn channel_profile(options: &Options, cancel: &AtomicBool, sequence: &mut u8, ex
             if !t.fresh(Instant::now()) || !t.hil || !same_target(&t, expected) {
                 return Err("读取通道映射期间身份或 HIL 链路失效".into());
             }
-            let result = if options.rc_emulation { channels::RcProfile::receiver_from_telemetry(&t, since, vector, required_aux) }
+            let result = if options.rc_emulation { channels::RcProfile::receiver_with_vector_rates(&t, since, vector, required_aux, vector_rates) }
                 else { channels::RcProfile::from_telemetry(&t, since, vector) };
             match result {
                 Ok(profile) => return Ok(profile),
@@ -1057,13 +1229,23 @@ fn run(
     cancel: Arc<AtomicBool>,
     snapshot: &Arc<Mutex<Snapshot>>,
     trace: &Arc<Mutex<Vec<Trace>>>,
+    progress_paths: &[String],
 ) {
     let mut sequence = 0u8;
     let mut engine = Engine::new(script);
+    let vector_rates = engine.needs_vector_rates();
+    let mut extra_parameters = xcd20::parameters(&engine);
+    if vector_rates { extra_parameters.push("COM_RC_IN_MODE"); }
+    if engine.value("test/requirements/morphquad-servo-range-deg").is_some() {
+        extra_parameters.extend(["CA_MQ_ARANGE", "CA_MQ_BRANGE", "VEC_ATT_RATE", "MAN_DEADZONE", "VEC_ATT_MAX"]);
+    }
     if !options.dry_run && !options.rc_emulation {
         if let Err(error)=engine.manual_control_compatible() {
             record(snapshot,0.,"error",&error);
-            if let Ok(mut s)=snapshot.lock(){s.status="failed".into();s.exit_result="脚本不兼容，未发送控制指令".into();}
+            if let Ok(mut s) = snapshot.lock() {
+                s.outcome = Some(report::Outcome::before_script("failed", error));
+                s.finish("failed", "脚本不兼容，未发送控制指令");
+            }
             return;
         }
     }
@@ -1084,21 +1266,21 @@ fn run(
             &options,
             &cancel,
             &mut sequence,
-            engine.needs_attitude(),
+            engine.needs_attitude() || vector_rates,
             engine.needs_manual_takeoff(),
             engine.needs_heading(),
             engine.needs_recovery(),
-            &xcd20::parameters(&engine),
+            &extra_parameters,
         ).and_then(|(t, scene)| {
+            validate_script_parameters(&engine,&t)?;
             if !options.rc_emulation { receiver::require_manual(&options,&t,&mut sequence,&cancel)?; }
             if options.rc_emulation {
-                rc_profile = Some(channel_profile(&options, &cancel, &mut sequence, &t, engine.needs_vector_switch(), engine.required_aux())?);
+                rc_profile = Some(channel_profile(&options, &cancel, &mut sequence, &t, engine.needs_vector_switch(), engine.required_aux(), vector_rates)?);
                 let current = simulator(options.instance)?;
                 if current.1 != scene.1 || current.2 != scene.2 {
                     return Err("读取通道配置期间仿真实例发生变化".into());
                 }
             }
-            validate_script_parameters(&engine,&t)?;
             xcd20::preflight(&engine,&t,options.instance)?;
             Ok((t, scene))
         }) {
@@ -1119,6 +1301,7 @@ fn run(
                         hardware_uid: t.uid.map(|uid| format!("{uid:016x}")),
                         model: scene.1.clone(),
                         scene_epoch: scene.2,
+                        firmware_version: t.flight_sw_version,
                     });
                 }
                 first = t;
@@ -1135,13 +1318,13 @@ fn run(
             Err(e) => {
                 record(snapshot, 0., "error", &e);
                 if let Ok(mut s) = snapshot.lock() {
-                    s.status = if cancel.load(Ordering::Acquire) {
+                    let status = if cancel.load(Ordering::Acquire) {
                         "stopped"
                     } else {
                         "failed"
-                    }
-                    .into();
-                    s.exit_result = "预检查未通过，未发送控制指令".into();
+                    };
+                    s.outcome = Some(report::Outcome::before_script(status, e));
+                    s.finish(status, "预检查未通过，未发送控制指令");
                 }
                 return;
             }
@@ -1153,9 +1336,17 @@ fn run(
             else { receiver::prepare_manual(&options,&cancel,snapshot,&mut sequence,&first,neutral) };
         if let Err(error) = prepared {
             record(snapshot,0.,"error",&error);
-            let exit = exit_policy(&options,&options.on_abort,snapshot,&mut sequence,0.,neutral,&first,false,rc_profile.as_ref()).unwrap_or_else(|e| e);
-            record(snapshot,0.,"info",&exit);
-            if let Ok(mut s) = snapshot.lock() {s.status=if cancel.load(Ordering::Acquire){"stopped"}else{"failed"}.into();s.exit_result=exit;s.values.insert("test/receiver/ready".into(),0.);}
+            if let Ok(mut s) = snapshot.lock() {
+                s.status = "exiting".into();
+            }
+            let exit = exit_policy(&options,&options.on_abort,snapshot,&mut sequence,0.,neutral,&first,false,rc_profile.as_ref());
+            let outcome = if cancel.load(Ordering::Acquire) { "stopped" } else { "failed" };
+            record(snapshot, 0., if exit.is_ok() { "info" } else { "error" }, exit.as_ref().unwrap_or_else(|e| e));
+            if let Ok(mut s) = snapshot.lock() {
+                s.outcome = Some(report::Outcome::after_script(outcome, error, &options.on_abort, false, exit.is_ok()));
+                s.finish(outcome, exit.unwrap_or_else(|e| e));
+                s.values.insert("test/receiver/ready".into(),0.);
+            }
             return;
         }
         engine.set("test/receiver/ready",1.);
@@ -1172,6 +1363,12 @@ fn run(
         },
     );
     let started = Instant::now();
+    if let Ok(mut s) = snapshot.lock() {
+        let elapsed = s.run_elapsed_now();
+        if let Some(progress) = s.progress.as_mut() {
+            progress.script_started_at = Some(elapsed);
+        }
+    }
     let mut last_send = Instant::now() - Duration::from_secs(1);
     let mut last_heartbeat = last_send;
     let mut last_identity_request = last_send;
@@ -1237,6 +1434,7 @@ fn run(
                 if first.uid.is_none() {
                     first.uid = t.uid;
                 }
+                if vector_rates && !receiver::configured(&t,0) { return Err("COM_RC_IN_MODE 不再选择 RC 来源，停止测试".into()); }
                 if !options.rc_emulation && !receiver::configured(&t,1) { return Err("COM_RC_IN_MODE 不再选择 MAVLink 主输入，停止测试".into()); }
                 let scene = simulator(options.instance)?;
                 let origin = scene_origin.as_ref().unwrap();
@@ -1351,7 +1549,9 @@ fn run(
             // Offline auto mapping uses simulated RC8; live runs always use
             // RC_MAP_VECTOR_SW read from the bound controller.
             let (aux, channel_values, manual_buttons) = if options.rc_emulation || options.dry_run {
-                let (aux,channels)=engine.channel_outputs(rc_profile.as_ref().map(|p|p.vector_channel).unwrap_or(8))?;
+                let (vector, rate_channels) = rc_profile.as_ref()
+                    .map(|p|(p.vector_channel,p.vector_rate_channels)).unwrap_or((8,[13,14,9]));
+                let (aux,channels)=engine.mapped_channel_outputs(vector, rate_channels)?;
                 (aux,channels,0)
             } else { let (aux,buttons)=engine.manual_outputs()?;(aux,[None;18],buttons) };
             let pwm = if !options.dry_run && options.rc_emulation {
@@ -1418,11 +1618,21 @@ fn run(
                 s.elapsed = time;
                 s.real_elapsed = started.elapsed().as_secs_f64();
                 s.rc = rc;
-                s.active_blocks = engine.active_blocks();
+                let elapsed = s.run_elapsed_now();
+                s.active_blocks = if let Some(progress) = s.progress.as_mut() {
+                    progress.update_completed(&engine, progress_paths, elapsed);
+                    progress.active_nodes = engine.active_flow_nodes().map(str::to_owned).collect();
+                    engine::block_ids(progress.active_nodes.iter().map(String::as_str))
+                } else {
+                    engine.active_blocks()
+                };
                 s.values = values.clone();
                 if let Some(binding) = s.binding.as_mut() {
                     if binding.hardware_uid.is_none() {
                         binding.hardware_uid = first.uid.map(|uid| format!("{uid:016x}"));
+                    }
+                    if binding.firmware_version.is_none() {
+                        binding.firmware_version = t.as_ref().and_then(|telemetry| telemetry.flight_sw_version);
                     }
                 }
             }
@@ -1459,7 +1669,7 @@ fn run(
                     write(&options, mavlink::command((options.system, options.component), 512,
                         [148., 0., 0., 0., 0., 0., 0.], sequence))?;
                     sequence = sequence.wrapping_add(1); last_identity_request = now;
-                    if !options.rc_emulation { receiver::query(&options,&mut sequence,true)?; }
+                    if !options.rc_emulation || vector_rates { receiver::query(&options,&mut sequence,true)?; }
                 }
                 if engine.value("test/rc/enabled") == Some(1.)
                     && now.duration_since(last_send)
@@ -1489,11 +1699,31 @@ fn run(
             snapshot,
             engine.time,
             if outcome == "failed" { "error" } else { "info" },
-            reason,
+            &reason,
         );
     }
+    let execution_status = outcome;
     if let Ok(mut s) = snapshot.lock() {
         s.status = "exiting".into();
+        s.elapsed = engine.time;
+        let elapsed = s.run_elapsed_now();
+        if let Some(progress) = s.progress.as_mut() {
+            progress.update_completed(&engine, progress_paths, elapsed);
+            progress.script_finished_at = Some(elapsed);
+            progress.active_nodes.clear();
+        }
+        let completed = s.progress.as_ref().map(|progress| progress.completed_at.clone()).unwrap_or_default();
+        for (index, (stage, path)) in s.report_stages.iter_mut().zip(progress_paths).enumerate() {
+            let base = path.strip_suffix("/done").unwrap_or(path);
+            stage.state = if engine.value(path) == Some(1.) {
+                report::StageState::Completed
+            } else if engine.value(&format!("{base}/started")) == Some(1.) {
+                report::StageState::Incomplete
+            } else {
+                report::StageState::NotRun
+            };
+            stage.completed_at = completed.get(index).copied();
+        }
         s.values.retain(|k, _| !k.starts_with("test/output/"));
         s.active_blocks.clear();
         s.rc = [
@@ -1562,7 +1792,7 @@ fn run(
     } else {
         &options.on_abort
     };
-    let exit = match exit_policy(
+    let exit = exit_policy(
         &options,
         policy,
         snapshot,
@@ -1572,18 +1802,14 @@ fn run(
         &first,
         uncertain_command,
         rc_profile.as_ref(),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            outcome = "failed";
-            e
-        }
-    };
-    record(snapshot, engine.time, "info", &exit);
+    );
+    if exit.is_err() {
+        outcome = "failed";
+    }
+    record(snapshot, engine.time, if exit.is_ok() { "info" } else { "error" }, exit.as_ref().unwrap_or_else(|e| e));
     if let Ok(mut s) = snapshot.lock() {
-        s.status = outcome.into();
-        s.exit_result = exit;
-        s.active_blocks.clear();
+        s.outcome = Some(report::Outcome::after_script(execution_status, reason, policy, options.dry_run, exit.is_ok() && !uncertain_command));
+        s.finish(outcome, exit.unwrap_or_else(|e| e));
         s.real_elapsed = started.elapsed().as_secs_f64();
     }
 }
@@ -1593,8 +1819,17 @@ pub async fn flight_test_validate(source: String) -> Result<serde_json::Value, S
     crate::run_blocking(move||{let script=xml::parse(&source)?;Ok(serde_json::json!({"name":script.name,"events":script.events.len(),"properties":script.properties.len(),"end":script.end}))}).await
 }
 #[tauri::command]
-pub async fn flight_test_start(source: String, options: Options) -> Result<Snapshot, String> {
-    crate::run_blocking(move || start(source, options)).await
+pub async fn flight_test_start(
+    app: tauri::AppHandle,
+    source: String,
+    options: Options,
+    progress_roots: Option<Vec<String>>,
+    report_metadata: Option<report::Metadata>,
+) -> Result<Snapshot, String> {
+    let directory = report::directory(&app);
+    crate::run_blocking(move || {
+        start_run(source, options, progress_roots, Some((directory, report_metadata.unwrap_or_default())))
+    }).await
 }
 #[tauri::command]
 pub fn flight_test_status() -> Snapshot {
@@ -1614,15 +1849,18 @@ pub async fn flight_test_stop(id: Option<u64>) -> Result<Snapshot, String> {
 }
 #[tauri::command]
 pub fn flight_test_report() -> Result<serde_json::Value, String> {
-    let c = controller().lock().map_err(|e| e.to_string())?;
-    if running() {
-        return Err("请在测试退出完成后保存记录".into());
-    }
-    let snapshot = c.snapshot.lock().map_err(|e| e.to_string())?.clone();
-    let trace = c.trace.lock().map_err(|e| e.to_string())?.clone();
-    Ok(
-        serde_json::json!({"format":"px4-jsbsim-flight-test","version":1,"sourceXml":c.source,"options":c.options,"result":snapshot,"trace":trace,"traceIntervalSeconds":c.trace_interval_seconds,"traceLimit":40000,"eventLogLimit":2000}),
-    )
+    let (snapshot, source, options, trace, trace_interval) = {
+        let c = controller().lock().map_err(|e| e.to_string())?;
+        if running() {
+            return Err("请在测试退出完成后保存记录".into());
+        }
+        (c.snapshot.clone(), c.source.clone(), c.options.clone(), c.trace.clone(), c.trace_interval_seconds)
+    };
+    let mut snapshot = snapshot.lock().map_err(|e| e.to_string())?.clone();
+    let trace = trace.lock().map_err(|e| e.to_string())?;
+    let archive_id = snapshot.archive.take().map(|archive| archive.id);
+    serde_json::to_value(report::Record::new(&source, options.as_ref(), &snapshot, &trace, trace_interval, archive_id.as_deref()))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1685,11 +1923,14 @@ mod four_mode_parameter_tests {
     fn current_parameters_are_required_before_full_template_actions() {
         let e=Engine::new(xml::parse(include_str!("../../../examples/flight-tests/morphquad-attitude/10_four_mode_complete.xml")).unwrap());
         let now=Instant::now();let mut t=Telemetry::default();
-        for (name,value) in [("MPC_MAN_TILT_MAX",60.),("MPC_TILTMAX_AIR",35.),("VEC_ATT_MAX",120.),("VEC_REF_EN",1.),("MPC_MAN_Y_MAX",120.),("MAN_DEADZONE",0.1),("VEC_HEAD_RATE",20.)] {t.params.insert(name.into(),(value,0,now));}
+        for (name,value) in [("MPC_MAN_TILT_MAX",60.),("MPC_TILTMAX_AIR",20.),("COM_RC_IN_MODE",0.),("CA_MQ_ARANGE",35.),("CA_MQ_BRANGE",35.),("VEC_ATT_RATE",20.),("VEC_ATT_MAX",20.),("MPC_MAN_Y_MAX",120.),("MAN_DEADZONE",0.1),("VEC_HEAD_RATE",20.)] {t.params.insert(name.into(),(value,0,now));}
         validate_script_parameters(&e,&t).unwrap();
-        t.params.get_mut("MPC_TILTMAX_AIR").unwrap().0=34.;assert!(validate_script_parameters(&e,&t).unwrap_err().contains("35"));
-        t.params.get_mut("MPC_TILTMAX_AIR").unwrap().0=35.;t.params.get_mut("VEC_REF_EN").unwrap().0=0.;assert!(validate_script_parameters(&e,&t).unwrap_err().contains("VEC_REF_EN"));
-        t.params.get_mut("VEC_REF_EN").unwrap().0=1.;t.params.get_mut("MAN_DEADZONE").unwrap().2=now-Duration::from_secs(6);assert!(validate_script_parameters(&e,&t).unwrap_err().contains("MAN_DEADZONE"));
+        t.params.get_mut("MPC_TILTMAX_AIR").unwrap().0=19.;assert!(validate_script_parameters(&e,&t).unwrap_err().contains("20"));
+        t.params.get_mut("MPC_TILTMAX_AIR").unwrap().0=20.;
+        t.params.get_mut("CA_MQ_ARANGE").unwrap().0=160.;assert!(validate_script_parameters(&e,&t).unwrap_err().contains("CA_MQ_ARANGE"));
+        t.params.get_mut("CA_MQ_ARANGE").unwrap().0=35.;t.params.get_mut("COM_RC_IN_MODE").unwrap().0=1.;
+        assert!(validate_script_parameters(&e,&t).unwrap_err().contains("COM_RC_IN_MODE"));
+        t.params.get_mut("COM_RC_IN_MODE").unwrap().0=0.;t.params.get_mut("MAN_DEADZONE").unwrap().2=now-Duration::from_secs(6);assert!(validate_script_parameters(&e,&t).unwrap_err().contains("MAN_DEADZONE"));
         t.params.get_mut("MAN_DEADZONE").unwrap().2=now;t.params.get_mut("MPC_MAN_Y_MAX").unwrap().0=0.;assert!(validate_script_parameters(&e,&t).unwrap_err().contains("MPC_MAN_Y_MAX"));
     }
 }

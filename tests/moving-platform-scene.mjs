@@ -9,9 +9,9 @@ import { createHash } from 'node:crypto';
 const work = await mkdtemp(path.join(tmpdir(), 'moving-platform-scene-'));
 try {
   const output = path.join(work, 'test.cjs');
-  await build({ stdin: { contents: `export * from './client/src/sim/sceneMovingPlatform';export * from './client/src/sim/sceneMovingPlatformVisual';export * from './client/src/sim/flightSceneState';export * from './client/src/sim/sceneSignals';export{Group,Mesh,BoxGeometry,MeshBasicMaterial,Box3,Vector3}from'three';`, resolveDir: fileURLToPath(new URL('..', import.meta.url)) }, outfile: output, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+  await build({ stdin: { contents: `export * from './client/src/sim/sceneMovingPlatform';export * from './client/src/sim/sceneMovingPlatformVisual';export * from './client/src/sim/flightSceneState';export * from './client/src/sim/sceneSignals';export * from './client/src/sim/sceneRotors';export * from './client/src/flight-test/xcd20Monitor';export{Group,Mesh,BoxGeometry,MeshBasicMaterial,Box3,Vector3}from'three';`, resolveDir: fileURLToPath(new URL('..', import.meta.url)) }, outfile: output, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
   const api = createRequire(import.meta.url)(output);
-  const { PLATFORM_SIGNAL_KEYS: keys, platformGeometry, readMovingPlatform, FlightSceneFeed, decodeScenePose, demoPackets, createMovingPlatformModel, Group, Mesh, BoxGeometry, MeshBasicMaterial, Box3, Vector3, sceneMonitorKeys, mergeSceneMonitorKeys } = api;
+  const { PLATFORM_SIGNAL_KEYS: keys, platformGeometry, readMovingPlatform, FlightSceneFeed, decodeScenePose, demoPackets, createMovingPlatformModel, Group, Mesh, BoxGeometry, MeshBasicMaterial, Box3, Vector3, sceneMonitorKeys, sceneMonitorPlan, mergeSceneMonitorKeys, rotorReading, rotorRpmKey, xcd20ObservationKeys } = api;
   const geometry = platformGeometry({});
   const values = [1, 1, 2, 3, .1, .2, .3, 2, 4, 3, .25, 1.5, .36, 0, .1];
   const properties = Object.fromEntries(keys.map((key, i) => ['/' + key, values[i]]));
@@ -29,6 +29,49 @@ try {
     const full = Array.from({ length: 32 }, (_, i) => 'user/' + i);
     assert.deepEqual(new Set(mergeSceneMonitorKeys(full, sceneMonitorKeys(model, keys))), new Set(full));
   }
+  const model = 'XCD20_FlightIdentified';
+  const rpmKeys = Array.from({ length: 8 }, (_, i) => rotorRpmKey(model, i));
+  const defaultPlan = sceneMonitorPlan({ instance: '01', model, platformEnabled: true, extraKeys: keys });
+  const defaultSubscription = mergeSceneMonitorKeys([], defaultPlan.keys, defaultPlan.reserved);
+  for (const key of [...keys, ...rpmKeys, 'position/terrain-elevation-asl-ft', 'scene/loaded',
+    'atmosphere/total-wind-north-fps', 'atmosphere/total-wind-east-fps', 'atmosphere/total-wind-down-fps']) {
+    assert(defaultSubscription.includes(key), key);
+  }
+
+  const userKeys = ['propulsion/engine/propeller-rpm', ...Array.from({ length: 31 }, (_, i) => `user/${i}`)];
+  const testKeys = xcd20ObservationKeys({ aircraft: model, requirements: { 'xcd20-takeoff': 1 } });
+  // A custom value may already use the unindexed alias for a platform signal.
+  const plan = sceneMonitorPlan({ instance: '01', model, platformEnabled: true, extraKeys: ['moving-platform/relative-position-m', ...keys] }, testKeys);
+  const selected = mergeSceneMonitorKeys(userKeys, plan.keys, plan.reserved);
+  assert.equal(selected.length, 32);
+  for (const key of [...keys, ...rpmKeys.slice(1), ...testKeys, userKeys[0]]) assert(selected.includes(key), key);
+  assert(!selected.includes(rpmKeys[0]), 'subscribed RPM alias occupies one slot');
+  const disabled = sceneMonitorPlan({ instance: '01', model, platformEnabled: false, extraKeys: keys });
+  assert.deepEqual(new Set(mergeSceneMonitorKeys(userKeys, disabled.keys, disabled.reserved)), new Set(userKeys));
+
+  // Feed the scene only core telemetry and the simulator's rotating VMON batches.
+  const live = new FlightSceneFeed();
+  const samples = new Map(keys.map((key, i) => [key, values[i]]));
+  rpmKeys.forEach((key, i) => samples.set(i === 0 ? userKeys[0] : key, 5000 + i));
+  for (let i = 0; i < 90; i++) {
+    const now = 1000 + i * 40, timestamp = 1 + i * .04;
+    const core = { ...packet, model, timestamp, capture_monotonic_us: now * 1000, properties: {}, scene_property_age_ms: {} };
+    live.ingest(core, now);
+    const batch = selected.slice(i % 8 * 4, (i % 8 + 1) * 4);
+    live.ingestMonitor({ ...core, monitor: { version: 1, revision: 1, sequence: i + 1,
+      samples: Object.fromEntries(batch.map(key => [key, [samples.get(key) ?? null, samples.has(key) ? timestamp : null, false]])) } }, now);
+  }
+  const livePose = live.aircraft.get('01').latest;
+  const now = 1000 + 89 * 40;
+  assert.deepEqual(livePose.platform.relative, [1, 2, 3]);
+  for (let i = 0; i < 8; i++) {
+    const reading = rotorReading(livePose, i, now);
+    assert.equal(reading.rpm, 5000 + i);
+    assert(now - reading.sampleAt < 320);
+    assert.notEqual(reading.visualAngularVelocity, 0);
+    assert.equal(rotorReading(livePose, i, now + 2000).visualAngularVelocity, 0);
+  }
+
   const feed = new FlightSceneFeed(); feed.ingest(packet, 1000);
   feed.ingest({ ...packet, timestamp: 2, properties: {}, scene_property_age_ms: {} }, 2000);
   assert.equal(feed.aircraft.get('01').latest.platform.sampleAt, 1000, 'missing slices preserve age');

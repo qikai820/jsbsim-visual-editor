@@ -5,8 +5,13 @@
 use super::mavlink::Telemetry;
 use std::time::Instant;
 
+pub const VECTOR_TARGETS: [&str; 3] = ["vector-roll-rate", "vector-pitch-rate", "level-switch"];
+pub const VECTOR_PARAMETERS: [&str; 3] = ["RC_MAP_VEC_ROLL", "RC_MAP_VEC_PITCH", "RC_MAP_LEVEL_SW"];
+
+pub const VECTOR_RESERVED: [&str; 4] = ["RC_MAP_FLTMODE", "RC_MAP_KILL_SW", "RC_MAP_ARM_SW", "RC_MAP_RETURN_SW"];
+
 pub fn target(name: &str) -> bool {
-    name == "vector-switch"
+    name == "vector-switch" || VECTOR_TARGETS.contains(&name)
         || (1..=18).any(|i| name == format!("rc{i}"))
         || (1..=6).any(|i| name == format!("aux{i}"))
 }
@@ -23,7 +28,7 @@ pub fn parameter_names(vector: bool) -> Vec<String> {
     names
 }
 pub fn is_parameter(name: &str) -> bool {
-    ["RC_CHAN_CNT", "RC_MAP_ROLL", "RC_MAP_PITCH", "RC_MAP_YAW", "RC_MAP_THROTTLE", "RC_MAP_VECTOR_SW", "RC_MAP_LEVEL_SW"].contains(&name)
+    VECTOR_PARAMETERS.contains(&name) || VECTOR_RESERVED.contains(&name) || ["RC_CHAN_CNT", "RC_MAP_ROLL", "RC_MAP_PITCH", "RC_MAP_YAW", "RC_MAP_THROTTLE", "RC_MAP_VECTOR_SW", "RC_MAP_LEVEL_SW"].contains(&name)
         || (1..=6).any(|i| name == format!("RC_MAP_AUX{i}"))
         || name
             .strip_prefix("RC")
@@ -36,6 +41,7 @@ pub fn is_parameter(name: &str) -> bool {
 pub struct RcProfile {
     calibration: [[f64; 4]; 18],
     pub vector_channel: usize,
+    pub vector_rate_channels: [usize; 3],
     receiver: Option<ReceiverMapping>,
 }
 struct ReceiverMapping {
@@ -87,11 +93,17 @@ impl RcProfile {
         Ok(Self {
             calibration,
             vector_channel: mapped as usize,
+            vector_rate_channels: [0; 3],
             receiver: None,
         })
     }
     pub fn receiver_from_telemetry(t: &Telemetry, since: Instant, vector: bool, required_aux: [bool; 6]) -> Result<Self, String> {
-        let mut profile = Self::from_telemetry(t, since, vector)?;
+        Self::receiver_with_vector_rates(t, since, vector, required_aux, false)
+    }
+
+    pub fn receiver_with_vector_rates(t: &Telemetry, since: Instant, vector: bool,
+        required_aux: [bool; 6], vector_rates: bool) -> Result<Self, String> {
+        let mut profile = Self::from_telemetry(t, since, vector || vector_rates)?;
         let get = |name: &str| -> Result<usize, String> {
             let value = t.params.get(name).filter(|(v, _, at)| v.is_finite() && *at >= since)
                 .map(|p| p.0).ok_or_else(|| format!("遥控器模拟缺少本次读取的参数 {name}"))?;
@@ -120,8 +132,24 @@ impl RcProfile {
         }
         let mut aux = [0; 6];
         for (i, channel) in aux.iter_mut().enumerate() { *channel = mapped(&format!("RC_MAP_AUX{}", i + 1), required_aux[i])?; }
-        profile.vector_channel = mapped("RC_MAP_VECTOR_SW", vector)?;
-        mapped("RC_MAP_LEVEL_SW", false)?;
+        profile.vector_channel = mapped("RC_MAP_VECTOR_SW", vector || vector_rates)?;
+        if vector_rates {
+            for (channel, name) in profile.vector_rate_channels.iter_mut().zip(VECTOR_PARAMETERS) {
+                *channel = mapped(name, true)?;
+                let c = profile.calibration[*channel - 1];
+                if !(c[0] < c[1] && c[1] < c[2]) {
+                    return Err(format!("{name} 对应的 RC{channel} 需要有效的中位和双向行程"));
+                }
+            }
+            for name in VECTOR_RESERVED {
+                let channel = get(name)?;
+                if channel > 0 && profile.vector_rate_channels.iter().chain([&profile.vector_channel]).any(|mapped| *mapped == channel) {
+                    return Err(format!("{name} 与矢量测试通道重复映射 RC{channel}"));
+                }
+            }
+        } else {
+            mapped("RC_MAP_LEVEL_SW", false)?;
+        }
         let mut baseline = profile.values(&[None; 18])?;
         // Retain current switch positions when available; never copy invalid/lost channels.
         if let Some((raw, at)) = &t.rc_channels {
@@ -129,6 +157,18 @@ impl RcProfile {
                 for (i, value) in raw.iter().enumerate() {
                     if (800..=2200).contains(value) { baseline[i] = *value; }
                 }
+            }
+        }
+        if vector_rates {
+            let [roll, pitch, level] = profile.vector_rate_channels;
+            let mut safe = [None; 18];
+            safe[roll - 1] = Some(0.);
+            safe[pitch - 1] = Some(0.);
+            safe[level - 1] = Some(-1.);
+            safe[profile.vector_channel - 1] = Some(-1.);
+            let pwm = profile.values(&safe)?;
+            for (i, value) in safe.iter().enumerate() {
+                if value.is_some() { baseline[i] = pwm[i]; }
             }
         }
         profile.receiver = Some(ReceiverMapping { sticks, aux, baseline });

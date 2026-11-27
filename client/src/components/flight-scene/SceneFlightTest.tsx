@@ -1,5 +1,6 @@
-import { activeTestActions, testTime } from '../../flight-test/scene';
+import { testTime } from '../../flight-test/scene';
 import { openTestToolbox, sessionIsActive, setTestDisplay, startFlightTest, stopFlightTest, testStartReason, testStatusLabels, useFlightTestSession } from '../../flight-test/session';
+import { TestProgressMetrics, useTestProgress } from '../FlightTestProgress';
 import { SceneIcon } from './SceneInstruments';
 import './sceneFlightTest.css';
 
@@ -10,17 +11,17 @@ export function SceneFlightTestPanel({ hidden, selected, model, onSelectInstance
   hidden: boolean; selected: string; model: string; onSelectInstance: (id: string) => void;
 }) {
   const session = useFlightTestSession();
+  const progress = useTestProgress(session);
   if (hidden) return null;
-  const { snapshot, workspace, runDocument, context, starting, stopping } = session;
+  const { snapshot, workspace, context, starting } = session;
   const active = sessionIsActive(session), expanded = session.display === 'details';
-  const status = stopping ? 'exiting' : starting ? 'preflight' : snapshot?.status ?? 'idle';
+  const { status, actions } = progress;
   const hasRun = !!snapshot?.id && !starting;
   const instance = active ? starting ? session.runInstance : snapshot?.binding?.instance ?? session.runInstance : context?.instance;
   const id = instance === undefined || instance === null ? '' : String(instance).padStart(2, '0');
   const mismatch = !!id && Number(selected) !== Number(id);
   const name = hasRun && active ? snapshot.name : workspace.document.name;
   const dryRun = hasRun ? snapshot.dryRun : false;
-  const actions = active && !starting ? activeTestActions(snapshot, runDocument) : [];
   const values = snapshot?.values ?? {};
   const attitude = values['test/attitude/active'] === 1 && active && !starting;
   const heading = values['test/heading/active'] === 1 && active && !starting;
@@ -38,11 +39,21 @@ export function SceneFlightTestPanel({ hidden, selected, model, onSelectInstance
       <strong className="scene-test-name">{name || '未命名测试'}</strong>
       <div className="scene-test-binding"><span>{id ? `实例 ${id}` : '尚未选择实例'}{hasRun && active && snapshot.binding?.model ? ` · ${snapshot.binding.model}` : !mismatch && model ? ` · ${model}` : ''}</span><span>{active ? dryRun ? '离线预演' : '飞控测试' : '待执行'}</span></div>
       {mismatch && active && <div className="scene-test-notice">测试绑定实例 {id}，当前观察 {selected}。<button type="button" onClick={() => onSelectInstance(id)}>查看 {id}</button></div>}
-      <div className="scene-test-current"><span>{active ? '当前动作' : hasRun ? '上次结果' : '待执行'}</span><strong>{starting ? '准备运行前检查' : stopping ? '等待飞控退出确认' : active ? actions[0]?.label ?? '等待执行反馈' : hasRun ? snapshot.exitResult || testStatusLabels[status] : '脚本已载入'}</strong></div>
+      <TestProgressMetrics view={progress} />
+      <div className="scene-test-current">
+        <span>{status === 'failed' ? '失败原因' : active ? status === 'running' ? '当前动作' : '当前阶段' : hasRun ? '上次结果' : '待执行'}</span>
+        <strong>{progress.action || progress.estimate.note || '脚本已载入'}</strong>
+      </div>
       {actions.length > 1 && <div className="scene-test-parallel">并行 · {actions.slice(1).map(action => action.label).join('；')}</div>}
       {(attitude||heading) && <div className="scene-test-hold"><span>连续保持 <output>{held === undefined ? '—' : held.toFixed(1)}{hold !== undefined ? ` / ${hold}` : ''} s</output></span>
         {hold !== undefined && held !== undefined && <progress aria-label="当前姿态连续保持时间" value={held} max={Number(hold)} />}</div>}
       {expanded && <div className="scene-test-details">
+        {progress.steps.length > 0 && <>
+          <div className="scene-test-detail-heading">脚本步骤</div>
+          <ol className="scene-test-steps">{progress.steps.map(step => <li key={step.id} data-status={step.status}>
+            <span>{step.label}</span><span>{step.status}</span>
+          </li>)}</ol>
+        </>}
         <div className="scene-test-detail-heading">正在执行{actions.length > 1 ? ' · 并行任务' : ''}</div>
         {actions.length ? <ul>{actions.map(action => <li key={action.id}>{action.label}</li>)}</ul> : <p>{active ? '等待执行反馈' : '当前没有执行中的动作'}</p>}
         {(attitude || heading || altitude) && <><div className="scene-test-detail-heading">目标与反馈</div><table><thead><tr><th>项目</th><th>目标</th><th>实测</th></tr></thead><tbody>
@@ -55,9 +66,9 @@ export function SceneFlightTestPanel({ hidden, selected, model, onSelectInstance
         <button type="button" className="scene-test-quiet" onClick={() => openTestToolbox(true)}>在工具箱中查看与编辑</button>
       </div>}
       {(session.error || (session.statusError && hasRun)) && <p className="scene-test-error" role="alert">{session.error || `测试状态暂不可用：${session.statusError}`}</p>}
-      </div><footer><span>已运行 <time>{testTime(starting ? 0 : snapshot?.elapsed)}</time></span><div>
+      </div><footer><span>脚本时间 <time>{progress.scriptTime}</time></span><div>
         <button type="button" className="scene-test-quiet" aria-expanded={expanded} onClick={() => setTestDisplay(expanded ? 'compact' : 'details')}>{expanded ? '收起' : '详情'}<SceneIcon name="chevron" /></button>
-        {active ? <StopTest disabled={starting || stopping} stopping={stopping} /> : <>
+        {active ? <StopTest disabled={starting || status === 'exiting'} stopping={status === 'exiting'} /> : <>
           {context ? <><button type="button" disabled={!!previewReason} title={previewReason} onClick={() => start(true)}>预演</button><button type="button" className="scene-test-run" disabled={!!reason} title={reason} onClick={() => start(false)}>执行</button></> : <button type="button" className="scene-test-run" onClick={() => openTestToolbox(true)}>打开工具箱</button>}
         </>}
       </div></footer>
@@ -67,12 +78,21 @@ export function SceneFlightTestPanel({ hidden, selected, model, onSelectInstance
 }
 export function SceneFlightTestStatus({ hidden, onRestore }: { hidden: boolean; onRestore: () => void }) {
   const session = useFlightTestSession();
+  const progress = useTestProgress(session);
   if (!hidden) return null;
-  const active = sessionIsActive(session), { snapshot, starting, stopping } = session;
-  const status = stopping ? 'exiting' : starting ? 'preflight' : snapshot?.status ?? 'idle';
+  const active = sessionIsActive(session), { snapshot, starting } = session;
+  const { status, estimate, percent, elapsed } = progress;
+  const showEstimate = status === 'running' && !['—', '估算中'].includes(estimate.value);
   return <div className="scene-test-status" aria-label="隐藏的仿真测试状态">
-    <button type="button" className="scene-test-status-open" onClick={onRestore}><span className="scene-test-state" data-state={status} role="status">● {snapshot?.dryRun && snapshot.id ? '预演' : '测试'}{testStatusLabels[status] ?? status}</span><time>{testTime(starting ? 0 : snapshot?.elapsed)}</time><SceneIcon name="chevron" /></button>
-    {active && <StopTest disabled={starting || stopping} stopping={stopping} />}
+    <button type="button" className="scene-test-status-open" onClick={onRestore} title="展开仿真测试">
+      <span className="scene-test-state" data-state={status} role="status">● {snapshot?.dryRun && snapshot.id && !starting ? '预演' : '测试'}{testStatusLabels[status] ?? status}</span>
+      {percent !== null && status !== 'idle' && <strong className="scene-test-status-percent">{percent}%</strong>}
+      {showEstimate ? <span className="scene-test-status-eta">{estimate.value.startsWith('等待') || estimate.value === '状态暂不可用'
+        ? estimate.value : (estimate.label === '脚本剩余' ? '脚本剩余 ' : '剩余 ') + estimate.value}</span>
+        : elapsed !== '—' && <time>{elapsed}</time>}
+      <SceneIcon name="chevron" />
+    </button>
+    {active && <StopTest disabled={starting || status === 'exiting'} stopping={status === 'exiting'} />}
     {(session.error || (session.statusError && active)) && <span className="scene-test-error" role="alert">{session.error || '测试状态读取失败，请检查连接'}</span>}
   </div>;
 }

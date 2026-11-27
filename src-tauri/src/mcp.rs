@@ -307,32 +307,8 @@ async fn dispatch(app: tauri::AppHandle, name: &str, args: Value) -> Result<Valu
         }
         "upper_save_report" => {
             arguments(&args, &[])?;
-            let dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| e.to_string())?
-                .join("test-reports");
-            crate::run_blocking(move || {
-                let report = crate::flight_test::flight_test_report()?;
-                if report["result"]["id"].as_u64().unwrap_or(0) == 0 {
-                    return Err("还没有测试记录".into());
-                }
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let path = dir.join(format!(
-                    "test-{}-{}.json",
-                    report["result"]["startedAtUnixMs"], report["result"]["id"]
-                ));
-                let temp =
-                    path.with_extension(format!("{}.tmp", NEXT.fetch_add(1, Ordering::Relaxed)));
-                std::fs::write(
-                    &temp,
-                    serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
-                std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
-                Ok(json!({"path":path,"result":report["result"]}))
-            })
-            .await
+            let directory = crate::flight_test::report::directory(&app)?;
+            crate::run_blocking(move || crate::flight_test::report::save_latest(directory)).await
         }
         _ => Err("Unknown tool".into()),
     }

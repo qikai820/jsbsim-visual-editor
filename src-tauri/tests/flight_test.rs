@@ -200,6 +200,18 @@ fn receiver_mapping_roundtrips_px4_calibration_and_keeps_switch_baseline() {
     let neutral = p.receiver_values([0., 0., 0., 0.5], [0.; 6], &[None; 18]).unwrap();
     assert_eq!([neutral[8], neutral[11], neutral[5]], [1520, 1500, 1900]);
     channels[8] = Some(0.); assert!(p.receiver_values([0.; 4], [0.; 6], &channels).unwrap_err().contains("AUX1"));
+    for (name,value) in [("RC_MAP_VEC_ROLL",13.),("RC_MAP_VEC_PITCH",14.),("RC_MAP_FLTMODE",5.),
+        ("RC_MAP_KILL_SW",6.),("RC_MAP_ARM_SW",0.),("RC_MAP_RETURN_SW",0.)] {
+        t.params.insert(name.to_owned(),(value,0,now));
+    }
+    t.rc_channels.as_mut().unwrap().0[12] = 2000;
+    t.rc_channels.as_mut().unwrap().0[13] = 1000;
+    let configured = RcProfile::receiver_with_vector_rates(&t,now,true,[false;6],true).unwrap();
+    assert_eq!(configured.vector_rate_channels,[13,14,7]);
+    let safe=configured.receiver_values([0.,0.,0.,0.5],[0.;6],&[None;18]).unwrap();
+    assert_eq!([safe[12],safe[13],safe[6],safe[7]],[1500,1500,1000,1000]);
+    t.params.get_mut("RC_MAP_KILL_SW").unwrap().0=13.;
+    assert!(RcProfile::receiver_with_vector_rates(&t,now,true,[false;6],true).err().unwrap().contains("RC_MAP_KILL_SW"));
     t.params.get_mut("RC_MAP_AUX2").unwrap().0 = 9.;
     assert!(RcProfile::receiver_from_telemetry(&t, now, true, [true; 6]).err().unwrap().contains("重复"));
     t.params.get_mut("RC_MAP_AUX2").unwrap().0 = 0.;
@@ -422,12 +434,26 @@ fn four_mode_template_sequences_all_axes_with_one_shared_origin() {
     let(mut mode,mut armed,mut landed)=(1.,false,true);
     let mut angles=std::collections::BTreeSet::new();let mut headings=std::collections::BTreeSet::new();
     let mut returns=std::collections::BTreeSet::new();let mut capture_count=0;let mut limits=[0_f64;3];let mut done=false;
+    let mut tilt=[0_f64;2];
+    let mut commands=std::collections::BTreeSet::new();
+    let mut level_requests=0;
+    let mut previous_level=false;
     for step in 0..4000 {
         let pulsing=e.inputs().unwrap().iter().any(|input|input.owner.contains("_pulse_"));
-        angle_feedback(&mut e,mode,[1.,0.,0.,0.],[0.;3]);
-        for (key,value) in [("test/fc/relative-alt-m",10.),("test/fc/armed",armed as u8 as f64),("test/fc/landed",landed as u8 as f64),
+        let (aux, rc) = e.mapped_channel_outputs(7,[13,14,8]).unwrap();
+        assert_eq!(aux,[0.;6]);
+        let rates=[rc[12].unwrap_or(0.),rc[13].unwrap_or(0.)];
+        let level=rc[7]==Some(1.);
+        level_requests+=(level && !previous_level) as usize;
+        previous_level=level;
+        for i in 0..2 {
+            if rates[i]!=0. {commands.insert((i,rates[i].is_sign_positive()));}
+            tilt[i]=if level {0.} else {tilt[i]+rates[i]*2.};
+        }
+        angle_feedback(&mut e,mode,[1.,0.,0.,0.],[rates[0]*0.4,rates[1]*0.4,0.]);
+        for (key,value) in [("test/fc/roll-deg",tilt[0]),("test/fc/pitch-deg",tilt[1]),("test/fc/relative-alt-m",10.),("test/fc/armed",armed as u8 as f64),("test/fc/landed",landed as u8 as f64),
             ("test/fc/local-x-m",5.),("test/fc/local-y-m",-8.),("test/fc/groundspeed-mps",if pulsing{0.8}else{0.}),
-            ("test/fc/roll-abs-deg",if pulsing{2.}else{0.}),("test/fc/pitch-abs-deg",if pulsing{2.}else{0.}),
+            ("test/fc/roll-abs-deg",if pulsing{2.}else{tilt[0].abs()}),("test/fc/pitch-abs-deg",if pulsing{2.}else{tilt[1].abs()}),
             ("test/profile/altitude-tilt-deg",35.),("test/profile/manual-tilt-deg",60.),("test/profile/yaw-max-rate-deg-s",120.),
             ("test/profile/stick-deadzone",0.1),("test/profile/vector-heading-rate-deg-s",20.)] {e.set(key,value);}
         e.tick(step as f64*0.1).unwrap();assert!(!e.failed(),"{:?}",e.messages);
@@ -448,7 +474,9 @@ fn four_mode_template_sequences_all_axes_with_one_shared_origin() {
         }
         if e.properties.iter().any(|(k,v)|k.contains("bprepare_manual_takeoff")&&k.ends_with("/enabled")&&*v==1.){landed=false;}
     }
-    assert!(done);assert_eq!(angles.len(),214);assert_eq!(headings.len(),52);assert_eq!(limits,[35.,35.,120.]);
+    assert!(done);assert_eq!(angles.len(),92);assert_eq!(headings.len(),52);assert_eq!(limits,[35.,20.,0.]);
+    assert_eq!(commands.len(),4);
+    assert_eq!(level_requests,5);
     assert_eq!(capture_count,1);assert_eq!(e.value("test/manual/origin-x-m"),Some(5.));assert_eq!(e.value("test/manual/origin-y-m"),Some(-8.));
     assert!(e.inputs().unwrap().is_empty());
 }
@@ -554,7 +582,18 @@ fn generated_morphquad_suite_is_importable_and_continuously_controls_height(){
         let angles:Vec<_>=script.properties.keys().filter(|k|k.ends_with("/angle-roll-deg")).collect();
         let recoveries=script.properties.keys().filter(|k|k.ends_with("/recover-reference")).count();
         if f["combined"]==true{assert_eq!(angles.len(),246);assert!(script.end>3600.);assert_eq!(script.properties.keys().filter(|k|k.ends_with("/height-target-m")).count(),15);assert_eq!(recoveries,84);}
-        if f["mode"].is_string(){let motion=f["evaluation"]=="motion-and-braking";assert_eq!(angles.len(),if motion{0}else if f["input"]=="vector"{49}else{37});assert_eq!(script.properties.keys().filter(|k|k.ends_with("/height-target-m")).count(),if motion{3}else if f["input"]=="vector"{2}else{1});assert_eq!(recoveries,if f["mode"]=="MANUAL"{38}else if motion{3}else if f["input"]=="vector"{1}else{0});
+        if f["mode"].is_string(){
+            let motion=f["evaluation"]=="motion-and-braking";
+            let vector=f["input"]=="vector";
+            assert_eq!(angles.len(),if motion||vector{0}else{37});
+            assert_eq!(script.properties.keys().filter(|k|k.ends_with("/height-target-m")).count(),if motion{3}else{1});
+            assert_eq!(recoveries,if f["mode"]=="MANUAL"{38}else if motion{3}else if vector{1}else{0});
+            if vector {
+                let engine=flight_test::engine::Engine::new(script.clone());
+                assert!(engine.needs_vector_rates());
+                assert_eq!(engine.required_aux(),[false;6]);
+                assert!(engine.manual_control_compatible().is_err());
+            }
             for (key,value) in &script.properties {if key.ends_with("/angle-hold-s"){assert_eq!(*value,if f["mode"]=="MANUAL"{2.}else{10.});}}
         }
     }
@@ -1160,8 +1199,29 @@ fn flight_udp_runner_commands_timing_and_failures() {
             thread::sleep(Duration::from_millis(10));
         }
     };
+    let archive_dir = std::env::temp_dir().join(format!("px4-test-report-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let archive = || Some((Ok(archive_dir.clone()), flight_test::report::Metadata {
+        stage_labels: vec!["切换定点".into(), "测试 & <杆量>".into()],
+        aircraft_label: Some("示例机型".into()),
+    }));
+    let check_archive = |id: &str, status: &str, exit_state: &str| {
+        flight_test::report::wait_for_writes();
+        let html = flight_test::report::html_path(&archive_dir, id).unwrap();
+        let record: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(html.with_extension("json")).unwrap()).unwrap();
+        assert_eq!(record["archiveId"], id);
+        assert_eq!(record["result"]["status"], status);
+        assert_eq!(record["result"]["outcome"]["exitState"], exit_state);
+        assert!(record["sourceXml"].as_str().unwrap().contains("<runscript"));
+        std::fs::read_to_string(html).unwrap()
+    };
     thread::sleep(Duration::from_millis(120));
-    let run = flight_test::start(fixture("live"), options.clone()).unwrap();
+    let run = flight_test::start_run(
+        fixture("live"),
+        options.clone(),
+        Some(vec!["b1_2".into(), "b2_3".into()]),
+        archive(),
+    ).unwrap();
     // No frontend polling or timing drives this run.
     thread::sleep(Duration::from_millis(650));
     let done = wait_done(run.id);
@@ -1172,6 +1232,16 @@ fn flight_udp_runner_commands_timing_and_failures() {
         done.logs.iter().map(|l| &l.message).collect::<Vec<_>>()
     );
     assert!(done.exit_result.contains("已确认"));
+    let progress = done.progress.as_ref().expect("structured progress");
+    assert_eq!(progress.total, 2);
+    assert_eq!(progress.completed_at.len(), 2);
+    let script_start = progress.script_started_at.unwrap();
+    let script_finish = progress.script_finished_at.unwrap();
+    assert!(script_start > 0.);
+    assert!(script_start <= progress.completed_at[0] && progress.completed_at[0] < progress.completed_at[1]);
+    assert!(progress.completed_at[1] <= script_finish && script_finish < done.run_elapsed);
+    assert!(progress.active_nodes.is_empty());
+    assert_eq!(flight_test::status().run_elapsed, done.run_elapsed, "terminal time must stop advancing");
     {
         let s = state.lock().unwrap();
         let active: Vec<_> = s.manual.iter().filter(|(_, rc)| rc[1] == 200).collect();
@@ -1202,6 +1272,10 @@ fn flight_udp_runner_commands_timing_and_failures() {
     assert!(record["result"]["startedAtUnixMs"].as_u64().unwrap() > 0);
     assert_eq!(record["result"]["binding"]["system"], 7);
     assert_eq!(record["result"]["binding"]["model"], "ball");
+    let first_archive = record["archiveId"].as_str().unwrap().to_owned();
+    let html = check_archive(&first_archive, "passed", "confirmed");
+    assert!(html.contains("测试 &amp; &lt;杆量&gt;"));
+    assert!(html.contains("HIL 仿真"));
     // Receiver emulation sends the complete sticks/AUX/switch sample through
     // RC_CHANNELS_OVERRIDE for the run and Hold cleanup, without a joystick stream.
     { let mut s = state.lock().unwrap(); s.manual.clear(); s.rc_frames.clear(); s.parameter_reads.clear(); }
@@ -1388,7 +1462,13 @@ fn flight_udp_runner_commands_timing_and_failures() {
         "no old control frames after stop"
     );
     let run = flight_test::start(fixture("long"), options.clone()).unwrap();
-    thread::sleep(Duration::from_millis(150));
+    // Pause after preparation, so this exercises the executing runner rather
+    // than whichever receiver-preparation check happens to observe the pause.
+    let active_deadline = Instant::now() + Duration::from_secs(4);
+    while flight_test::status().status != "running" {
+        assert!(Instant::now() < active_deadline, "wait for running before pausing the simulator");
+        thread::sleep(Duration::from_millis(10));
+    }
     scene_telemetry::PAUSED.store(true, Ordering::Relaxed);
     let done = wait_done(run.id);
     assert_eq!(done.status, "failed");
@@ -1458,7 +1538,7 @@ fn flight_udp_runner_commands_timing_and_failures() {
     state.lock().unwrap().reject_source=false;
     assert!(!flight_test::receiver::status(options.clone()).unwrap().idle_sending);
     state.lock().unwrap().rc_mode=Some(1);thread::sleep(Duration::from_millis(80));
-    let run = flight_test::start(fixture("long"), options.clone()).unwrap();
+    let run = flight_test::start_run(fixture("long"), options.clone(), None, archive()).unwrap();
     thread::sleep(Duration::from_millis(150));
     state.lock().unwrap().silent = true;
     let done = wait_done(run.id);
@@ -1466,7 +1546,53 @@ fn flight_udp_runner_commands_timing_and_failures() {
     assert!(done.exit_result.contains("未确认"));
     alive.store(false, Ordering::Relaxed);
     server.join().unwrap();
+    let lost_id = flight_test::flight_test_report().unwrap()["archiveId"].as_str().unwrap().to_owned();
+    let lost_html = check_archive(&lost_id, "failed", "unconfirmed");
+    assert!(lost_html.contains("失败定位"));
     tool_transport::manager().close(info.session_id).unwrap();
+
+    let preflight = flight_test::start_run(fixture("live"), options.clone(), None, archive()).unwrap();
+    assert_eq!(wait_done(preflight.id).status, "failed");
+    let preflight_id = flight_test::flight_test_report().unwrap()["archiveId"].as_str().unwrap().to_owned();
+    assert!(check_archive(&preflight_id, "failed", "notRequired").contains("本次运行未采集到轨迹"));
+
+    // Preserve a terminal capture when the archive directory cannot be created.
+    let blocked = archive_dir.join("blocked");
+    std::fs::write(&blocked, b"existing file").unwrap();
+    let mut dry = options;
+    dry.dry_run = true;
+    let stopped = flight_test::start_run(fixture("long"), dry.clone(), None,
+        Some((Ok(blocked), flight_test::report::Metadata::default()))).unwrap();
+    assert_eq!(flight_test::stop(Some(stopped.id)).unwrap().status, "stopped");
+    let stopped_id = flight_test::flight_test_report().unwrap()["archiveId"].as_str().unwrap().to_owned();
+    let next = flight_test::start_run(fixture("live"), dry.clone(), None, archive()).unwrap();
+    assert_eq!(wait_done(next.id).status, "passed");
+    let timed_out = flight_test::start_run(fixture("timeout"), dry, None, archive()).unwrap();
+    assert_eq!(wait_done(timed_out.id).status, "failed");
+    let timeout_id = flight_test::flight_test_report().unwrap()["archiveId"].as_str().unwrap().to_owned();
+    let timeout_html = check_archive(&timeout_id, "failed", "simulated");
+    assert!(timeout_html.contains("失败定位") && timeout_html.contains("timeout"));
+    assert!(timeout_html.contains("<canvas"));
+    flight_test::report::wait_for_writes();
+
+    let history = serde_json::to_value(flight_test::report::list(&archive_dir).unwrap()).unwrap();
+    assert!(history.as_array().unwrap().iter().any(|entry| entry["id"] == stopped_id && entry["state"] == "failed"));
+    flight_test::report::retry(archive_dir.clone(), stopped_id.clone()).unwrap();
+    assert!(check_archive(&stopped_id, "stopped", "simulated").contains("离线预演"));
+    assert_eq!(flight_test::report::list(&archive_dir).unwrap().len(), 6);
+    let first_html = flight_test::report::html_path(&archive_dir, &first_archive).unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_slice(&std::fs::read(first_html.with_extension("json")).unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("archiveId");
+    let legacy_result = legacy["result"].as_object_mut().unwrap();
+    for field in ["outcome", "reportStages", "aircraftLabel"] { legacy_result.remove(field); }
+    std::fs::write(archive_dir.join("test-123-7.json"), serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let history = serde_json::to_value(flight_test::report::list(&archive_dir).unwrap()).unwrap();
+    assert!(history.as_array().unwrap().iter().any(|entry| entry["id"] == "test-123-7" && entry["state"] == "recorded"));
+    flight_test::report::retry(archive_dir.clone(), "test-123-7".into()).unwrap();
+    flight_test::report::wait_for_writes();
+    assert!(flight_test::report::html_path(&archive_dir, "test-123-7").is_ok());
+    assert!(flight_test::report::html_path(&archive_dir, "../outside").is_err());
+    std::fs::remove_dir_all(&archive_dir).unwrap();
 }
 
 #[test]
@@ -1497,6 +1623,8 @@ mod px4_firmware {
     pub fn busy()->bool {BUSY.with(|v|v.get())}
     #[derive(serde::Serialize)] pub struct Target {pub path:String,pub simulator:String}
     pub fn ports()->Result<Vec<Target>,String>{Err("offline test".into())}
+    pub fn library_list()->Result<serde_json::Value,String>{Err("offline test".into())}
+    pub fn library_select(_:String,_:String)->Result<serde_json::Value,String>{Err("offline test".into())}
     pub fn status()->Result<serde_json::Value,String>{Ok(serde_json::json!({}))}
     pub fn local(_:&std::path::Path)->Result<serde_json::Value,String>{Err("offline test".into())}
     pub fn remote_file(_:String)->Result<serde_json::Value,String>{Err("offline test".into())}

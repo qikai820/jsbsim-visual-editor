@@ -1,0 +1,81 @@
+:root {
+  color-scheme: light dark;
+  --page: light-dark(#f2f5f9, #121820);
+  --paper: light-dark(#fff, #1b2430);
+  --ink: light-dark(#17273a, #edf3fa);
+  --muted: light-dark(#4d6176, #abbdd1);
+  --line: light-dark(#d9e3ee, #394959);
+  --blue: light-dark(#194f91, #8ebef9);
+  --blue-bg: light-dark(#eaf2fe, #233c5b);
+  --red: light-dark(#a82f31, #ffaaa9);
+  --red-bg: light-dark(#fff0ee, #40262b);
+  --green: light-dark(#1c644a, #a6e4cb);
+  --green-bg: light-dark(#e8f5ef, #233d37);
+  --series-0: light-dark(#136ecd, #78b5ff);
+  --series-1: light-dark(#966313, #eeb86b);
+  --series-2: light-dark(#7f54a5, #d1a8f2);
+  --series-3: light-dark(#228066, #6ed7b5);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; border-top: 4px solid var(--blue);
+  background: var(--page); color: var(--ink);
+  font: 400 14px/1.55 system-ui, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 1056px; margin: auto; padding: 24px clamp(12px, 3.5vw, 38px) 28px; }
+h1, h2, p, dl, dd, figure, ol { margin: 0; }
+h1 { margin: 6px 0 9px; font-size: clamp(22px, 4vw, 33px); line-height: 1.2; font-weight: 650; overflow-wrap: anywhere; }
+h2 { margin-bottom: 9px; font-size: 17px; font-weight: 625; line-height: 1.4; }
+.kicker { color: var(--blue); font-size: 13px; font-weight: 620; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.meta, .muted { color: var(--muted); font-size: 12px; }
+.mode, .pill { display: inline-block; padding: 2px 8px; border-radius: 5px; white-space: nowrap; font-size: 12px; font-weight: 560; }
+.mode { color: var(--blue); background: var(--blue-bg); }
+.pass { color: var(--green); }
+.fail { color: var(--red); }
+.skip { color: var(--muted); }
+.pill.pass { background: var(--green-bg); }
+.pill.fail { background: var(--red-bg); }
+.pill.skip { background: var(--page); }
+.sheet { margin-top: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.outcome { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.2fr) minmax(0, .9fr); }
+.outcome > div { padding: 13px 16px; min-width: 0; }
+.outcome > div + div { border-left: 1px solid var(--line); }
+dt { color: var(--muted); font-size: 12px; }
+.outcome dd { margin-top: 4px; font-size: clamp(15px, 2.4vw, 20px); line-height: 1.25; font-weight: 650; }
+.section { padding: 15px 16px; overflow-wrap: anywhere; }
+.section + .section, .outcome + .section { border-top: 1px solid var(--line); }
+.finding { background: var(--red-bg); padding: 11px 13px; border-left: 3px solid var(--red); border-radius: 0 6px 6px 0; white-space: pre-wrap; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 7px 8px; text-align: left; vertical-align: top; }
+th:first-child { width: 59%; padding-left: 0; }
+th:last-child, td:last-child { padding-right: 0; }
+thead th { color: var(--muted); font-size: 12px; font-weight: 550; }
+tbody tr { border-top: 1px solid var(--line); }
+tbody th { font-weight: 520; }
+summary { color: var(--blue); font-weight: 625; cursor: pointer; }
+summary:focus-visible, a:focus-visible { outline-offset: 4px; }
+details:not(.section) { margin: 10px 0; }
+details[open] > summary { margin-bottom: 8px; }
+.events { padding: 0; list-style: none; }
+.events li { display: grid; grid-template-columns: 10ch minmax(0, 1fr); gap: 8px; padding-top: 5px; }
+.events time { color: var(--muted); }
+.setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px 16px; }
+.setup + p { margin-top: 10px; }
+a { color: var(--blue); }
+.chart { margin: 12px 0; break-inside: avoid; }
+.chart figcaption { font-weight: 560; }
+.legend { list-style: none; padding: 0; margin: 4px 0; display: flex; flex-wrap: wrap; gap: 3px 14px; color: var(--muted); font-size: 12px; }
+.swatch { display: inline-block; width: 14px; margin-right: 5px; vertical-align: middle; border-top: 2px solid; }
+.tone-0 { color: var(--series-0); }.tone-1 { color: var(--series-1); border-top-style: dashed; }
+.tone-2 { color: var(--series-2); border-top-style: dotted; }.tone-3 { color: var(--series-3); border-top-style: dashed; }
+.marker { color: var(--red); border-top-style: dotted; }
+.plot { height: 184px; min-width: 0; }
+canvas { display: block; width: 100%; height: 100%; }
+@media (max-width: 440px) {
+  .outcome > div { padding-inline: 9px; }
+  .section { padding-inline: 11px; }
+  th, td { padding-inline: 4px; }
+  th:first-child { width: 52%; }
+}

@@ -5,12 +5,12 @@ type Mode = 'MANUAL'|'ALTCTL'|'POSCTL';
 type Axis = 'pitch'|'roll';
 export type BuiltinTest = {id:string;label:string;file:string;mode?:Mode;axis?:Axis;input?:'normal'|'vector'};
 export const BUILTIN_TESTS:readonly BuiltinTest[] = [
-  {id:'four_mode_complete',label:'完整四模式 · 手动/定高±35°回位 · 航向±90° · 矢量±120°',file:'10_four_mode_complete.xml'},
+  {id:'four_mode_complete',label:'完整四模式 · 矢量速率 / 回中保持 / 一键回平',file:'10_four_mode_complete.xml'},
   {id:'four_manual',label:'四模式分组 · 手动三轴 / 每点回位零速',file:'11_four_manual.xml'},
   {id:'four_altctl',label:'四模式分组 · 定高三轴 / 每点回位零速',file:'12_four_altctl.xml'},
   {id:'four_posctl',label:'四模式分组 · 普通定点打杆 / 航向±90°',file:'13_four_posctl.xml'},
-  {id:'four_vector',label:'四模式分组 · 矢量双轴±120° / 航向±90°',file:'14_four_vector.xml'},
-  {id:'complete',label:'旧版九阶段 · 普通±45° / 矢量±120°',file:'morphquad_complete.xml'},
+  {id:'four_vector',label:'四模式分组 · 矢量双轴速率 / 一键回平',file:'14_four_vector.xml'},
+  {id:'complete',label:'旧固件九阶段 · 矢量 AUX 角度',file:'morphquad_complete.xml'},
   {id:'prepare',label:'手动油门起飞 · 控高悬停',file:'00_prepare_hover.xml'},
   {id:'manual_pitch',label:'普通手动 · Pitch ±45° / 5°',file:'01_manual_pitch.xml',mode:'MANUAL',axis:'pitch',input:'normal'},
   {id:'manual_roll',label:'普通手动 · Roll ±45° / 5°',file:'02_manual_roll.xml',mode:'MANUAL',axis:'roll',input:'normal'},
@@ -18,11 +18,11 @@ export const BUILTIN_TESTS:readonly BuiltinTest[] = [
   {id:'altctl_roll',label:'普通定高 · Roll ±45° / 5°',file:'04_altctl_roll.xml',mode:'ALTCTL',axis:'roll',input:'normal'},
   {id:'posctl_pitch',label:'普通定点 · Pitch 主杆 ±60% / 2s · 回中刹停',file:'05_posctl_pitch.xml',mode:'POSCTL',axis:'pitch',input:'normal'},
   {id:'posctl_roll',label:'普通定点 · Roll 主杆 ±60% / 2s · 回中刹停',file:'06_posctl_roll.xml',mode:'POSCTL',axis:'roll',input:'normal'},
-  {id:'vector_pitch',label:'矢量定点 · AUX2 Pitch ±120° / 10°',file:'07_vector_pitch.xml',mode:'POSCTL',axis:'pitch',input:'vector'},
-  {id:'vector_roll',label:'矢量定点 · AUX1 Roll ±120° / 10°',file:'08_vector_roll.xml',mode:'POSCTL',axis:'roll',input:'vector'},
+  {id:'vector_pitch',label:'矢量定点 · Pitch 速率与回平',file:'07_vector_pitch.xml',mode:'POSCTL',axis:'pitch',input:'vector'},
+  {id:'vector_roll',label:'矢量定点 · Roll 速率与回平',file:'08_vector_roll.xml',mode:'POSCTL',axis:'roll',input:'vector'},
   {id:'xcd20_normal_takeoff',label:'XCD20 普通起飞 · 手动 / 定高 / 定点',file:'XCD20_NormalTakeoff.xml'},
   {id:'xcd20_rail_takeoff',label:'XCD20 双杆自动起飞 → 定点悬停与刹停',file:'XCD20_RailTakeoff.xml'},
-  {id:'posctl_regression',label:'定点专项 · 手动起飞 / 普通打杆刹停 / AUX ±5°',file:'09_posctl_regression.xml'},
+  {id:'posctl_regression',label:'定点专项 · 普通打杆刹停 / 矢量速率',file:'09_posctl_regression.xml'},
 ];
 export function sweepPoints(limit:number,step=10):number[]{
   const rising=Array.from({length:Math.floor(limit/step)},(_,i)=>(i+1)*step);
@@ -84,16 +84,65 @@ function sweep(preset:BuiltinTest,height:number,vectorLimit=120,vectorStep=10):T
         [block(prefix+'_height','altitude',{target:height,duration:budget+10})]],
     }];
 }
+const vectorRequirements = {'morphquad-servo-range-deg':35};
+const channel=(id:string,target:string,value:number)=>block(id,'channel',{channel:target,action:'set',value});
+
+function vectorRateChecks(prefix:string,axes:readonly Axis[]):TestBlock[]{
+  const waitFor=(id:string,field:string,op:string,value:number,timeout:number)=>
+    block(prefix+'_'+id,'wait_state',{field,op,value,timeout});
+  const level=(id:string):TestBlock[]=>[
+    channel(prefix+'_'+id+'_press','level-switch',100),
+    block(prefix+'_'+id+'_pulse','wait',{duration:.25}),
+    channel(prefix+'_'+id+'_release','level-switch',-100),
+    waitFor(id+'_roll','roll-abs-deg','le',1.5,6),
+    waitFor(id+'_pitch','pitch-abs-deg','le',1.5,6),
+  ];
+  return [
+    ...level('initial_level'),
+    ...axes.flatMap(axis=>[1,-1].flatMap(sign=>{
+      const id=axis+(sign>0?'_positive':'_negative');
+      const axisChannel='vector-'+axis+'-rate',op=sign>0?'ge':'le';
+      return [
+        channel(prefix+'_'+id+'_command',axisChannel,35*sign),
+        waitFor(id+'_rotate',axis+'-rate-rad-s',op,.03*sign,2),
+        waitFor(id+'_angle',axis+'-deg',op,3*sign,2),
+        channel(prefix+'_'+id+'_center',axisChannel,0),
+        block(prefix+'_'+id+'_settle','wait',{duration:.8}),
+        {...block(prefix+'_'+id+'_hold','parallel',{join:'all',timeout:2}),lanes:[
+          [block(prefix+'_'+id+'_nonzero','observe',{field:axis+'-deg',min:sign>0?1.5:-12,max:sign>0?12:-1.5,duration:1,reference:'absolute'})],
+          [block(prefix+'_'+id+'_steady','observe',{field:axis+'-deg',min:-1,max:1,duration:1,reference:'start'})],
+          [block(prefix+'_'+id+'_hold_rate','observe',{field:axis+'-rate-rad-s',min:-.07,max:.07,duration:1,reference:'absolute'})],
+        ]},
+        ...level(id+'_level'),
+      ];
+    })),
+  ];
+}
+
+function vectorRateEntry(prefix:string,height:number):TestBlock[]{
+  return [
+    block(prefix+'_input','input_mode',{input:'normal'}),
+    block(prefix+'_neutral','neutral'),
+    channel(prefix+'_off','vector-switch',-100),
+    channel(prefix+'_level_off','level-switch',-100),
+    channel(prefix+'_roll_center','vector-roll-rate',0),
+    channel(prefix+'_pitch_center','vector-pitch-rate',0),
+    block(prefix+'_throttle','throttle',{value:50}),
+    block(prefix+'_mode','mode',{mode:'POSCTL'}),
+    ...brake(prefix+'_entry',height),
+    channel(prefix+'_switch','vector-switch',100),
+  ];
+}
 const FOUR_MODE_GROUPS = ['manual','altctl','posctl','vector'] as const;
 function fourModeGroup(group:typeof FOUR_MODE_GROUPS[number],height:number):TestBlock[]{
   const prefix='bfour_'+group,returning=group==='manual'||group==='altctl';
   const mode=group==='manual'?'MANUAL':group==='altctl'?'ALTCTL':'POSCTL';
-  const input=group==='vector'?'vector':'normal';
+  const input='normal';
   const recover=(id:string)=>block(prefix+'_'+id,'manual_recover',{reference:'return',mode});
   const lane:TestBlock[]=[];
   if(returning)lane.push(recover('entry_return'));
-  if(returning||group==='vector')for(const axis of ['pitch','roll'] as const){
-    const limit=returning?35:120,step=returning?5:10;
+  if(returning)for(const axis of ['pitch','roll'] as const){
+    const limit=group==='altctl'?20:35,step=5;
     const point=(id:string,angle:number,relative=false)=>block(prefix+'_'+axis+'_'+id,relative?'attitude_delta':'attitude',{
       roll:axis==='roll'?angle:0,pitch:axis==='pitch'?angle:0,hold:returning?2:10,timeout:returning?12:40,
     });
@@ -110,11 +159,14 @@ function fourModeGroup(group:typeof FOUR_MODE_GROUPS[number],height:number):Test
   }
   const budget=returning?10000:3000;
   const start=[block(prefix+'_input','input_mode',{input}),block(prefix+'_neutral','neutral'),
-    block(prefix+'_switch','channel',{channel:'vector-switch',action:'set',value:group==='vector'?100:-100}),
+    block(prefix+'_switch','channel',{channel:'vector-switch',action:'set',value:-100}),
     block(prefix+'_throttle','throttle',{value:50}),block(prefix+'_mode','mode',{mode})];
   // Normal-position motion retains the measured response/braking acceptance.
   const motions=group==='posctl'?BUILTIN_TESTS.filter(p=>p.mode==='POSCTL'&&p.input==='normal').flatMap(p=>positionMotion(p,height)):[];
-  return [...start,...(returning?[]:brake(prefix+'_entry',height)),...motions,{
+  const setup=group==='vector'
+    ? [...vectorRateEntry(prefix,height),...vectorRateChecks(prefix,['pitch','roll'])]
+    : [...start,...(returning?[]:brake(prefix+'_entry',height)),...motions];
+  return [...setup,{
     ...block(prefix+'_actions','parallel',{join:'any',timeout:budget}),
     lanes:[lane,[block(prefix+'_height','altitude',{target:height,duration:budget+10})]],
   },block(prefix+'_done','mark',{text:`${group} 三轴测试完成`})];
@@ -122,9 +174,9 @@ function fourModeGroup(group:typeof FOUR_MODE_GROUPS[number],height:number):Test
 function fourModeDocument(id:string,height:number):TestDocument{
   const complete=id==='four_mode_complete';
   const groups=complete?[...FOUR_MODE_GROUPS]:[id.slice(5) as typeof FOUR_MODE_GROUPS[number]];
-  const doc:TestDocument={version:1,name:complete?`MorphQuad 完整四模式 · ${height}m · ±35°回位 / 航向±90° / 矢量±120°`:`MorphQuad ${groups[0]} 三轴分组 · ${height}m`,
+  const doc:TestDocument={version:1,name:complete?`MorphQuad 完整四模式 · ${height}m · 手动±35° / 定高±20° / 矢量速率`:`MorphQuad ${groups[0]} 三轴分组 · ${height}m`,
     aircraft:'MorphQuad',initialize:'current-instance',duration:14400,rateHz:50,throttle:0,clock:'realtime',onFinish:'land',onAbort:'land',
-    requirements:{...(groups.some(g=>g==='manual'||g==='altctl')?{'manual-tilt-deg':35}:{}),...(groups.includes('altctl')?{'altitude-tilt-deg':35}:{}),...(groups.includes('vector')?{'vector-tilt-deg':120}:{})},
+    requirements:{...(groups.some(g=>g==='manual'||g==='altctl')?{'manual-tilt-deg':35}:{}),...(groups.includes('altctl')?{'altitude-tilt-deg':20}:{}),...(groups.includes('vector')?vectorRequirements:{})},
     blocks:[block('bfour_prepare','mark',{text:'准备：手动起飞、统一原点与基准航向'}),...preparation(height),
       {...block('bfour_capture','parallel',{join:'any',timeout:135}),lanes:[
         [block('bfour_reference','manual_recover',{reference:'capture',mode:'MANUAL'})],
@@ -151,11 +203,16 @@ export function builtinDocument(id:string,height=id.startsWith('xcd20_')?3:10):T
       doc.blocks.push(block('bcomplete_stage','mark',{text:'9 个阶段完成，回中后降落并确认上锁'}));
     }
   }else if(id==='posctl_regression'){
-    doc.name=`MorphQuad 定点专项 · ${height}m · 普通主杆打杆刹停 / 矢量 AUX ±5°`;
+    doc.name=`MorphQuad 定点专项 · ${height}m · 普通刹停 / 矢量速率与回平`;
     doc.duration=900;doc.throttle=0;doc.onFinish='land';
-    doc.blocks=[...preparation(height),...BUILTIN_TESTS.filter(p=>p.mode==='POSCTL').flatMap(p=>[
-      block('b'+p.id+'_stage','mark',{text:p.input==='vector'?`矢量 AUX ${p.axis} ±5°，每点保持10s`:p.label}),...sweep(p,height,5,5),
-    ])];
+    doc.requirements=vectorRequirements;
+    doc.blocks=[...preparation(height),...BUILTIN_TESTS.filter(p=>p.mode==='POSCTL'&&p.input==='normal').flatMap(p=>positionMotion(p,height)),
+      ...vectorRateEntry('bvector_regression',height),...vectorRateChecks('bvector_regression',['pitch','roll'])];
+  }else if(preset.input==='vector'){
+    doc.name=`MorphQuad ${preset.label}`;
+    doc.requirements=vectorRequirements;
+    doc.blocks=[block('bcheck_armed','assert',{field:'armed',op:'eq',value:1,timeout:1}),block('bcheck_airborne','assert',{field:'landed',op:'eq',value:0,timeout:1}),
+      ...vectorRateEntry('b'+id,height),...vectorRateChecks('b'+id,[preset.axis!])];
   }else{
     const motion=preset.mode==='POSCTL'&&preset.input==='normal';
     doc.name=`MorphQuad ${preset.label}${motion?'':preset.mode==='MANUAL'?' · 到位后2s / 每点回位零速':' · 到位后10s'}`;

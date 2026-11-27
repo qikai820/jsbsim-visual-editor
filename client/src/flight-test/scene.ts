@@ -1,5 +1,6 @@
 import { AXIS_LABEL, CHANNELS, DEFS, flatten, type TestBlock, type TestDocument } from './model';
 import type { TestSnapshot } from './session';
+import type { RunProgressPlan } from './progress';
 
 export const testTime = (seconds = 0) => {
   const total = Math.max(0, Math.floor(seconds));
@@ -27,11 +28,23 @@ export function testActionLabel(block: TestBlock, snapshot: TestSnapshot): strin
     default: return DEFS[block.type].label;
   }
 }
-export function activeTestActions(snapshot: TestSnapshot | null, document: TestDocument | null) {
+export function activeTestActions(snapshot: TestSnapshot | null, document: TestDocument | null, plan?: RunProgressPlan | null) {
   if (!snapshot) return [];
   const ids = new Set(snapshot.activeBlocks);
   const blocks = document ? flatten(document.blocks).filter(b => ids.has(b.id) && !['loop', 'parallel', 'branch'].includes(b.type)) : [];
-  if (blocks.length) return blocks.map(block => ({ id: block.id, label: testActionLabel(block, snapshot), block }));
+  if (blocks.length) {
+    const rounds = new Map<string, string>();
+    if (plan?.runId === snapshot.id) {
+      for (const node of snapshot.progress?.activeNodes ?? []) {
+        const iteration = plan.rounds[node];
+        if (iteration?.length) {
+          rounds.set(node.slice(0, node.lastIndexOf('_')), iteration.map(r => `第 ${r.index} / ${r.count} 轮`).join(' · '));
+        }
+      }
+    }
+    return blocks.map(block => ({ id: block.id,
+      label: [testActionLabel(block, snapshot), rounds.get(block.id)].filter(Boolean).join(' · '), block }));
+  }
   const actions: Array<{ id: string; label: string; block?: TestBlock }> = [];
   if (snapshot.values['test/heading/active'] === 1) actions.push({id:'heading',label:`航向步进 · 相对 ${signed(snapshot.values['test/heading/relative-target-deg'] ?? '—')}°`});
   if (snapshot.values['test/attitude/active'] === 1) actions.push({ id: 'attitude', label: `姿态步进 · R ${signed(snapshot.values['test/attitude/roll-target-deg'] ?? '—')}° / P ${signed(snapshot.values['test/attitude/pitch-target-deg'] ?? '—')}°` });

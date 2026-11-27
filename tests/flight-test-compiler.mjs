@@ -76,14 +76,18 @@ try{
   assert(blocks.filter(n=>['attitude','attitude_delta'].includes(n.type)).every(n=>n.p.hold===(manual?2:10)));
   assert.equal(blocks.filter(n=>n.type==='manual_recover').length,manual?6:preset.mode==='POSCTL'?(preset.input==='normal'?3:1):0);
   if(manual)for(const loop of blocks.filter(n=>n.type==='loop'))assert.deepEqual(loop.body.map(n=>n.type),['attitude_delta','manual_recover']);
-  assert.equal(blocks.find(n=>n.type==='channel'&&n.p.channel==='vector-switch').p.value,preset.input==='vector'?100:-100);
+  assert.equal(blocks.find(n=>n.type==='channel'&&n.p.channel==='vector-switch').p.value,-100);
   if(preset.mode==='POSCTL'&&preset.input==='normal'){
    assert(!blocks.some(n=>['attitude','attitude_delta'].includes(n.type)),'normal POSCTL must not wait for a sustained angle');
    assert.deepEqual(blocks.filter(n=>n.type==='pulse').map(n=>[n.p.axis,n.p.value,n.p.duration]),[[preset.axis,60,2],[preset.axis,-60,2]]);
    assert.equal(blocks.filter(n=>n.type==='wait_state'&&n.p.field===preset.axis+'-abs-deg'&&n.p.op==='ge').length,2,'each pulse requires an actual tilt response');
    assert.equal(blocks.filter(n=>n.type==='manual_recover'&&n.p.reference==='stop').length,3,'entry and both directions use the shared recovery block');
   }
-  if(preset.input==='vector')assert(blocks.filter(n=>n.type==='loop').every(n=>n.p.count===12));
+  if(preset.input==='vector'){
+   assert(!blocks.some(n=>['attitude','attitude_delta'].includes(n.type)));
+   assert.deepEqual(blocks.filter(n=>n.type==='channel'&&n.p.channel==='vector-'+preset.axis+'-rate'&&n.p.value!==0).map(n=>n.p.value),[35,-35]);
+   assert(blocks.some(n=>n.type==='channel'&&n.p.channel==='level-switch'&&n.p.value===100));
+  }
  }
  const regression=builtinDocument('posctl_regression'),regressionBlocks=flatten(regression.blocks);
  assert.equal(regression.onFinish,'land');assert.equal(regressionBlocks.filter(n=>n.type==='pulse').length,4);
@@ -93,12 +97,12 @@ try{
  assert(all.filter(n=>n.type==='input_mode').some(n=>n.p.input==='vector'));
  assert.throws(()=>builtinDocument('complete',0),/高度/);
  const four=builtinDocument('four_mode_complete'),fourBlocks=flatten(four.blocks);
- assert.deepEqual(four.requirements,{'manual-tilt-deg':35,'altitude-tilt-deg':35,'vector-tilt-deg':120});
+ assert.deepEqual(four.requirements,{'manual-tilt-deg':35,'altitude-tilt-deg':20,'morphquad-servo-range-deg':35});
  assert.equal(four.onAbort,'land');assert.equal(fourBlocks.filter(n=>n.type==='heading').length,52);
  assert.equal(fourBlocks.filter(n=>n.type==='manual_recover'&&n.p.reference==='capture').length,1,'one fixed origin for the whole plan');
  for(const group of ['manual','altctl']){
   const blocks=fourBlocks.filter(n=>n.id.startsWith('bfour_'+group+'_'));
-  assert(blocks.filter(n=>n.type==='loop').every(n=>n.p.count===7));
+  assert(blocks.filter(n=>n.type==='loop').every(n=>n.p.count===(group==='manual'?7:4)));
   assert(blocks.filter(n=>['attitude','attitude_delta','heading'].includes(n.type)).every(n=>n.p.hold===2));
   assert.deepEqual(blocks.filter(n=>n.type==='heading').map(n=>n.p.target),sweepPoints(90,30));
   assert.equal(blocks.filter(n=>n.type==='manual_recover'&&n.p.reference==='return').length,24);

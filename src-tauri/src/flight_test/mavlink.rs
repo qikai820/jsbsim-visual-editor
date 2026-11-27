@@ -148,6 +148,7 @@ pub struct Telemetry {
     pub mode: u8,
     pub generation: u64,
     pub uid: Option<u64>,
+    pub flight_sw_version: Option<u32>,
     pub samples: BTreeMap<String, (f64, Instant)>,
     pub acks: BTreeMap<u16, Ack>,
     pub params: BTreeMap<String, (f64, u16, Instant)>,
@@ -218,6 +219,7 @@ impl Telemetry {
                     .is_some_and(|old| boot.saturating_add(1000) < old && old - boot < 0xffff0000)
                 {
                     self.generation += 1;
+                    self.flight_sw_version = None;
                 }
                 self.boot_ms = Some(boot);
                 if frame.id == 31 {
@@ -303,6 +305,8 @@ impl Telemetry {
                 if uid != 0 {
                     self.uid = Some(uid);
                 }
+                let version = u32_at(p, 16);
+                self.flight_sw_version = (version != 0).then_some(version);
                 let flags = u64::from_le_bytes(p[0..8].try_into().unwrap());
                 self.param_bytewise = flags & 16 != 0 || flags & 131072 == 0;
             }
@@ -318,6 +322,9 @@ impl Telemetry {
                     "VEC_HEAD_RATE",
                     "VEC_REF_EN",
                     "VEC_ATT_MAX",
+                    "VEC_ATT_RATE",
+                    "CA_MQ_ARANGE",
+                    "CA_MQ_BRANGE",
                     "COM_RC_IN_MODE",
                 ]
                 .contains(&name)

@@ -2,7 +2,7 @@ import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, typ
 import { createPortal } from 'react-dom';
 import { listenSceneFrames, listenTelemetry, simInstanceControl } from '../../utils/tauriApi';
 import { captureGroundOrigin, FlightSceneFeed, demoPackets, localPosition, propertyAgeMs, SCENE_COLORS, STALE_MS, type CameraMode, type ScenePose } from '../../sim/flightSceneState';
-import { listenSceneMonitor, mergeSceneMonitorKeys, sceneMonitorKeys, type SceneMonitorTarget } from '../../sim/sceneSignals';
+import { listenSceneMonitor, mergeSceneMonitorKeys, sceneMonitorPlan, type SceneMonitorTarget } from '../../sim/sceneSignals';
 import { canonicalMonitorProperty } from '../../sim/monitorIdentity';
 import { loadSceneDisplay, SCENE_DISPLAY_KEY, sceneValueKeys, type SceneDisplay } from '../../sim/sceneInstruments';
 import { CircularSceneHud, SceneIcon, SceneInstrumentSettings, SceneValueGrid } from './SceneInstruments';
@@ -97,10 +97,11 @@ function WindStatus({ pose, instance, demo, now }: { pose?: ScenePose; instance:
   </div>;
 }
 
-export default function FlightScene({ onClose, slots = {}, initialSelected = '01', onMonitorTargetChange, toolbarHost }: {
+export default function FlightScene({ onClose, slots = {}, initialSelected = '01', onMonitorTargetChange, toolbarHost, monitorKeys }: {
   onClose: () => void; slots?: Record<string, string>; initialSelected?: string;
   onMonitorTargetChange?: (target: SceneMonitorTarget | null) => void;
   toolbarHost?: HTMLElement | null;
+  monitorKeys?: string[];
 }) {
   const [feed, setFeed] = useState(() => new FlightSceneFeed());
   const [demo, setDemo] = useState(false);
@@ -167,9 +168,9 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const monitorSignature = monitorExtras.join('\n');
   const modelOrigin = useSceneModelOrigin(selectedModel, !demo, editor.applyModelOrigin, captureGroundOrigin(entry, now));
   useEffect(() => {
-    onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel, extraKeys: monitorSignature ? monitorSignature.split('\n') : [] });
+    onMonitorTargetChange?.(demo ? null : { instance: selected, model: selectedModel, platformEnabled, extraKeys: monitorSignature ? monitorSignature.split('\n') : [] });
     return () => onMonitorTargetChange?.(null);
-  }, [onMonitorTargetChange, demo, selected, selectedModel, monitorSignature]);
+  }, [onMonitorTargetChange, demo, selected, selectedModel, platformEnabled, monitorSignature]);
   const online = [...feed.aircraft.values()].filter(item => fresh(item.latest, now)).length;
   const ids = [...new Set([...Object.keys(slots).filter(id => slots[id]), ...feed.aircraft.keys()])].sort();
   const selectedFresh = fresh(pose, now);
@@ -218,9 +219,8 @@ export default function FlightScene({ onClose, slots = {}, initialSelected = '01
   const editScene = () => { const enabled = !editor.enabled; editor.setEnabled(enabled); setFocus(false); setPanel(enabled ? 'editor' : null); };
   const toggleTrend = () => { setFocus(false); setDisplay(current => ({ ...current, trend: !current.trend })); };
   const openInstruments = (hud = false, index = valueSelected) => { setFocus(false); setHudSettings(hud); setValueSelected(index); setPanel('instruments'); };
-  const userProject = useSignalMonitorStore.getState().project;
-  const userKeys = [...Object.values(userProject.labels).flatMap(label => label.bindings), ...userProject.scopes.flatMap(scope => scope.channels)].map(binding => binding.key);
-  const subscribed = new Set(mergeSceneMonitorKeys(userKeys, sceneMonitorKeys(selectedModel, monitorExtras)).map(canonicalMonitorProperty));
+  const plan = sceneMonitorPlan({ instance: selected, model: selectedModel, platformEnabled, extraKeys: monitorExtras });
+  const subscribed = new Set((monitorKeys ?? mergeSceneMonitorKeys([], plan.keys, plan.reserved)).map(canonicalMonitorProperty));
   const platformChannelsAvailable = PLATFORM_SIGNAL_KEYS.every(key => subscribed.has(canonicalMonitorProperty(key)));
   const unavailableKeys = demo ? [] : customKeys.filter(key => !subscribed.has(canonicalMonitorProperty(key)));
   const rightOpen = !focus && (panel === 'telemetry' || panel === 'instruments' || editor.enabled && panel === 'editor');

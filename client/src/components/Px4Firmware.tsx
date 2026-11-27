@@ -11,6 +11,18 @@ type Library = { simulator:string; root:string; entries:Entry[]; warnings:string
 type Snapshot = { id:number; running:boolean; stage:string; completed:number; total:number; message:string; canCancel:boolean; target:UsbTarget|null; firmware:Firmware|null; board:{boardId:number; boardRevision:number; protocol:number; flashSize:number}|null; archive?:Entry|null };
 const size = (n:number) => n >= 1048576 ? (n/1048576).toFixed(2)+' MiB' : (n/1024).toFixed(1)+' KiB';
 const date = (n:number|null|undefined) => n ? new Date(n).toLocaleString('zh-CN',{hour12:false}) : '尚未使用';
+const packageTime = (seconds?:number|null) => {
+  if (!seconds || seconds < 0) return null;
+  const value = new Date(seconds * 1000);
+  if (Number.isNaN(value.getTime())) return null;
+  const pad = (n:number) => String(n).padStart(2, '0');
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+};
+function FirmwareTime({value}:{value?:string|null}) {
+  if (!value) return <span className="px4-muted">未提供</span>;
+  const [day, clock] = value.split(' ');
+  return <time dateTime={`${day}T${clock}`}>{day}<span>{clock}</span></time>;
+}
 const hardware = (f:Metadata) => f.hardware || `Board ID ${f.boardId}`;
 const stages:Record<string,string> = {archive:'保存到固件库',waiting:'等待 Bootloader',upload:'上传固件',erase:'擦除 Flash',program:'写入固件',verify:'校验固件',reboot:'重启飞控',complete:'升级完成',error:'升级失败',cancelled:'已取消'};
 
@@ -118,20 +130,23 @@ export default function Px4Firmware({disabled=false,beforeOperation,onBusyChange
     {busy==='remote'&&<p role="status">正在从仿真机读取并校验固件…</p>}
     {busy==='select'&&<p role="status">正在读取固件库原文件并验证完整性…</p>}
     <div className="firmware-grid firmware-library-grid"><section className="firmware-library-list" aria-label="已保存的 PX4 固件">
-      <table className="firmware-table"><thead><tr><th>固件</th><th>编译日期 / 时间</th><th>支持的飞控硬件</th></tr></thead><tbody>
+      <table className="firmware-table"><thead><tr><th>固件</th><th>固件包生成时间</th><th>版本模块编译时间</th><th>支持的飞控硬件</th></tr></thead><tbody>
         {library?.entries.map(e=><tr key={e.id} className={selected===e.id?'selected':''}>
           <td><button className="firmware-name" disabled={locked} aria-pressed={selected===e.id} onClick={()=>selectRow(e)}>{e.name}</button><span className="firmware-version">{e.gitIdentity||'版本未提供'}</span></td>
-          <td data-label="编译时间">{e.compiledAt?<time>{e.compiledAt.split(' ')[0]}<span>{e.compiledAt.split(' ')[1]}</span></time>:<span className="px4-muted">未提供</span>}</td>
+          <td data-label="固件包生成时间"><FirmwareTime value={packageTime(e.packageBuiltAt)}/></td>
+          <td data-label="版本模块编译时间"><FirmwareTime value={e.compiledAt}/></td>
           <td data-label="支持硬件"><span>{hardware(e)}</span><small>Board ID {e.boardId}</small></td>
         </tr>)}
       </tbody></table>
       {!loadingLibrary&&library&&!library.entries.length&&<p className="firmware-library-empty">尚无已保存的固件。首次升级前会自动保存，后续可在这里直接选择。</p>}
       {loadingLibrary&&!library&&<p role="status">正在读取仿真机固件库…</p>}
-      <div className="firmware-library-foot"><span>{library?`${library.simulator} · ${library.root}`:'连接仿真机后显示固件库'}</span><span>编译时间与保存时间分开显示</span></div>
+      <div className="firmware-library-foot">{library?`${library.simulator} · ${library.root}`:'连接仿真机后显示固件库'}</div>
     </section><aside className="firmware-card firmware-detail" aria-label="固件详情">
       <div className="firmware-detail-heading"><h3>固件详情</h3>{detail&&<span className={'firmware-saved '+(archived?'saved':'')}>{archived?'已保存在仿真机':'升级前自动保存'}</span>}</div>
       {detail?<><strong className="firmware-detail-name">{detail.name}</strong><dl>
-        <dt>编译时间</dt><dd>{detail.compiledAt||'未提供'}</dd><dt>支持硬件</dt><dd>{hardware(detail)}<small>Board ID {detail.boardId} · Revision {detail.boardRevision}</small></dd>
+        <dt>固件包生成时间</dt><dd>{packageTime(detail.packageBuiltAt)||'未提供'}</dd>
+        <dt>版本模块编译时间</dt><dd>{detail.compiledAt||'未提供'}</dd>
+        <dt>支持硬件</dt><dd>{hardware(detail)}<small>Board ID {detail.boardId} · Revision {detail.boardRevision}</small></dd>
         <dt>固件版本</dt><dd><code>{detail.gitIdentity||'未提供'}</code></dd><dt>镜像大小</dt><dd>{size(detail.imageSize)}</dd>
         {archived&&<><dt>保存时间</dt><dd>{date(archived.savedAt)}</dd><dt>最近使用</dt><dd>{date(archived.lastUsedAt)}</dd></>}
         <dt>来源</dt><dd>{detail.source}</dd>
@@ -139,7 +154,6 @@ export default function Px4Firmware({disabled=false,beforeOperation,onBusyChange
       {detail.description&&<p className="px4-muted">{detail.description}</p>}
       {!preparing&&<div className="firmware-actions"><button className="px4-primary" disabled={locked||!selectedEntry||!!libraryError} onClick={()=>void chooseLibrary()}>使用此固件升级</button></div>}
       {archived&&<details className="firmware-extra"><summary>文件信息</summary><p>原文件：{size(archived.packageSize)}</p><code>SHA-256：{archived.id}</code>{library&&<code>{library.root}/{archived.id}/firmware.px4</code>}</details>}
-      {detail.packageBuiltAt&&<small className="firmware-package-date">固件包生成时间：{date(detail.packageBuiltAt*1000)}</small>}
       </>:<p className="px4-muted">选择历史固件查看详情，或从本地、仿真机选择新的 .px4 固件。</p>}
       {preparing&&firmware&&<section className="firmware-preparation" aria-label="升级准备">
         <h3>升级准备</h3><p className="px4-muted">请先停止仿真模型并上锁飞控，升级期间自动暂停 USB 的 HIL / MAVLink 读写。</p>

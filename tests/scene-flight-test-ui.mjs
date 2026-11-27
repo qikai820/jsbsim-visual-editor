@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { uiBrowser } from './support/ui-browser.mjs';
 const document = { version:1, name:'视景并行姿态测试', aircraft:'MorphQuad', initialize:'reset', duration:120, rateHz:50, throttle:.5, clock:'realtime', onFinish:'hold', onAbort:'hold', blocks:[
-  {id:'bp',type:'parallel',p:{join:'all',timeout:90},lanes:[[{id:'ba',type:'attitude',p:{roll:0,pitch:10,hold:10,tolerance:3,rate:15,settle:.5,timeout:40}}],[{id:'bh',type:'altitude',p:{target:10,duration:60,tolerance:.2,hover:50,min:25,max:75,slew:25,response:8,damping:12,trim:1.5,deadzone:6}}]]},
+  {id:'bm',type:'mode',p:{mode:'POSCTL',timeout:8}},
+  {id:'bc',type:'assert',p:{field:'landed',op:'eq',value:0,timeout:3}},
+  {id:'bp',type:'parallel',p:{join:'all',timeout:90},lanes:[[{id:'bl',type:'loop',p:{count:3},body:[{id:'ba',type:'attitude',p:{roll:0,pitch:10,hold:10,tolerance:3,rate:15,settle:.5,timeout:40}}]}],[{id:'bh',type:'altitude',p:{target:10,duration:60,tolerance:.2,hover:50,min:25,max:75,slew:25,response:8,damping:12,trim:1.5,deadzone:6}}]]},
+  {id:'bw',type:'wait',p:{duration:10}},
 ] };
 const setup = `localStorage.setItem('jsbsim-language','zh-CN');localStorage.setItem('px4-flight-test-workspace-v1',${JSON.stringify(JSON.stringify(document))});localStorage.setItem('jsbsim-scene-flight-test-display-v1','compact');
 const callbacks=new Map();let callbackId=0;window.__events=new Map();window.__calls=[];
@@ -27,8 +30,8 @@ window.native=async(command,args)=>{window.__calls.push({command,args});
  if(command==='tool_transport_open'){channel=args.onEvent;sessionId++;heartbeat();return{sessionId,path:'mock PX4'}}
  if(command==='tool_transport_close'){window.snapshot.status='stopped';return;}
  if(command==='tool_transport_pin_peer'||command==='tool_transport_write')return;
- if(command==='flight_test_status'){if(window.snapshot.status==='running'){window.snapshot.elapsed=42+(performance.now()-started)/1000;window.snapshot.realElapsed=window.snapshot.elapsed;}const value=structuredClone(window.snapshot);if(window.holdNextStatus){window.holdNextStatus=false;return new Promise(resolve=>{window.releaseStatus=()=>resolve(value);});}return value;}
- if(command==='flight_test_start'){window.started=args;started=performance.now();window.snapshot={...window.snapshot,id:window.snapshot.id+1,status:'running',name:'视景并行姿态测试',dryRun:args.options.dryRun,binding:{sessionId,system:7,component:1,instance:args.options.instance,model:'MorphQuad',peer:'127.0.0.1:40000'},activeBlocks:['bp','ba','bh'],values:{'test/attitude/active':1,'test/attitude/roll-target-deg':0,'test/attitude/pitch-target-deg':10,'test/attitude/held-s':3.2,'test/attitude/error-deg':.2,'test/altitude/active':1,'test/altitude/target-m':10,'test/fc/roll-deg':.2,'test/fc/pitch-deg':9.8,'test/fc/relative-alt-m':9.97},logs:[{time:39,level:'info',message:'姿态已到位，开始累计保持时间'}],exitResult:''};return structuredClone(window.snapshot);}
+ if(command==='flight_test_status'){if(window.snapshot.status==='running'){window.snapshot.elapsed=42+(performance.now()-started)/1000;window.snapshot.realElapsed=window.snapshot.elapsed;window.snapshot.runElapsed=window.snapshot.elapsed+5;}const value=structuredClone(window.snapshot);if(window.holdNextStatus){window.holdNextStatus=false;return new Promise(resolve=>{window.releaseStatus=()=>resolve(value);});}return value;}
+ if(command==='flight_test_start'){window.started=args;started=performance.now();window.snapshot={...window.snapshot,id:window.snapshot.id+1,startedAtUnixMs:Date.now(),status:'running',name:'视景并行姿态测试',dryRun:args.options.dryRun,elapsed:42,runElapsed:47,binding:{sessionId,system:7,component:1,instance:args.options.instance,model:'MorphQuad',peer:'127.0.0.1:40000'},activeBlocks:['bp','ba','bh'],progress:{total:args.progressRoots.length,completedAt:[8,14],activeNodes:['bp_4','bl_6','ba_10','bh_14'],scriptStartedAt:5,scriptFinishedAt:null},values:{'test/attitude/active':1,'test/attitude/roll-target-deg':0,'test/attitude/pitch-target-deg':10,'test/attitude/held-s':3.2,'test/attitude/error-deg':.2,'test/altitude/active':1,'test/altitude/target-m':10,'test/fc/roll-deg':.2,'test/fc/pitch-deg':9.8,'test/fc/relative-alt-m':9.97},logs:[{time:39,level:'info',message:'姿态已到位，开始累计保持时间'}],exitResult:''};return structuredClone(window.snapshot);}
  if(command==='flight_test_stop'){if(window.rejectStop)throw Error('终止请求失败');window.snapshot.status='exiting';return new Promise(resolve=>{window.finishStop=()=>{window.snapshot.status='stopped';window.snapshot.activeBlocks=[];window.snapshot.exitResult='Hold 已确认';resolve(structuredClone(window.snapshot));};});}
  if(command==='flight_test_validate')return{events:10,properties:20};
  if(command==='sim_scene_document')return null;
@@ -46,21 +49,30 @@ try {
  await click(`Array.from(document.querySelectorAll('.ft-toolbar button')).find(b=>b.textContent==='执行飞控测试')`);
  await until(`window.store.getState().snapshot?.status==='running'`);
  assert.equal(await calls('flight_test_start'),1);
+ assert.deepEqual(await ev('window.started.progressRoots'),['bm_2','bc_3','bp_4','bw_15']);
+ assert.equal(await ev(`document.querySelector('.ft-progress [role=progressbar]').getAttribute('aria-valuenow')`),'50');
+ assert.match(await ev(`document.querySelector('.ft-progress').textContent`),/第 2 \/ 3 轮/);
+ await ev(`window.store.setState(s=>({timingHistory:{[s.runProgress.timingKey]:[{id:'last',total:100,scriptStart:5,scriptEnd:89,steps:[8,14,78,88]}]}}))`);
+ await until(`/[0-9][–-][0-9]/.test(document.querySelector('.ft-progress .test-progress-metrics').textContent)`);
  const transportOpens=await calls('tool_transport_open'),transportCloses=await calls('tool_transport_close');
  await click(`Array.from(document.querySelectorAll('.ft-statusbar button')).find(b=>b.textContent==='视景观察')`);
  await until(`document.querySelector('.scene-test-panel')&&document.querySelector('.px4-toolbox-overlay').hidden`);
  assert.equal(await ev(`document.querySelector('.scene-test-panel').dataset.display`),'compact');
  assert.match(await ev(`document.querySelector('.scene-test-current').textContent`),/P \+10°/);
+ assert.match(await ev(`document.querySelector('.scene-test-current').textContent`),/第 2 \/ 3 轮/);
+ assert.equal(await ev(`document.querySelector('.scene-test-panel [role=progressbar]').getAttribute('aria-valuenow')`),'50');
  assert.match(await ev(`document.querySelector('.scene-test-parallel').textContent`),/油门控高/);
  assert.equal(await ev(`document.querySelector('.scene-test-hold progress').value`),3.2);
  assert.equal(await ev(`document.querySelector('.scene-test-hold progress').max`),10);
  await click(`document.querySelector('.scene-test-panel [aria-expanded]')`);
  assert(await ev(`!!document.querySelector('.scene-test-details')`));
+ assert.equal(await ev(`document.querySelectorAll('.scene-test-steps [data-status="已完成"]').length`),2);
  assert.match(await ev(`document.querySelector('.scene-test-details').textContent`),/9.97 m/);
  // External/MCP heading tests have no editable run document; native metrics
  // must still label the action and populate scene heading feedback.
- await ev(`window.previousSnapshot=structuredClone(window.snapshot);window.previousRunDocument=window.store.getState().runDocument;window.store.setState({runDocument:null});window.snapshot.activeBlocks=['external_heading'];window.snapshot.values={'test/heading/active':1,'test/heading/relative-target-deg':30,'test/heading/target-deg':-160,'test/heading/error-deg':.4,'test/heading/held-s':2.5,'test/fc/yaw-deg':-160.4};`);
+ await ev(`window.previousSnapshot=structuredClone(window.snapshot);window.previousRunDocument=window.store.getState().runDocument;window.store.setState({runDocument:null});window.snapshot.progress=null;window.snapshot.activeBlocks=['external_heading'];window.snapshot.values={'test/heading/active':1,'test/heading/relative-target-deg':30,'test/heading/target-deg':-160,'test/heading/error-deg':.4,'test/heading/held-s':2.5,'test/fc/yaw-deg':-160.4};`);
  await until(`document.querySelector('.scene-test-current')?.textContent.includes('航向步进')`);
+ assert.equal(await ev(`document.querySelector('.scene-test-panel [role=progressbar]')`),null);
  assert.match(await ev(`document.querySelector('.scene-test-details').textContent`),/相对航向目标/);
  assert.match(await ev(`document.querySelector('.scene-test-details').textContent`),/-160.4°/);
  assert.match(await ev(`document.querySelector('.scene-test-hold').textContent`),/2.5/);
@@ -69,6 +81,7 @@ try {
  await writeFile('/home/qikai820/tmp/scene-flight-test-expanded.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
  await click(`document.querySelector('[aria-label="隐藏仿真测试"]:not(.scene-test-tool)')`);
  await until(`!document.querySelector('.scene-test-panel')&&document.querySelector('.scene-test-status .scene-test-stop')`);
+ assert.match(await ev(`document.querySelector('.scene-test-status').textContent`),/50%.*剩余/);
  const elapsed=await ev('window.store.getState().snapshot.elapsed');
  await until(`window.store.getState().snapshot.elapsed>${elapsed}+.4`);
  assert.equal(await calls('flight_test_stop'),0,'hiding must not stop the runner');
@@ -104,6 +117,7 @@ try {
  assert.equal(await calls('flight_test_stop'),1);
  assert.equal(await ev(`document.querySelector('.scene-test-status .scene-test-stop')`),null);
  assert.match(await ev(`document.querySelector('.scene-test-status').textContent`),/已停止/);
+ assert.match(await ev(`document.querySelector('.scene-test-status').textContent`),/50%/);
  await click(`document.querySelector('.scene-test-status-open')`);
  assert.match(await ev(`document.querySelector('.scene-test-current').textContent`),/Hold 已确认/);
  // Returning to an active run on a different aircraft keeps the original binding visible.
@@ -135,6 +149,10 @@ try {
  await until(`window.store.getState().error.includes('终止请求失败')&&!window.store.getState().stopping`);
  assert.equal(await ev(`document.querySelector('.scene-test-status .scene-test-stop').disabled`),false,'failed stop leaves the retry action available');
  assert.match(await ev(`document.querySelector('.scene-test-status [role=alert]').textContent`),/终止请求失败/);
+ await ev(`Object.assign(window.snapshot,{status:'exiting',elapsed:84,runElapsed:89});Object.assign(window.snapshot.progress,{completedAt:[8,14,78,88],activeNodes:[],scriptFinishedAt:89})`);
+ await until(`document.querySelector('.scene-test-status')?.textContent.includes('100%')&&document.querySelector('.scene-test-status')?.textContent.includes('确认退出')`);
+ await ev(`Object.assign(window.snapshot,{status:'passed',runElapsed:100,exitResult:'Hold 已确认'})`);
+ await until(`JSON.parse(localStorage.getItem('px4-flight-test-timing-v1')||'{}')[window.store.getState().runProgress.timingKey]?.some(s=>s.id.endsWith('/2'))`);
  assert.equal(ui.errors.length,0,JSON.stringify(ui.errors));
  console.log('PASS: actual toolbar/toolbox/scene share one test and transport; compact/details/hidden/focus; hidden elapsed advances; close/switch/reopen retain run; bound instance; footer termination and exit confirmation; responsive controls.');
 } finally { await ui.close(); }

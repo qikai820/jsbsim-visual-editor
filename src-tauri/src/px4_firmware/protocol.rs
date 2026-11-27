@@ -23,7 +23,9 @@ pub struct ImageInfo {
     pub description: String,
     pub git_identity: String,
     pub hardware: String,
+    /// The embedded PX4 `ver` module timestamp can be reused by incremental builds.
     pub compiled_at: Option<String>,
+    /// Time recorded by the `.px4` packager, in Unix seconds.
     pub package_built_at: Option<u64>,
 }
 pub struct Firmware {

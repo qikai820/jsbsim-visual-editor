@@ -2,13 +2,13 @@ import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { runOwnerLog, setRemoteLogHandler, type LogRequest } from './mcpLogs';
 import type { Px4Connection } from '../px4/connection';
 import { useSignalMonitorStore } from '../store/signalMonitorStore';
-import { hideTestToolbox, setRemoteTestController, startFlightTest, startMcpFlightTest, stopFlightTest, useFlightTestStore, type SessionState, type TestSnapshot } from './session';
+import { hideTestToolbox, latestTestSnapshot, setRemoteTestController, startFlightTest, startMcpFlightTest, stopFlightTest, useFlightTestStore, type SessionState, type TestSnapshot } from './session';
 import { runOwnerNsh, setRemoteNshHandler, type NshRequest, type NshResult } from './mcpNsh';
 
 export const TOOLBOX_WINDOW = 'px4-toolbox';
 const EVENT = 'px4-toolbox-bridge';
-type ContextSummary = { instance: number; disabled: boolean; bidirectional: boolean; link: { alive: boolean; hilEnabled: boolean | undefined; target: { system: number; component: number }; transport: { sessionId: number | null } } | null };
-export type SessionMirror = Pick<SessionState, 'snapshot'|'starting'|'stopping'|'error'|'statusError'|'runInstance'|'runOrigin'|'rcSource'|'rcSourceSwitching'|'rcSourceError'|'rcSourceStatusError'> & Partial<Pick<SessionState,'workspace'|'runDocument'>> & { context: ContextSummary | null };
+type ContextSummary = { instance: number; disabled: boolean; bidirectional: boolean; link: { alive: boolean; hilEnabled: boolean | undefined; target: { system: number; component: number }; transport: { sessionId: number | null }; expectedHost?: string; uid: string; version: string } | null };
+export type SessionMirror = Pick<SessionState, 'snapshot'|'starting'|'stopping'|'error'|'statusError'|'runInstance'|'runOrigin'|'rcSource'|'rcSourceSwitching'|'rcSourceError'|'rcSourceStatusError'> & Partial<Pick<SessionState,'workspace'|'runDocument'|'runProgress'|'timingHistory'>> & { context: ContextSummary | null };
 type WindowView = { visible: boolean; instance: string; display: SessionState['display']; testingRequest: number };
 type Message = {kind:'log-command';id:string;deadline:number;request:LogRequest}|{kind:'log-result';id:string;result?:unknown;error?:string}|{ kind: 'ready'|'hidden'|'scene' } | { kind: 'view'; view: WindowView } | { kind: 'state'; state: SessionMirror } |
   { kind: 'nsh-command'; id: string; deadline: number; request: NshRequest } |
@@ -21,12 +21,15 @@ export function sessionMirror(): SessionMirror {
   return { snapshot:s.snapshot, starting:s.starting, stopping:s.stopping, error:s.error, statusError:s.statusError,
     rcSource:s.rcSource,rcSourceSwitching:s.rcSourceSwitching,rcSourceError:s.rcSourceError,rcSourceStatusError:s.rcSourceStatusError,
     workspace:s.workspace, runDocument:s.runDocument, runInstance:s.runInstance, runOrigin:s.runOrigin,
+    runProgress:s.runProgress, timingHistory:s.timingHistory,
     context:c ? { instance:c.instance, disabled:c.disabled, bidirectional:c.bidirectional,
-      link:c.link ? { alive:c.link.alive, hilEnabled:c.link.hilEnabled, target:c.link.target, transport:{sessionId:c.link.transport.sessionId} } : null } : null };
+      link:c.link ? { alive:c.link.alive, hilEnabled:c.link.hilEnabled, target:c.link.target, transport:{sessionId:c.link.transport.sessionId},
+        expectedHost:c.link.expectedHost, uid:c.link.uid, version:c.link.version } : null } : null };
 }
 function applyMirror(s: SessionMirror) {
   // This context never sends packets. Commands always execute in the owner webview.
-  useFlightTestStore.setState({ ...s, context:s.context ? { ...s.context, link:s.context.link as Px4Connection | null, beforeRun:async()=>{} } : null });
+  useFlightTestStore.setState(state => ({ ...s, snapshot: latestTestSnapshot(state.snapshot, s.snapshot),
+    context:s.context ? { ...s.context, link:s.context.link as Px4Connection | null, beforeRun:async()=>{} } : null }));
 }
 const send = (label: string, message: Message) => emitTo(label, EVENT, message);
 export function sendToolboxView() {
@@ -121,6 +124,7 @@ export async function installToolboxOwner(onView:(view:WindowView)=>void) {
     }
   });
   let scheduled=false,lastWorkspace:SessionState['workspace']|undefined,lastRunDocument:SessionState['runDocument']|undefined;
+  let lastRunProgress:SessionState['runProgress']|undefined,lastTimingHistory:SessionState['timingHistory']|undefined;
   const publish=()=>{if(scheduled||disposed)return;scheduled=true;queueMicrotask(()=>{
     scheduled=false;if(disposed)return;
     const state=sessionMirror();
@@ -128,6 +132,8 @@ export async function installToolboxOwner(onView:(view:WindowView)=>void) {
     // 250 ms telemetry tick. The scene retains the last received workspace.
     if(state.workspace===lastWorkspace)delete state.workspace;else lastWorkspace=state.workspace;
     if(state.runDocument===lastRunDocument)delete state.runDocument;else lastRunDocument=state.runDocument;
+    if(state.runProgress===lastRunProgress)delete state.runProgress;else lastRunProgress=state.runProgress;
+    if(state.timingHistory===lastTimingHistory)delete state.timingHistory;else lastTimingHistory=state.timingHistory;
     void send('main',{kind:'state',state}).catch(()=>{});
   });};
   const unsubscribe=useFlightTestStore.subscribe(publish);

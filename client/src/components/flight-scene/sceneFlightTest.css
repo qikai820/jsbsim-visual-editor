@@ -13,6 +13,7 @@
 .scene-test-state[data-state=failed]{color:#b13b41}
 .scene-test-body{display:flex;flex-direction:column;flex:1;min-height:0}
 .scene-test-content{min-height:0;overflow:auto;padding:11px 12px 0;overscroll-behavior:contain}
+.scene-test-content>.test-progress-metrics{margin-top:9px;padding:8px;border-radius:5px;background:#f5f8fc}
 .scene-test-name{display:block;font-weight:500;font-size:13px;overflow-wrap:anywhere}
 .scene-test-binding{display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-top:3px;font-size:11px;color:#65778c}
 .scene-test-current{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin-top:13px;overflow-wrap:anywhere}
@@ -38,6 +39,13 @@
 .scene-test-details li{position:relative;padding:4px 0 4px 11px;font-size:11px;overflow-wrap:anywhere}
 .scene-test-details li:before{content:'';position:absolute;left:0;top:10px;width:5px;height:5px;border-radius:50%;background:#247653}
 .scene-test-details p{font-size:11px;margin:4px 0;color:#65778c;overflow-wrap:anywhere}
+.scene-test-steps{margin:0;padding:0;list-style:none}
+.scene-test-steps li{display:flex;justify-content:space-between;gap:5px 8px;flex-wrap:wrap;padding-left:0}
+.scene-test-steps li::before{display:none}
+.scene-test-steps li>span:last-child{color:#65778c}
+.scene-test-steps li[data-status="已完成"]>span:last-child{color:#247653}
+.scene-test-steps li[data-status="执行中"]>span:last-child{color:#2766bc}
+.scene-test-steps li[data-status="失败"]>span:last-child{color:#b13b41}
 .scene-test-details table{width:100%;border-collapse:collapse;font-size:11px}
 .scene-test-details th,.scene-test-details td{text-align:right;font-weight:400;padding:5px 0;border-bottom:1px solid #e6edf4}
 .scene-test-details th:first-child{text-align:left}
@@ -55,7 +63,10 @@
 .scene-test-status{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-width:0;margin-left:auto}
 .flight-scene-immersive .scene-status{flex-wrap:wrap;gap:8px 14px}
 .flight-scene-immersive .scene-status>.scene-test-status{font-size:11px}
-.scene-test-status .scene-test-status-open{border-color:transparent;background:transparent;gap:7px}
+.scene-test-status .scene-test-status-open{border-color:transparent;background:transparent;gap:4px 7px;flex-wrap:wrap;min-width:0;white-space:normal}
+.scene-test-status-percent,.scene-test-status-eta{font-variant-numeric:tabular-nums}
+.scene-test-status-percent{color:#34465b;font-weight:600}
+.scene-test-status-eta{color:#566c83}
 .scene-test-status .scene-test-status-open>svg{transform:rotate(180deg);width:13px;height:13px}
 .scene-test-status .scene-test-error{max-width:260px}
 .scene-test-tool{position:relative}

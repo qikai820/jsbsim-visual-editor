@@ -5,10 +5,12 @@ const and=(...terms:Cond[]):Cond=>({logic:'AND',terms});
 const or=(...terms:Cond[]):Cond=>({logic:'OR',terms});
 const conditionXml=(c:Cond):string=>typeof c==='string'?esc(c):`<condition logic="${c.logic}">${c.terms.map(t=>typeof t==='string'?esc(t)+'\n':conditionXml(t)).join('')}</condition>`;
 const inverse:Record<string,string>={ge:'lt',le:'gt',gt:'le',lt:'ge',eq:'ne',ne:'eq'};
+export type LoopRound = { index: number; count: number };
+type OnNode = (id: string, root: boolean, rounds: readonly LoopRound[]) => void;
 /** Lower structured control flow to ordinary FGScript properties/events/functions.
  * The test/* property bridge is supplied by the desktop runner. No custom XML tags.
  */
-export function compileTest(document:TestDocument,metadata=true):string{
+export function compileTest(document:TestDocument,metadata=true,onNode?:OnNode):string{
   validateDocument(document);const props=new Map<string,number>(),events:string[]=[];let count=0;
   const prop=(path:string,value=0)=>{props.set(path,value);return path;};
   for(const [key,value] of Object.entries(document.requirements??{}))prop('test/requirements/'+key,value);
@@ -23,9 +25,10 @@ export function compileTest(document:TestDocument,metadata=true):string{
   const relativeTarget=(path:string,value:number)=>`<set name="${path}"><function><difference><sum><property>${launchReference}</property><value>${value}</value></sum><difference><property>test/fc/altitude-msl-m</property><property>test/fc/relative-alt-m</property></difference></difference></function></set>`;
   const global:Cond=and('test/runtime/ready eq 1','test/runtime/complete eq 0','test/runtime/failed eq 0');
   type Handle={done:string;cancel:string;all:string[];inputs:string[];commands:string[]};
-  function block(n:TestBlock,activate:Cond,ancestors:Cond[],parallelDepth:number):Handle{
+  function block(n:TestBlock,activate:Cond,ancestors:Cond[],parallelDepth:number,rounds:readonly LoopRound[]):Handle{
     if(++count>MAX_EXECUTION_NODES)throw Error('循环展开超过 1024 个执行节点，请减少次数或嵌套');
     const id=n.id+'_'+count,base='test/flow/'+id,started=prop(base+'/started'),done=prop(base+'/done'),cancel=prop(base+'/cancelled'),until=prop(base+'/deadline');
+    onNode?.(id,ancestors.length===1,rounds);
     const guard=and(global,...ancestors,`${cancel} eq 0`),start=and(guard,activate,`${started} eq 0`),running=and(guard,`${started} eq 1`,`${done} eq 0`);
     const h:Handle={done,cancel,all:[cancel],inputs:[],commands:[]},p=n.p;
     const begin=[set(started,1)],finish=[set(done,1)];
@@ -104,32 +107,32 @@ export function compileTest(document:TestDocument,metadata=true):string{
     }
     if(n.type==='loop'){
       event(n.id+'::start',start,begin,true);let activation:Cond=`${started} eq 1`;
-      for(let i=0;i<Number(p.count);i++){const child=sequence(n.body!,activation,activeChildren,parallelDepth);append(child);activation=`${child.done} eq 1`;}
+      for(let i=0;i<Number(p.count);i++){const child=sequence(n.body!,activation,activeChildren,parallelDepth,[...rounds,{index:i+1,count:Number(p.count)}]);append(child);activation=`${child.done} eq 1`;}
       event(n.id+'::done',and(running,activation),finish);return h;
     }
     if(n.type==='branch'){
       const choice=prop(base+'/choice',-1),pred=`${fieldPath(String(p.field))} ${p.op} ${p.value}`,opposite=`${fieldPath(String(p.field))} ${inverse[String(p.op)]} ${p.value}`;
       event(n.id+'::start',start,begin,true);
       event(n.id+'::then',and(running,`${choice} eq -1`,pred),[set(choice,1)]);event(n.id+'::else',and(running,`${choice} eq -1`,opposite),[set(choice,0)]);
-      const yes=sequence(n.yes!,`${choice} eq 1`,activeChildren,parallelDepth),no=sequence(n.no!,`${choice} eq 0`,activeChildren,parallelDepth);append(yes);append(no);
+      const yes=sequence(n.yes!,`${choice} eq 1`,activeChildren,parallelDepth,rounds),no=sequence(n.no!,`${choice} eq 0`,activeChildren,parallelDepth,rounds);append(yes);append(no);
       event(n.id+'::done',and(running,or(and(`${choice} eq 1`,`${yes.done} eq 1`),and(`${choice} eq 0`,`${no.done} eq 1`))),finish);return h;
     }
     if(n.type==='parallel'){
       event(n.id+'::start',start,[...begin,deadline(until,Number(p.timeout))],true);
-      const branches=n.lanes!.map(list=>sequence(list,`${started} eq 1`,activeChildren,parallelDepth+1));branches.forEach(append);
+      const branches=n.lanes!.map(list=>sequence(list,`${started} eq 1`,activeChildren,parallelDepth+1,rounds));branches.forEach(append);
       const complete=(p.join==='all'?and:or)(...branches.map(v=>`${v.done} eq 1`));
       const clean=branches.flatMap(v=>[...v.all.map(path=>set(path,1)),...v.inputs.map(path=>set(path,0)),...v.commands.map(path=>set(path,0))]);
       event(n.id+'::'+(p.join==='all'?'all':'any'),and(running,complete),[...clean,...finish],true);timeout(Number(p.timeout));return h;
     }
     throw Error('不支持的积木：'+n.type);
   }
-  function sequence(list:TestBlock[],activate:Cond,ancestors:Cond[],parallelDepth:number):Handle{
+  function sequence(list:TestBlock[],activate:Cond,ancestors:Cond[],parallelDepth:number,rounds:readonly LoopRound[]):Handle{
     const id='sequence_'+(++count),done=prop('test/flow/'+id+'/done'),cancel=prop('test/flow/'+id+'/cancelled');if(count>MAX_EXECUTION_NODES)throw Error('流程展开超过 1024 个节点');
     const h:Handle={done,cancel,all:[cancel],inputs:[],commands:[]};let next=activate;
-    for(const n of list){const c=block(n,next,[...ancestors,`${cancel} eq 0`],parallelDepth);h.all.push(...c.all);h.inputs.push(...c.inputs);h.commands.push(...c.commands);next=and(activate,`${c.done} eq 1`);}
+    for(const n of list){const c=block(n,next,[...ancestors,`${cancel} eq 0`],parallelDepth,rounds);h.all.push(...c.all);h.inputs.push(...c.inputs);h.commands.push(...c.commands);next=and(activate,`${c.done} eq 1`);}
     event(id+'::done',and(global,...ancestors,`${cancel} eq 0`,next,`${done} eq 0`),[set(done,1)]);return h;
   }
-  const root=sequence(document.blocks,'test/runtime/ready eq 1',[],0);
+  const root=sequence(document.blocks,'test/runtime/ready eq 1',[],0,[]);
   event('test::complete',and(global,`${root.done} eq 1`),[set('test/runtime/complete',1)],true);
   const encoded=metadata?`<!-- flight-test-workspace:${encodeDocument(document)} -->\n`:'';
   const xml=`<?xml version="1.0"?>\n${encoded}<runscript name="${esc(document.name)}">\n  <use aircraft="${esc(document.aircraft)}" initialize="${esc(document.initialize)}"/>\n  <run start="0" end="${document.duration}" dt="0.01">\n${[...props].map(([k,v])=>`    <property value="${v}">${esc(k)}</property>`).join('\n')}\n${events.join('\n')}\n  </run>\n</runscript>\n`;

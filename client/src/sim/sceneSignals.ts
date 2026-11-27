@@ -2,8 +2,13 @@ import { canonicalMonitorProperty } from './monitorIdentity';
 import { rotorCount, rotorRpmKey } from './sceneRotors';
 import { gimbalKey, isMorphQuad, MORPHQUAD_ARMS } from './sceneMorphQuad';
 import { SCENE_WIND_KEYS } from './sceneWind';
+import { isXcd20 } from './sceneXcd20';
+import { PLATFORM_SIGNAL_KEYS } from './sceneMovingPlatform';
 
-export interface SceneMonitorTarget { instance: string; model: string; extraKeys?: string[] }
+const COLLISION_KEYS = ['scene/loaded', 'scene/revision', 'scene/contact-count'];
+const GROUND_HEIGHT_KEYS = ['position/h-agl-ft', 'position/terrain-elevation-asl-ft'];
+
+export interface SceneMonitorTarget { instance: string; model: string; extraKeys?: string[]; platformEnabled?: boolean }
 const sceneListeners = new Set<(frame: any) => void>();
 export function listenSceneMonitor(listener: (frame: any) => void): () => void {
   sceneListeners.add(listener); return () => { sceneListeners.delete(listener); };
@@ -13,7 +18,7 @@ export function publishSceneMonitor(frame: any): void { for (const listener of s
 export const SCENE_POSE_KEYS = ['position/lat-geod-deg', 'position/long-gc-deg', 'position/h-sl-meters',
   'attitude/phi-rad', 'attitude/theta-rad', 'attitude/psi-rad'] as const;
 export function sceneSignalKeys(model: string): string[] {
-  const ground = ['scene/loaded', 'scene/revision', 'scene/contact-count', 'position/h-agl-ft', 'position/terrain-elevation-asl-ft'];
+  const ground = [...COLLISION_KEYS, ...GROUND_HEIGHT_KEYS];
   const rpm = Array.from({ length: rotorCount(model) }, (_, i) => rotorRpmKey(model, i));
   if (isMorphQuad(model)) return [...SCENE_POSE_KEYS, ...SCENE_WIND_KEYS, ...ground,
     ...MORPHQUAD_ARMS.flatMap((_, i) => [gimbalKey(i, 'outer'), gimbalKey(i, 'inner')]), ...rpm,
@@ -28,15 +33,33 @@ export function sceneSignalKeys(model: string): string[] {
 /** Keep pose/ground intact, then reserve room for explicitly configured values. */
 export function sceneMonitorKeys(model: string, extraKeys: string[] = []): string[] {
   if (!extraKeys.length) return sceneSignalKeys(model);
-  const keys = [...SCENE_POSE_KEYS, 'position/h-agl-ft', 'position/terrain-elevation-asl-ft', ...extraKeys, ...sceneSignalKeys(model)];
+  const keys = [...SCENE_POSE_KEYS, ...GROUND_HEIGHT_KEYS, ...extraKeys, ...sceneSignalKeys(model)];
   const seen = new Set<string>();
   return keys.filter(key => { const canonical = canonicalMonitorProperty(key); if (seen.has(canonical)) return false; seen.add(canonical); return true; });
 }
 
-// One VMON subscription per instance: preserve the user's signals and use free
-// slots for the scene. Existing aliases keep their original subscription key.
-export function mergeSceneMonitorKeys(userKeys: string[], sceneKeys: string[]): string[] {
-  const keys = [...new Set(userKeys)].sort();
+export function sceneMonitorPlan(target: SceneMonitorTarget | null, testKeys: string[] = []) {
+  if (!target) return { keys: testKeys, reserved: [] };
+  const { model, extraKeys = [], platformEnabled } = target;
+  if (!isXcd20(model) || !platformEnabled) {
+    return { keys: [...testKeys, ...sceneMonitorKeys(model, extraKeys)], reserved: [] };
+  }
+
+  const rpm = Array.from({ length: rotorCount(model) }, (_, i) => rotorRpmKey(model, i));
+  const reserved = [...PLATFORM_SIGNAL_KEYS, ...rpm, ...testKeys];
+  // Core telemetry already carries the aircraft pose. With the platform active,
+  // spend the remaining fast slots on properties absent from that core frame.
+  return { keys: [...reserved, ...GROUND_HEIGHT_KEYS, ...extraKeys, ...SCENE_WIND_KEYS, ...COLLISION_KEYS], reserved };
+}
+
+// One VMON subscription per instance. User signals fill the slots after any
+// reserved keys, retaining their original spelling for aliases.
+export function mergeSceneMonitorKeys(userKeys: string[], sceneKeys: string[], reserved: string[] = []): string[] {
+  const users = [...new Set(userKeys)].sort();
+  const userAliases = new Map(users.map(key => [canonicalMonitorProperty(key), key]));
+  const required = new Set(reserved.map(key => userAliases.get(canonicalMonitorProperty(key)) ?? key));
+  const available = reserved.length ? users.filter(key => !required.has(key)).slice(0, Math.max(0, 32 - required.size)) : users;
+  const keys = [...required, ...available];
   const canonical = new Map(keys.map(key => [canonicalMonitorProperty(key), key]));
   const priority: string[] = [];
   for (const key of sceneKeys) {

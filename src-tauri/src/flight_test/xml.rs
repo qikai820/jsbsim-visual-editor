@@ -93,7 +93,7 @@ pub fn writable(path: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"_-/".contains(&c))
         && ((parts.len() == 3 && parts[0] == "test" && parts[1] == "requirements"
-            && ["manual-tilt-deg","altitude-tilt-deg","vector-tilt-deg","xcd20-takeoff"].contains(&parts[2]))
+            && ["manual-tilt-deg","altitude-tilt-deg","vector-tilt-deg","morphquad-servo-range-deg","xcd20-takeoff"].contains(&parts[2]))
             || (parts.len() == 4
             && parts[0] == "test"
             && parts[1] == "channel"

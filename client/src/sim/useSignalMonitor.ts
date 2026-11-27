@@ -23,9 +23,12 @@ function ingestObservation(frame: any) {
   if (dedicated && frame.monitor.revision === useSignalMonitorStore.getState().revisions[id]) publishSceneMonitor(frame);
 }
 
-export function useSignalMonitor(instance: string, sceneKeys: string[] = []) {
+export function useSignalMonitor(instance: string, sceneKeys: string[] = [], reserved: string[] = []) {
   const project = useSignalMonitorStore(state => state.project);
-  const keys = mergeSceneMonitorKeys([...Object.values(project.labels).flatMap(label => label.bindings), ...project.scopes.flatMap(scope => scope.channels)].map(binding => binding.key), sceneKeys);
+  const userKeys = [...Object.values(project.labels).flatMap(label => label.bindings), ...project.scopes.flatMap(scope => scope.channels)].map(binding => binding.key);
+  const keys = mergeSceneMonitorKeys(userKeys, sceneKeys, reserved);
+  const omitted = new Set(userKeys.filter(key => !keys.includes(key))).size;
+  const notice = omitted ? `XCD20 移动平台与电机转速已保留快速通道，${omitted} 项数值标签或示波器信号暂未订阅。` : '';
   useEffect(() => {
     let cancelled = false; let stop: (() => void) | undefined;
     const pending: any[] = [];
@@ -43,20 +46,20 @@ export function useSignalMonitor(instance: string, sceneKeys: string[] = []) {
   useEffect(() => {
     if (keys.length > 32) { useSignalMonitorStore.setState({ error: '当前实例最多同时监视 32 个不同信号，请减少标签或通道。' }); return; }
     const revision = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
-    useSignalMonitorStore.setState(state => ({ revisions: { ...state.revisions, [instance]: revision }, error: '' }));
+    useSignalMonitorStore.setState(state => ({ revisions: { ...state.revisions, [instance]: revision }, error: notice }));
     let alive = true, busy = false;
     const sync = async () => {
       if (!isTauri || busy) return;
       busy = true;
       try {
         await simMonitorSubscribe(Number(instance), useSignalMonitorStore.getState().revisions[instance] ?? revision, keys);
-        if (alive && useSignalMonitorStore.getState().error.startsWith('通信：')) useSignalMonitorStore.setState({ error: '' });
+        if (alive && useSignalMonitorStore.getState().error.startsWith('通信：')) useSignalMonitorStore.setState({ error: notice });
       } catch (error) { if (alive) useSignalMonitorStore.setState({ error: '通信：' + String(error) }); }
       finally { busy = false; }
     };
     void sync(); const timer = window.setInterval(sync, 1500);
     return () => { alive = false; clearInterval(timer); void simMonitorSubscribe(Number(instance), crypto.getRandomValues(new Uint32Array(1))[0] || 1, []).catch(() => {}); };
-  }, [instance, JSON.stringify(keys)]);
+  }, [instance, JSON.stringify(keys), notice]);
   useEffect(() => {
     let active = true, busy = false;
     const poll = async () => {
@@ -70,4 +73,5 @@ export function useSignalMonitor(instance: string, sceneKeys: string[] = []) {
     const timer = window.setInterval(() => { void poll(); }, keys.length ? 10 : 100);
     return () => { active = false; clearInterval(timer); };
   }, [instance, Boolean(keys.length)]);
+  return keys;
 }

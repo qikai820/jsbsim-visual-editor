@@ -4,12 +4,16 @@ import { create } from 'zustand';
 import type { Px4Connection } from '../px4/connection';
 import { copy, defaultDocument, validateDocument, type TestDocument } from './model';
 import { compileTest, documentFromXml } from './xml';
+import { planTestProgress, readTestTimingHistory, rememberTestTiming, TEST_TIMING_STORAGE, testTimingKey, testStepLabel,
+  type FlowProgress, type RunProgressPlan, type TimingHistory } from './progress';
 
 export const FLIGHT_TEST_STORAGE = 'px4-flight-test-workspace-v1';
 const DISPLAY_STORAGE = 'jsbsim-scene-flight-test-display-v1';
 export type TestDisplay = 'compact' | 'details' | 'hidden';
+export type TestReportArchive = { id: string; state: 'saving' | 'ready' | 'failed' | 'recorded'; error?: string | null };
 export type TestSnapshot = {
   id: number; status: string; name: string; dryRun: boolean; elapsed: number; realElapsed: number;
+  startedAtUnixMs?: number; runElapsed?: number; progress?: FlowProgress | null; archive?: TestReportArchive;
   binding?: { sessionId: number; system: number; component: number; instance: number; model: string; peer: string } | null;
   rc: number[]; activeBlocks: string[]; values: Record<string, number>;
   logs: Array<{ time: number; level: string; message: string }>; exitResult: string;
@@ -25,6 +29,13 @@ export const testStatusLabels: Record<string, string> = {
   idle: '就绪', preflight: '运行前检查', running: '执行中', exiting: '确认退出状态', passed: '完成', failed: '失败', stopped: '已停止',
 };
 export const testIsActive = (snapshot: TestSnapshot | null) => !!snapshot && ['preflight', 'running', 'exiting'].includes(snapshot.status);
+export function latestTestSnapshot(current: TestSnapshot | null, incoming: TestSnapshot | null) {
+  if (!incoming) return current;
+  if (!current || incoming.id > current.id) return incoming;
+  if (incoming.id < current.id || (current.id > 0 && !testIsActive(current) && testIsActive(incoming))) return current;
+  if (incoming.runElapsed !== undefined && current.runElapsed !== undefined && incoming.runElapsed < current.runElapsed) return current;
+  return incoming;
+}
 export function savedTestText(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
 }
@@ -44,6 +55,7 @@ function initialDisplay(): TestDisplay {
 export interface SessionState {
   snapshot: TestSnapshot | null; starting: boolean; stopping: boolean; error: string; statusError: string;
   workspace: TestWorkspace; context: TestContext | null; runDocument: TestDocument | null; runInstance: number | null;
+  runProgress: RunProgressPlan | null; timingHistory: TimingHistory;
   display: TestDisplay; toolboxVisible: boolean; toolboxVisited: boolean; toolboxTestingRequest: number; toolboxOpenRequest: number;
   runOrigin: 'ui' | 'mcp' | null;
   rcSource: RcSourceStatus|null; rcSourceSwitching: boolean; rcSourceError: string; rcSourceStatusError: string;
@@ -51,6 +63,7 @@ export interface SessionState {
 export const useFlightTestStore = create<SessionState>(() => ({
   snapshot: null, starting: false, stopping: false, error: '', statusError: '', workspace: initialWorkspace(),
   context: null, runDocument: null, runInstance: null, display: initialDisplay(),
+  runProgress: null, timingHistory: readTestTimingHistory(savedTestText(TEST_TIMING_STORAGE)),
   toolboxVisible: false, toolboxVisited: false, toolboxTestingRequest: 0, toolboxOpenRequest: 0,
   runOrigin: null,
   rcSource: null, rcSourceSwitching: false, rcSourceError: '', rcSourceStatusError: '',
@@ -85,6 +98,17 @@ async function remoteCommand<T>(kind: 'starting' | 'stopping', command: () => Pr
 // Both surfaces observe the same native runner. Visibility never owns the
 // runner or transport, and removing a subscriber never sends a stop command.
 let subscribers = 0, timer: ReturnType<typeof setInterval> | undefined, polling = false, commandEpoch = 0;
+function acceptSnapshot(snapshot: TestSnapshot, runProgress = useFlightTestStore.getState().runProgress) {
+  const state = useFlightTestStore.getState();
+  const latest = latestTestSnapshot(state.snapshot, snapshot) ?? snapshot;
+  const history = state.timingHistory;
+  const timingHistory = remoteController ? history : rememberTestTiming(history, latest, runProgress);
+  if (timingHistory !== history) {
+    try { localStorage.setItem(TEST_TIMING_STORAGE, JSON.stringify(timingHistory)); }
+    catch { /* Estimates still use the current window's history. */ }
+  }
+  useFlightTestStore.setState({ snapshot: latest, statusError: '', timingHistory, runProgress });
+}
 async function refreshStatus() {
   if (polling) return;
   polling = true;
@@ -92,7 +116,7 @@ async function refreshStatus() {
   try {
     const snapshot = await invoke<TestSnapshot | null>('flight_test_status');
     if (epoch === commandEpoch && snapshot && typeof snapshot.id === 'number' && typeof snapshot.status === 'string') {
-      useFlightTestStore.setState({ snapshot, statusError: '' });
+      acceptSnapshot(snapshot);
     }
   } catch (e) {
     if (epoch === commandEpoch) useFlightTestStore.setState({ statusError: String(e) });
@@ -116,9 +140,15 @@ export function testStartReason(state = useFlightTestStore.getState(), dryRun = 
   if (!dryRun) return rcSourceStartReason(state);
   return '';
 }
-export function rcSourceStartReason(state = useFlightTestStore.getState()): string {
+function usesMappedVectorRates(source: string): boolean {
+  return /(?:['"]|>)test\/channel\/(?:vector-roll-rate|vector-pitch-rate|level-switch)\/enabled(?:['"]|<)/.test(source);
+}
+export function rcSourceStartReason(state = useFlightTestStore.getState(), source = state.workspace.source): string {
   if (state.rcSourceSwitching) return '遥控器来源切换中，请等待飞控确认';
   if (!state.rcSource?.supported) return state.rcSource?.reason || '等待 COM_RC_IN_MODE 回读';
+  if (usesMappedVectorRates(source)) {
+    return state.rcSource.selected === 0 ? '' : '此模板使用完整 RC 通道，请切换至 RC 来源（COM_RC_IN_MODE=0）';
+  }
   if (state.rcSource.selected !== 1) return '请先切换至工具箱模拟遥控器';
   if (!state.rcSource.ready) return state.rcSource.reason;
   return '';
@@ -160,14 +190,15 @@ export async function startMcpFlightTest(source: string, dryRun: boolean) {
   if (state.rcSourceSwitching) throw Error('遥控器来源切换中，请等待飞控确认');
   if (state.context?.disabled) throw Error('其他飞控操作进行中');
   if (!dryRun && (!state.context?.link?.alive || !state.context.link.hilEnabled || !state.context.bidirectional)) throw Error('请先在工具箱连接双向 HIL 飞控');
-  if (!dryRun) { const reason=rcSourceStartReason(state);if(reason)throw Error(reason); }
+  if (!dryRun) { const reason=rcSourceStartReason(state,source);if(reason)throw Error(reason); }
   if (!source) throw Error('测试脚本为空');
   if (remoteController) return remoteCommand('starting', () => remoteController!.start(dryRun, source));
   const metadata=documentFromXml(source);
   return startSource(source, dryRun, metadata, 'mcp',metadata);
 }
 async function startSource(source: string, dryRun: boolean, document: TestDocument | null, origin: 'ui' | 'mcp', runDocument = document) {
-  const context = useFlightTestStore.getState().context;
+  const previous = useFlightTestStore.getState();
+  const context = previous.context;
   if (!context) throw Error('请先打开 PX4 工具箱选择测试实例');
   commandEpoch++;
   useFlightTestStore.setState({ starting: true, error: '', runInstance: context.instance,
@@ -176,17 +207,23 @@ async function startSource(source: string, dryRun: boolean, document: TestDocume
     await context.beforeRun();
     const current = useFlightTestStore.getState().context;
     if (current?.link !== context.link || current?.instance !== context.instance || current?.disabled) throw Error('飞控连接或实例在启动前发生变化，请重新查询');
-    const snapshot = await invoke<TestSnapshot>('flight_test_start', { source, options: {
-      dryRun, rcEmulation: false, sessionId: context.link?.transport.sessionId ?? null, system: context.link?.target.system ?? 0,
+    const progress = runDocument ? planTestProgress(runDocument, testTimingKey(runDocument, dryRun, current)) : null;
+    const reportMetadata = {
+      aircraftLabel: document?.aircraft,
+      stageLabels: runDocument?.blocks.map(testStepLabel) ?? [],
+    };
+    const snapshot = await invoke<TestSnapshot>('flight_test_start', { source, progressRoots: progress?.roots, reportMetadata, options: {
+      dryRun, rcEmulation: usesMappedVectorRates(source), sessionId: context.link?.transport.sessionId ?? null, system: context.link?.target.system ?? 0,
       component: context.link?.target.component ?? 1, instance: context.instance, rateHz: document?.rateHz ?? 50,
       clock: document?.clock ?? 'realtime', onFinish: document?.onFinish ?? 'land', onAbort: document?.onAbort ?? 'land',
     } });
     commandEpoch++;
-    useFlightTestStore.setState({ snapshot, statusError: '' });
+    acceptSnapshot(snapshot, progress ? { ...progress.plan, runId: snapshot.id } : null);
     return snapshot;
   } catch (e) {
     commandEpoch++;
-    useFlightTestStore.setState({ error: String(e) });
+    useFlightTestStore.setState({ error: String(e), runDocument: previous.runDocument, runInstance: previous.runInstance,
+      runOrigin: previous.runOrigin });
     throw e;
   } finally { useFlightTestStore.setState({ starting: false }); }
 }
@@ -202,7 +239,7 @@ export async function stopFlightTest() {
   try {
     const snapshot = await invoke<TestSnapshot>('flight_test_stop', { id: state.snapshot?.id ?? null });
     commandEpoch++;
-    useFlightTestStore.setState({ snapshot, statusError: '' });
+    acceptSnapshot(snapshot);
   } catch (e) {
     commandEpoch++;
     useFlightTestStore.setState({ error: String(e) });

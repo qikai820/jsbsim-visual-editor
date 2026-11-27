@@ -1,0 +1,58 @@
+.test-progress-metrics {
+  --progress-ink: var(--pt-text, #34465b);
+  --progress-muted: var(--pt-muted, #566c83);
+  --progress-track: var(--pt-line, #dde7f2);
+  --progress-blue: var(--pt-blue, #3776cc);
+  color: var(--progress-ink);
+}
+
+.test-progress-metrics dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, .85fr) minmax(0, 1.2fr);
+  gap: 5px 10px;
+  margin: 0;
+}
+
+.test-progress-metrics dt {
+  color: var(--progress-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.test-progress-metrics dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 5px;
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.test-progress-metrics dd strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.test-progress-metrics dd small {
+  color: var(--progress-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.test-progress-track {
+  height: 4px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--progress-track);
+}
+
+.test-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--progress-blue);
+}
+
+.test-progress-metrics[data-status="passed"] .test-progress-fill { background: #247653; }
+.test-progress-metrics[data-status="failed"] .test-progress-fill { background: #b13b41; }

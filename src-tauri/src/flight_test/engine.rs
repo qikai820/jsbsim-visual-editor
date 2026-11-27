@@ -421,9 +421,16 @@ impl Engine {
         ]
     }
     pub fn needs_rc_channels(&self) -> bool {
-        self.properties.keys().any(|p| p.starts_with("test/channel/rc") || p.starts_with("test/channel/vector-switch/"))
+        self.properties.keys().any(|p| p.starts_with("test/channel/rc") || p.starts_with("test/channel/vector-switch/")) || self.needs_vector_rates()
+    }
+    pub fn needs_vector_rates(&self) -> bool {
+        super::channels::VECTOR_TARGETS.iter().any(|target|
+            self.properties.contains_key(&format!("test/channel/{target}/enabled")))
     }
     pub fn manual_control_compatible(&self) -> Result<(),String> {
+        if self.needs_vector_rates() {
+            return Err("矢量速率通道需要完整 RC 帧与 COM_RC_IN_MODE=0".into());
+        }
         if self.properties.keys().any(|p|p.starts_with("test/channel/rc")) {
             return Err("MANUAL_CONTROL 不支持任意原始 RC1～18 通道；请使用 AUX 或逻辑矢量模式开关".into());
         }
@@ -462,6 +469,9 @@ impl Engine {
         }
     }
     pub fn channel_outputs(&mut self, vector_channel: usize) -> Result<([f64; 6], [Option<f64>; 18]), String> {
+        self.mapped_channel_outputs(vector_channel, [0; 3])
+    }
+    pub fn mapped_channel_outputs(&mut self, vector_channel: usize, rate_channels: [usize; 3]) -> Result<([f64; 6], [Option<f64>; 18]), String> {
         let mut aux = [0.; 6];
         aux[..2].copy_from_slice(&self.aux());
         let mut rc = [None; 18];
@@ -483,6 +493,13 @@ impl Engine {
             if !(1..=18).contains(&vector_channel) { return Err("矢量模式开关未配置 RC_MAP_VECTOR_SW".into()); }
             if rc[vector_channel - 1].is_some() { return Err("矢量模式开关与同一 RC 通道重复控制".into()); }
             rc[vector_channel - 1] = Some(value);
+        }
+        for (target, channel) in super::channels::VECTOR_TARGETS.into_iter().zip(rate_channels) {
+            if let Some(value) = self.channel_value(target)? {
+                if !(1..=18).contains(&channel) { return Err(format!("{target} 缺少飞控通道映射")); }
+                if rc[channel - 1].is_some() { return Err(format!("{target} 与同一 RC 通道重复控制")); }
+                rc[channel - 1] = Some(value);
+            }
         }
         for (i, value) in rc.iter().enumerate() {
             if let Some(value) = value { self.set(&format!("test/output/rc{}-norm", i + 1), *value); }
@@ -633,25 +650,27 @@ impl Engine {
         }
         Ok(result)
     }
-    pub fn active_blocks(&self) -> Vec<String> {
-        let mut result = Vec::new();
-        for (path, v) in &self.properties {
-            if path.starts_with("test/flow/") && path.ends_with("/started") && *v == 1. {
-                let base = path.trim_end_matches("/started");
-                if self.value(&format!("{base}/done")) != Some(1.)
-                    && self.value(&format!("{base}/cancelled")) != Some(1.)
-                {
-                    let id = base
-                        .trim_start_matches("test/flow/")
-                        .rsplit_once('_')
-                        .map(|v| v.0)
-                        .unwrap_or("");
-                    if !id.is_empty() && !result.iter().any(|s| s == id) {
-                        result.push(id.into());
-                    }
-                }
-            }
-        }
-        result
+    pub fn active_flow_nodes(&self) -> impl Iterator<Item = &str> {
+        self.properties.iter().filter_map(|(path, value)| {
+            let base = path.strip_suffix("/started")?;
+            let id = base.strip_prefix("test/flow/")?;
+            (*value == 1.
+                && self.value(&format!("{base}/done")) != Some(1.)
+                && self.value(&format!("{base}/cancelled")) != Some(1.))
+                .then_some(id)
+        })
     }
+    pub fn active_blocks(&self) -> Vec<String> {
+        block_ids(self.active_flow_nodes())
+    }
+}
+
+pub(super) fn block_ids<'a>(nodes: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut blocks = Vec::new();
+    for (id, _) in nodes.filter_map(|node| node.rsplit_once('_')) {
+        if !id.is_empty() && !blocks.iter().any(|block| block == id) {
+            blocks.push(id.to_owned());
+        }
+    }
+    blocks
 }
